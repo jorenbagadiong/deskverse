@@ -89,6 +89,13 @@ describe("design tokens", () => {
     ["--status-completed", "--surface"],
     ["--status-failed", "--surface"],
     ["--status-info", "--surface"],
+    // Employee identity colors are used as text (avatars, badges) in both themes.
+    ...["scout", "quill", "pixel", "vera", "tempo", "relay", "ledger"].map(
+      (id) => [`--identity-${id}`, "--surface"] as [string, string],
+    ),
+    ...["scout", "quill", "pixel", "vera", "tempo", "relay", "ledger"].map(
+      (id) => [`--identity-${id}`, "--background"] as [string, string],
+    ),
   ]
 
   for (const theme of Object.keys(themes) as (keyof typeof themes)[]) {

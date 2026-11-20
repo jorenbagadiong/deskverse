@@ -137,7 +137,22 @@ animation starts, then fade in. To avoid that:
 
 Don't nest `[data-reveal]` regions owned by different components.
 
-## 6. Don'ts
+## 6. 3D scenes (DV-002)
+
+Anime.js animates the DOM only. Objects in the 3D office animate inside React
+Three Fiber's `useFrame` loop by writing to refs, never through React state or
+Anime.js. The canvas renders on demand, and each component requests frames
+only while it is actually moving. Under reduced motion the scene snaps to each
+state's pose: no typing loop, hop, shake, blink or camera easing.
+
+Character motion is defined as pure functions of status, role and time
+(`scene/character/pose.ts`, `expression.ts`), so it is deterministic and unit
+tested. Idle life (blinks, glances) comes from a scheduler that triggers short
+frame bursts one employee at a time, not from continuous loops, and it pauses
+while the office route is hidden or the tab is in the background. Details:
+[3d-office-architecture.md §6](3d-office-architecture.md#6-animation-architecture).
+
+## 7. Don'ts
 
 - Don't animate anything that delivers urgent information (errors, form
   validation, live-region text). Show it instantly; decorate around it.

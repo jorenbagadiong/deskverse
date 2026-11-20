@@ -1,0 +1,159 @@
+import { test as base, expect, type Page } from "@playwright/test"
+
+/** Known third-party noise that is not an app error. */
+const IGNORED = [
+  /THREE\.Clock: This module has been deprecated/, // emitted by @react-three/fiber with three r187
+  /GL Driver Message/,
+  /GPU stall/,
+]
+
+/**
+ * `test` with two extras:
+ * - every test fails if the page logs an error or warning (hydration errors included)
+ * - WebGL draw calls are counted on window.__draws so tests can verify on-demand rendering
+ */
+export const test = base.extend<{ consoleProblems: string[] }>({
+  consoleProblems: [
+    async ({ page }, use) => {
+      const problems: string[] = []
+      page.on("console", (message) => {
+        if (!["error", "warning"].includes(message.type())) return
+        const text = message.text()
+        if (IGNORED.some((pattern) => pattern.test(text))) return
+        problems.push(`${message.type()}: ${text.slice(0, 300)}`)
+      })
+      page.on("pageerror", (error) =>
+        problems.push(`pageerror: ${error.message}`),
+      )
+      await page.addInitScript(() => {
+        const w = window as unknown as { __draws: number }
+        w.__draws = 0
+        for (const proto of [
+          window.WebGL2RenderingContext?.prototype,
+          window.WebGLRenderingContext?.prototype,
+        ]) {
+          if (!proto) continue
+          for (const fn of ["drawElements", "drawArrays"] as const) {
+            const original = proto[fn] as (...args: unknown[]) => unknown
+            ;(proto as unknown as Record<string, unknown>)[fn] = function (
+              this: unknown,
+              ...args: unknown[]
+            ) {
+              w.__draws++
+              return original.apply(this, args)
+            }
+          }
+        }
+      })
+      await use(problems)
+      expect(problems, "console errors or warnings").toEqual([])
+    },
+    { auto: true },
+  ],
+})
+
+export { expect }
+
+export const officeView = (page: Page) =>
+  page.getByRole("region", { name: "Office view" })
+
+export async function openOffice(
+  page: Page,
+  { theme }: { theme?: "light" | "dark" } = {},
+) {
+  if (theme)
+    await page.addInitScript((t) => localStorage.setItem("theme", t), theme)
+  await page.goto("/office")
+  await expect(officeView(page).locator("canvas")).toBeVisible()
+  await page.waitForFunction(
+    () => (window as unknown as { __draws: number }).__draws > 0,
+  )
+}
+
+export const draws = (page: Page) =>
+  page.evaluate(() => (window as unknown as { __draws: number }).__draws)
+
+/** Waits until the scene stops rendering (camera and transition tweens finished). */
+export async function waitForIdleScene(
+  page: Page,
+  quietMs = 800,
+  timeoutMs = 15_000,
+) {
+  const start = Date.now()
+  let last = await draws(page)
+  while (Date.now() - start < timeoutMs) {
+    await page.waitForTimeout(quietMs)
+    const now = await draws(page)
+    if (now === last) return
+    last = now
+  }
+  throw new Error("scene kept rendering")
+}
+
+/**
+ * Waits until the camera stops moving, judged by the projected nameplates
+ * holding still. Works even while working robots keep the scene animating.
+ */
+export async function waitForCameraSettled(page: Page, timeoutMs = 15_000) {
+  const read = () =>
+    page.evaluate(() =>
+      [
+        ...document.querySelectorAll(
+          "section[aria-label='Office view'] [aria-hidden='true'] span",
+        ),
+      ]
+        .map((el) => (el as HTMLElement).style.transform)
+        .join("|"),
+    )
+  const start = Date.now()
+  let last = await read()
+  while (Date.now() - start < timeoutMs) {
+    await page.waitForTimeout(400)
+    const now = await read()
+    if (now === last) return
+    last = now
+  }
+  throw new Error("camera kept moving")
+}
+
+/** Removes hover/focus styling from overlays before pixel comparisons. */
+export async function clearInteractionState(page: Page) {
+  await page.mouse.move(2, 2)
+  await page.evaluate(() =>
+    (document.activeElement as HTMLElement | null)?.blur(),
+  )
+}
+
+export async function setDirectState(page: Page, label: string) {
+  await page
+    .getByRole("radiogroup", { name: "Set state directly" })
+    .getByRole("radio", { name: label })
+    .click()
+}
+
+export const SEVEN = [
+  "Scout",
+  "Quill",
+  "Pixel",
+  "Vera",
+  "Tempo",
+  "Relay",
+  "Ledger",
+] as const
+export const FLOOR_OF: Record<(typeof SEVEN)[number], 1 | 2> = {
+  Scout: 1,
+  Quill: 1,
+  Pixel: 1,
+  Vera: 1,
+  Tempo: 2,
+  Relay: 2,
+  Ledger: 2,
+}
+
+export async function noHorizontalOverflow(page: Page) {
+  return page.evaluate(
+    () =>
+      document.documentElement.scrollWidth -
+      document.documentElement.clientWidth,
+  )
+}

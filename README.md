@@ -20,7 +20,8 @@ database, auth provider, cloud hosting, paid AI API or hosted workflow engine.
 | UI         | React 19, TypeScript (strict)                                 |
 | Styling    | Tailwind CSS v4 with semantic CSS-variable tokens             |
 | Components | shadcn/ui (Radix primitives)                                  |
-| Motion     | Anime.js v4                                                   |
+| Motion     | Anime.js v4 (DOM), React Three Fiber loop (3D)                |
+| 3D         | three.js, @react-three/fiber, @react-three/drei               |
 | Theming    | next-themes (dark default, light, system)                     |
 | Icons      | lucide-react                                                  |
 | Font       | Inter (self-hosted via `@fontsource-variable/inter`)          |
@@ -36,10 +37,16 @@ git clone https://github.com/jorenbagadiong/deskverse.git
 cd deskverse
 corepack enable        # activates the Yarn version pinned in package.json
 yarn install
-yarn dev               # http://localhost:3000  ·  showcase at /brand
+yarn dev               # http://localhost:3000  ·  /office (3D) · /brand (design system)
 ```
 
-Everything runs offline after `yarn install`, including the font.
+Everything runs offline after `yarn install`, including the font and the 3D
+scene (procedural geometry, no downloaded models or textures).
+
+The 3D office needs a browser with WebGL (any current Chrome, Edge, Firefox or
+Safari). Without it, `/office` shows a 2D floor plan with the same controls.
+In WSL, run the browser on Windows as usual; the scene renders on your
+Windows GPU.
 
 ### Windows (WSL 2)
 
@@ -66,17 +73,18 @@ move the repo into the Linux home directory.
 
 ## Development commands
 
-| Command             | What it does                                    |
-| ------------------- | ----------------------------------------------- |
-| `yarn dev`          | Start the dev server (Turbopack)                |
-| `yarn build`        | Production build                                |
-| `yarn start`        | Serve the production build locally              |
-| `yarn lint`         | ESLint (Next.js core-web-vitals + TypeScript)   |
-| `yarn typecheck`    | Generate route types, then `tsc --noEmit`       |
-| `yarn format`       | Prettier write (sorts Tailwind classes too)     |
-| `yarn format:check` | Prettier check                                  |
-| `yarn test`         | Vitest: token contrast + config integrity tests |
-| `yarn check`        | lint + typecheck + format check + tests         |
+| Command             | What it does                                        |
+| ------------------- | --------------------------------------------------- |
+| `yarn dev`          | Start the dev server (Turbopack)                    |
+| `yarn build`        | Production build                                    |
+| `yarn start`        | Serve the production build locally                  |
+| `yarn lint`         | ESLint (Next.js core-web-vitals + TypeScript)       |
+| `yarn typecheck`    | Generate route types, then `tsc --noEmit`           |
+| `yarn format`       | Prettier write (sorts Tailwind classes too)         |
+| `yarn format:check` | Prettier check                                      |
+| `yarn test`         | Vitest unit tests (tokens, registry, poses, camera) |
+| `yarn test:e2e`     | Playwright browser tests (builds + serves locally)  |
+| `yarn check`        | lint + typecheck + format check + tests             |
 
 ## Project structure
 
@@ -86,6 +94,7 @@ src/
     layout.tsx          Root layout: font, theme provider, header, skip link
     page.tsx            Overview
     brand/page.tsx      Design-system showcase (/brand)
+    office/page.tsx     Interactive 3D office (/office)
     globals.css         Design tokens (light/dark) + Tailwind theme mapping
     icon.svg            Favicon
   components/
@@ -93,12 +102,20 @@ src/
     employees/          Status badge, employee card/avatar
     layout/             Header, section
     motion/             <Reveal> entrance wrapper
+    office/             Office UI (floor switcher, list, detail panel, activity, camera controls, 2D map)
+      scene/            three.js / R3F scene (lazy chunk)
+        building/       Two-floor building, staircase, furniture, Floor 2 lift
+        character/      Shared robot rig, heads, bodies, faces, poses (pure + tested)
+        workstation/    Shared desk + seven job-specific prop sets
+        shared/         Batching, geometry cache, procedural shapes, ambient scheduler
     theme/              Theme provider + switcher
     ui/                 shadcn/ui components
-  config/               brand.ts, design-tokens.ts, employees.ts, employee-status.ts
-  lib/                  motion.ts (Anime.js conventions), utils.ts
-docs/                   brand-guidelines.md, animation-guidelines.md
-tests/                  Vitest tests
+  config/               brand.ts, design-tokens.ts, employees.ts, employee-status.ts, office.ts
+  hooks/                WebGL support + reduced-motion hooks
+  lib/                  motion.ts (Anime.js conventions), office-simulation.ts, utils.ts
+docs/                   brand-guidelines.md, animation-guidelines.md, 3d-office-architecture.md
+tests/                  Vitest unit tests
+e2e/                    Playwright browser tests
 ```
 
 ## DV-001 scope: Brand & design system ✅
@@ -113,14 +130,66 @@ tests/                  Vitest tests
 - `/brand` showcase page
 - Documentation: [brand guidelines](docs/brand-guidelines.md), [animation guidelines](docs/animation-guidelines.md)
 
-**Out of scope:** the 3D office, Three.js/R3F, a database, authentication,
+**Out of scope:** the 3D office (now DV-002), a database, authentication,
 deployment and real AI integrations.
+
+## DV-002 scope: Deskverse HQ, a 3D office 🚧
+
+Open http://localhost:3000/office.
+
+- **Two-floor building** in an open-front isometric cutaway.
+  - **Floor 1, Creative Production:** atrium workstations, reception, a meeting
+    table with a hologram, a holographic project board, hot desks and a coffee bar.
+  - **Floor 2, Operations & Automation:** a mezzanine with glass railings, a
+    live operations board, a calendar wall, an analytics wall and a lounge.
+  - A floating staircase joins the two floors.
+- **All seven employees** as collectible-toy robots built on one shared rig.
+  Each has a distinct head, headgear, chest accessory, build and personality face:
+  Scout, Quill, Pixel, Vera, Tempo, Relay and Ledger.
+- **Five simulated states** (idle, working, waiting for approval, completed,
+  failed) for everyone. Each state has its own pose and facial expression, and
+  working employees play a role-specific animation. Everything is labelled
+  _Simulated_.
+- **Camera and floors:** Building / Floor 1 / Floor 2 modes. Selecting someone
+  activates their floor and moves the camera to them. Floor 2 lifts away to
+  reveal Floor 1. Limited orbit, controlled zoom and an exact Reset view.
+- **Accessible by design:** a keyboard employee list per floor, a detail panel
+  with live announcements, and a 2D floor plan of both floors when WebGL is
+  unavailable (or by choice). It also supports reduced motion, light and dark
+  themes, and mobile layouts.
+- **Performance:** on-demand rendering (no frames when nothing moves),
+  material batching, shared geometry and materials, a DPR cap, and a lazy 3D
+  chunk that other pages never load.
+
+Everything is procedural code: no downloaded models, textures or HDRs.
+Details: [3D office architecture](docs/3d-office-architecture.md).
+
+**Out of scope:** real AI agents, video generation, publishing/scheduling
+integrations, affiliate APIs, authentication, database, multiplayer, paid
+assets and deployment.
+
+### Browser tests (Playwright)
+
+```bash
+yarn test:e2e
+```
+
+This builds the app, serves it on port 3210 and runs `e2e/` in your installed
+Google Chrome (no browser download) at desktop, 375px and 360px widths, plus a
+WebGL-disabled profile. It covers selecting all seven employees, keyboard
+navigation, floor switching, simulated states, the 2D fallback, themes,
+reduced motion and DV-001 regressions.
+
+- Reuse a running server: `E2E_BASE_URL=http://localhost:3000 yarn test:e2e`
+- Use Playwright's Chromium instead of Chrome: `yarn playwright install chromium`,
+  then `E2E_CHANNEL=chromium yarn test:e2e`
+- In WSL without a desktop Chrome, use the Chromium option. WebGL tests need
+  GPU or software rendering, which headless Chromium provides.
 
 ## Future milestones
 
-- **DV-002: 3D virtual office.** Low-poly robot employees in a miniature
-  futuristic office (Three.js / React Three Fiber), following the visual
-  direction in the brand guidelines.
+- **Remaining AI team.** Quill, Vera, Relay and Ledger join the office using
+  the same registry, robot and workstation components.
 - **Dashboard shell.** Navigation, task board and activity feed built from the
   DV-001 components.
 - **Local automation workflows.** Task pipelines runnable on your machine,
@@ -131,4 +200,5 @@ deployment and real AI integrations.
 
 Deployment stays optional: the app is a standard Next.js project with
 static-rendered pages, so it can later go to any Node host or a static/edge
-platform without code changes. Nothing in DV-001 depends on a specific provider.
+platform without code changes. Nothing in DV-001 or DV-002 depends on a specific
+provider.

@@ -54,6 +54,15 @@
   --status-failed: #c0262d;
   --status-info: #1d5fc4;
 
+  /* Employee identity colors (text-safe on light surfaces) */
+  --identity-scout: #087d76;
+  --identity-quill: #8a3fc7;
+  --identity-pixel: #b4530a;
+  --identity-vera: #1d5fc4;
+  --identity-tempo: #6a45d1;
+  --identity-relay: #c0334f;
+  --identity-ledger: #8a6400;
+
   /* Elevation */
   --elevation-1: 0 1px 2px rgb(23 32 46 / 0.06), 0 1px 3px rgb(23 32 46 / 0.08);
   --elevation-2:
@@ -113,6 +122,14 @@
   --status-completed: #4ade80;
   --status-failed: #f87171;
   --status-info: #60a5fa;
+
+  --identity-scout: #2dd4bf;
+  --identity-quill: #c084fc;
+  --identity-pixel: #fb923c;
+  --identity-vera: #60a5fa;
+  --identity-tempo: #a78bfa;
+  --identity-relay: #fb7185;
+  --identity-ledger: #fbbf24;
 
   --elevation-1: 0 1px 2px rgb(0 0 0 / 0.4);
   --elevation-2:
