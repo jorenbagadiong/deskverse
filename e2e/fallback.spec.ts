@@ -18,7 +18,10 @@ test.describe("WebGL unavailable", () => {
       }),
     ).toBeVisible()
 
-    const deskButtons = officeView(page).getByRole("button")
+    // One button per desk (the viewport also has a Fullscreen button).
+    const deskButtons = officeView(page)
+      .getByRole("listitem")
+      .getByRole("button")
     await expect(deskButtons).toHaveCount(7)
 
     for (const name of SEVEN) {

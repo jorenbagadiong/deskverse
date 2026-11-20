@@ -21,11 +21,14 @@ export function FloorGroup({
   floor,
   lifted,
   reducedMotion,
+  offsetRef,
   children,
 }: {
   floor: FloorId
   lifted: boolean
   reducedMotion: boolean
+  /** Receives the current lift offset each frame (walkers on this floor follow it). */
+  offsetRef?: React.RefObject<number>
   children: React.ReactNode
 }) {
   const group = useRef<THREE.Group>(null)
@@ -44,6 +47,7 @@ export function FloorGroup({
       ? goal
       : dampTo(offset.current, goal, frameDelta(rawDelta))
     g.position.y = floorY(floor) + offset.current
+    if (offsetRef) offsetRef.current = offset.current
     g.visible = offset.current < LIFT_HEIGHT - 0.05
     if (Math.abs(offset.current - goal) > 0.002) invalidate()
     else offset.current = goal

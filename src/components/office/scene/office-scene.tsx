@@ -10,17 +10,20 @@ import {
   employeesOnFloor,
   officeEmployees,
   type FloorId,
-  type OfficeEmployee,
   type OfficeEmployeeId,
 } from "@/config/office"
+import type { LiveStore } from "@/lib/office-live"
+import { activityOf, type Movement } from "@/lib/office-movement"
 import { cn } from "@/lib/utils"
 
 import { Building } from "./building/building"
-import { FloorGroup } from "./building/floor-group"
-import { floorY, type Vec3, type ViewMode } from "./camera-framing"
+import { FloorGroup, LIFT_HEIGHT } from "./building/floor-group"
+import type { ViewMode } from "./camera-framing"
 import { CameraRig, type CameraApi } from "./camera-rig"
 import { Character } from "./character/character"
 import { SceneMaterialsProvider } from "./materials"
+import { MovementSystem } from "./movement/movement-system"
+import { Walker } from "./movement/walker"
 import { environment, type SceneTheme } from "./palette"
 import { geometryCache } from "./shared/geometry-cache"
 import {
@@ -28,7 +31,7 @@ import {
   type AmbientRequest,
   type AmbientStore,
 } from "./shared/ambient"
-import { CHARACTER_OFFSET_Z, Workstation } from "./workstation/workstation"
+import { Workstation } from "./workstation/workstation"
 
 export type OfficeSceneProps = {
   statuses: Record<OfficeEmployeeId, EmployeeStatus>
@@ -38,24 +41,14 @@ export type OfficeSceneProps = {
   theme: SceneTheme
   reducedMotion: boolean
   cameraRef: React.Ref<CameraApi>
+  /** Physical movement (from the reducer) and the shared live positions. */
+  movement: Record<OfficeEmployeeId, Movement>
+  live: React.RefObject<LiveStore>
+  onArrive: (id: OfficeEmployeeId, routeId: number) => void
+  onFloorChange: (id: OfficeEmployeeId, floor: FloorId) => void
 }
 
 const EMPLOYEE_IDS = officeEmployees.map((e) => e.id)
-
-export function employeePoint(employee: OfficeEmployee): Vec3 {
-  return [
-    employee.desk[0],
-    floorY(employee.floor),
-    employee.desk[1] + CHARACTER_OFFSET_Z,
-  ]
-}
-
-/** Nameplate anchors: just in front of each desk, per floor. */
-const LABEL_ANCHORS = officeEmployees.map((e) => ({
-  id: e.id,
-  floor: e.floor,
-  point: new THREE.Vector3(e.desk[0], floorY(e.floor) + 0.28, e.desk[1] + 0.62),
-}))
 
 type LabelElements = Partial<Record<OfficeEmployeeId, HTMLSpanElement | null>>
 
@@ -74,6 +67,10 @@ export default function OfficeScene({
   theme,
   reducedMotion,
   cameraRef,
+  movement,
+  live,
+  onArrive,
+  onFloorChange,
 }: OfficeSceneProps) {
   const [hoveredId, setHoveredId] = useState<OfficeEmployeeId | null>(null)
   const labels = useRef<LabelElements>({})
@@ -81,8 +78,9 @@ export default function OfficeScene({
   const active = useRef(false)
   const ambient = useMemo<AmbientStore>(() => ({ requests, active }), [])
   const env = environment[theme]
-  const selected = officeEmployees.find((e) => e.id === selectedId) ?? null
   const floor2Lifted = view === "floor-1"
+  /** Current Floor 2 lift offset, written by its FloorGroup each frame. */
+  const floor2Offset = useRef(floor2Lifted ? LIFT_HEIGHT : 0)
 
   // Activity-aware lifecycle: when Next.js hides this route, effects clean up.
   // Pause idle animations and release shared geometry buffers until visible again.
@@ -94,40 +92,51 @@ export default function OfficeScene({
     }
   }, [])
 
-  const renderFloor = (floor: FloorId) =>
+  const renderDesks = (floor: FloorId) =>
     employeesOnFloor(floor).map((employee) => {
       const [x, z] = employee.desk
       const status = statuses[employee.id]
+      // Workstation tools animate only while their owner is working at the desk.
+      const atDesk = activityOf(movement[employee.id]) === "at-desk"
       return (
         <group key={employee.id} position={[x, 0, z]}>
           <Workstation
             employee={employee}
             status={status}
-            animate={status === "working" && !reducedMotion}
+            animate={status === "working" && atDesk && !reducedMotion}
             onSelect={() => onSelect(employee.id)}
-          />
-          <Character
-            employee={employee}
-            status={status}
-            selected={employee.id === selectedId}
-            hovered={hoveredId === employee.id}
-            reducedMotion={reducedMotion}
-            ambient={ambient}
-            position={[0, 0, CHARACTER_OFFSET_Z]}
-            onSelect={() => onSelect(employee.id)}
-            onHover={(hovering) =>
-              setHoveredId((current) =>
-                hovering
-                  ? employee.id
-                  : current === employee.id
-                    ? null
-                    : current,
-              )
-            }
           />
         </group>
       )
     })
+
+  // Characters live at world level so they can walk between floors.
+  const renderPeople = () =>
+    officeEmployees.map((employee) => (
+      <Walker
+        key={employee.id}
+        id={employee.id}
+        live={live}
+        floor2Offset={floor2Offset}
+      >
+        <Character
+          employee={employee}
+          status={statuses[employee.id]}
+          activity={activityOf(movement[employee.id])}
+          live={live}
+          selected={employee.id === selectedId}
+          hovered={hoveredId === employee.id}
+          reducedMotion={reducedMotion}
+          ambient={ambient}
+          onSelect={() => onSelect(employee.id)}
+          onHover={(hovering) =>
+            setHoveredId((current) =>
+              hovering ? employee.id : current === employee.id ? null : current,
+            )
+          }
+        />
+      </Walker>
+    ))
 
   return (
     <div className="relative h-full w-full">
@@ -145,7 +154,8 @@ export default function OfficeScene({
           <PointerCursor active={hoveredId !== null} />
           <LabelProjector
             labels={labels}
-            hiddenFloor={floor2Lifted ? 2 : null}
+            live={live}
+            floor2Offset={floor2Offset}
           />
           <AmbientScheduler
             store={ambient}
@@ -175,20 +185,30 @@ export default function OfficeScene({
           <CameraRig
             ref={cameraRef}
             mode={view}
-            focus={selected ? employeePoint(selected) : null}
+            focusId={selectedId}
+            live={live}
             reducedMotion={reducedMotion}
           />
 
           <Building floor={1} statuses={statuses} />
-          {renderFloor(1)}
+          {renderDesks(1)}
           <FloorGroup
             floor={2}
             lifted={floor2Lifted}
             reducedMotion={reducedMotion}
+            offsetRef={floor2Offset}
           >
             <Building floor={2} statuses={statuses} />
-            {renderFloor(2)}
+            {renderDesks(2)}
           </FloorGroup>
+          {renderPeople()}
+          <MovementSystem
+            movement={movement}
+            live={live}
+            reducedMotion={reducedMotion}
+            onArrive={onArrive}
+            onFloorChange={onFloorChange}
+          />
         </SceneMaterialsProvider>
       </Canvas>
 
@@ -244,28 +264,35 @@ function StudioEnvironment({ intensity }: { intensity: number }) {
 }
 
 /**
- * Positions the DOM nameplates over their desks. Runs only on frames that are
- * rendered anyway and writes styles directly: no React state per frame.
+ * Positions the DOM nameplates under each employee's feet, wherever they are.
+ * Runs only on frames that are rendered anyway and writes styles directly: no
+ * React state per frame. Floor 2 nameplates follow the floor's lift and hide
+ * with it.
  */
 function LabelProjector({
   labels,
-  hiddenFloor,
+  live,
+  floor2Offset,
 }: {
   labels: React.RefObject<LabelElements>
-  hiddenFloor: FloorId | null
+  live: React.RefObject<LiveStore>
+  floor2Offset: React.RefObject<number>
 }) {
   const projected = useRef(new THREE.Vector3())
   useFrame(({ camera, size }) => {
-    for (const { id, floor, point } of LABEL_ANCHORS) {
+    for (const [id, e] of live.current) {
       const el = labels.current[id]
       if (!el) continue
-      if (floor === hiddenFloor) {
+      const lift = e.floor === 2 && !e.onStairs ? floor2Offset.current : 0
+      if (lift > LIFT_HEIGHT * 0.5) {
         el.style.setProperty("opacity", "0")
         continue
       }
-      const p = projected.current.copy(point).project(camera)
+      const p = projected.current
+        .set(e.x, e.y + lift + LABEL_HEIGHT, e.z)
+        .project(camera)
       const x = (p.x * 0.5 + 0.5) * size.width
-      const y = (-p.y * 0.5 + 0.5) * size.height
+      const y = (-p.y * 0.5 + 0.5) * size.height + LABEL_DROP_PX
       el.style.setProperty(
         "transform",
         `translate(-50%, -50%) translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`,
@@ -275,6 +302,10 @@ function LabelProjector({
   })
   return null
 }
+
+/** Nameplate anchor: just above the feet, then nudged down on screen so it never covers the body. */
+const LABEL_HEIGHT = 0.05
+const LABEL_DROP_PX = 14
 
 /** Shows a pointer cursor over clickable robots. */
 function PointerCursor({ active }: { active: boolean }) {

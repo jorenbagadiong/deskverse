@@ -2,7 +2,7 @@
  * Camera framing as pure math (no three.js): which box each view mode must
  * show, and the orthographic zoom that fits it. Unit-tested in tests/camera.test.ts.
  */
-import type { FloorId, ViewMode } from "@/config/office"
+import { FLOOR_HEIGHT, type FloorId, type ViewMode } from "@/config/office"
 
 export type { ViewMode }
 
@@ -18,7 +18,7 @@ export const BUILDING = {
   /** z extent: [-5, 5] */
   depth: 10,
   /** Floor 2 sits this high above Floor 1. */
-  floorHeight: 3.6,
+  floorHeight: FLOOR_HEIGHT,
   /** Floor 2 is a mezzanine over the back of the building: z ∈ [-5, MEZZANINE_EDGE]. */
   mezzanineEdge: -0.5,
   wallHeight: 7.3,
@@ -124,3 +124,44 @@ export function focusTarget(mode: ViewMode, point: Vec3 | null): Vec3 {
 
 /** Extra zoom applied when focusing a single employee. */
 export const FOCUS_ZOOM = 1.45
+
+/**
+ * Signed shortest rotation from angle `from` to `to`, in (-π, π].
+ * Lets the camera (and walkers) turn the short way across the 0°/360° seam.
+ */
+export function shortestAngle(from: number, to: number) {
+  let d = (to - from) % (Math.PI * 2)
+  if (d > Math.PI) d -= Math.PI * 2
+  if (d <= -Math.PI) d += Math.PI * 2
+  return d
+}
+
+/** One press of "Rotate left/right": 18°, so 20 presses make a full turn. */
+export const ROTATE_STEP = Math.PI / 10
+
+/**
+ * How much a wall faces the camera (cosine between the wall's outward x/z
+ * normal and the direction from the orbit target to the camera). Positive
+ * means the camera is behind the wall, looking through it.
+ */
+export function wallFacesCamera(
+  outward: readonly [number, number],
+  camX: number,
+  camZ: number,
+) {
+  const len = Math.hypot(camX, camZ) || 1
+  return (outward[0] * camX + outward[1] * camZ) / len
+}
+
+/** Hide/show thresholds; the gap between them avoids flicker while orbiting. */
+export const WALL_HIDE_AT = 0.12
+export const WALL_SHOW_AT = 0.02
+
+export function nextWallHidden(hidden: boolean, facing: number) {
+  if (!hidden && facing > WALL_HIDE_AT) return true
+  if (hidden && facing < WALL_SHOW_AT) return false
+  return hidden
+}
+
+export const BACK_WALL: readonly [number, number] = [0, -1]
+export const LEFT_WALL: readonly [number, number] = [-1, 0]

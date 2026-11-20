@@ -11,12 +11,17 @@ import { OrbitControls, OrthographicCamera } from "@react-three/drei"
 import { useFrame, useThree } from "@react-three/fiber"
 import * as THREE from "three"
 
+import type { OfficeEmployeeId } from "@/config/office"
+import type { LiveStore } from "@/lib/office-live"
+
 import {
   boxCenter,
   FOCUS_ZOOM,
   fitZoom,
   focusTarget,
   framingBox,
+  ROTATE_STEP,
+  shortestAngle,
   type Vec3,
   type ViewMode,
 } from "./camera-framing"
@@ -39,16 +44,14 @@ export const CAMERA_LIMITS = {
   // Never flatter than ~24° above the floor, never straight down.
   minPolar: 0.55,
   maxPolar: 1.15,
-  // Stay in front of the open cutaway so walls never hide the interior.
-  minAzimuth: 0.1,
-  maxAzimuth: Math.PI / 2 - 0.1,
+  // Horizontal rotation is unrestricted (360°); walls facing the camera hide.
   // Relative to the zoom that fits the current view mode.
   minZoomFactor: 0.8,
   maxZoomFactor: 3.2,
 } as const
 
 const ORBIT_RADIUS = 40
-const ROTATE_STEP = Math.PI / 10
+export { ROTATE_STEP }
 const ZOOM_STEP = 1.3
 
 type Goal = {
@@ -85,13 +88,15 @@ function flushMomentum(
 export function CameraRig({
   ref,
   mode,
-  focus,
+  focusId,
+  live,
   reducedMotion,
 }: {
   ref: React.Ref<CameraApi>
   mode: ViewMode
-  /** World position of the selected employee, or null. */
-  focus: Vec3 | null
+  /** Selected employee: the camera frames their live position and follows walks. */
+  focusId: OfficeEmployeeId | null
+  live: React.RefObject<LiveStore>
   reducedMotion: boolean
 }) {
   const controls = useRef<OrbitControlsImpl>(null)
@@ -125,7 +130,7 @@ export function CameraRig({
     return { target, position: position.toArray(), zoom: base }
   })
 
-  // Viewport resize: keep the user's relative zoom, no tween.
+  // Viewport resize (including fullscreen): keep the user's relative zoom, no tween.
   const lastSize = useRef({ width: size.width, height: size.height })
   useLayoutEffect(() => {
     if (
@@ -140,23 +145,24 @@ export function CameraRig({
     invalidate()
   }, [size.width, size.height, get, invalidate])
 
-  // Mode or selection changed: glide to the new framing.
-  const [fx, fy, fz] = focus ?? [NaN, NaN, NaN]
+  // Mode or selection changed: glide to the employee's actual position.
   useEffect(() => {
-    const point: Vec3 | null = Number.isNaN(fx) ? null : [fx, fy, fz]
+    const e = focusId ? live.current.get(focusId) : undefined
+    const point: Vec3 | null = e ? [e.x, e.y, e.z] : null
     goal.current = {
       ...goal.current,
       target: toVector(focusTarget(mode, point)),
       zoom: baseRef.current * (point ? FOCUS_ZOOM : 1),
     }
     invalidate()
-  }, [mode, fx, fy, fz, invalidate])
+  }, [mode, focusId, live, invalidate])
 
   useImperativeHandle(
     ref,
     () => ({
       reset() {
-        const point: Vec3 | null = Number.isNaN(fx) ? null : [fx, fy, fz]
+        const e = focusId ? live.current.get(focusId) : undefined
+        const point: Vec3 | null = e ? [e.x, e.y, e.z] : null
         goal.current = {
           azimuth: INITIAL_AZIMUTH,
           polar: ISO_POLAR,
@@ -168,14 +174,11 @@ export function CameraRig({
       rotate(direction) {
         const c = controls.current
         if (!c) return
+        // Unbounded: tweens always take the short way across the 0°/360° seam.
         const from = goal.current?.azimuth ?? c.getAzimuthalAngle()
         goal.current = {
           ...goal.current,
-          azimuth: clamp(
-            from + direction * ROTATE_STEP,
-            CAMERA_LIMITS.minAzimuth,
-            CAMERA_LIMITS.maxAzimuth,
-          ),
+          azimuth: from + direction * ROTATE_STEP,
         }
         invalidate()
       },
@@ -193,7 +196,7 @@ export function CameraRig({
         invalidate()
       },
     }),
-    [mode, fx, fy, fz, get, invalidate],
+    [mode, focusId, live, get, invalidate],
   )
 
   const savedPosition = useRef(new THREE.Vector3())
@@ -202,17 +205,30 @@ export function CameraRig({
 
   useFrame(({ camera }, rawDelta) => {
     const c = controls.current
+    if (!c) return
+    // Follow the selected employee while they walk.
+    if (focusId) {
+      const e = live.current.get(focusId)
+      if (e?.moving)
+        goal.current = {
+          ...goal.current,
+          target: toVector(focusTarget(mode, [e.x, e.y, e.z])),
+        }
+    }
     const g = goal.current
-    if (!c || !g) return
+    if (!g) return
     flushMomentum(c, camera, savedPosition.current, !reducedMotion)
     const delta = frameDelta(rawDelta)
     const step = (from: number, to: number) =>
       reducedMotion ? to : THREE.MathUtils.damp(from, to, 6, delta)
 
-    const azimuth = step(
-      c.getAzimuthalAngle(),
-      g.azimuth ?? c.getAzimuthalAngle(),
-    )
+    const currentAzimuth = c.getAzimuthalAngle()
+    // Unwrap the goal next to the current angle so the camera never spins the long way.
+    const goalAzimuth =
+      g.azimuth === undefined
+        ? currentAzimuth
+        : currentAzimuth + shortestAngle(currentAzimuth, g.azimuth)
+    const azimuth = step(currentAzimuth, goalAzimuth)
     const polar = step(c.getPolarAngle(), g.polar ?? c.getPolarAngle())
     const zoom = step(camera.zoom, g.zoom ?? camera.zoom)
     if (g.target) {
@@ -231,7 +247,7 @@ export function CameraRig({
     c.update()
 
     const settled =
-      Math.abs(azimuth - (g.azimuth ?? azimuth)) < 2e-3 &&
+      Math.abs(azimuth - goalAzimuth) < 2e-3 &&
       Math.abs(polar - (g.polar ?? polar)) < 2e-3 &&
       Math.abs(zoom - (g.zoom ?? zoom)) < 0.25 &&
       (!g.target || c.target.distanceTo(g.target) < 5e-3)
@@ -239,11 +255,7 @@ export function CameraRig({
     if (settled) {
       // Snap exactly onto the goal so tweens end cleanly (and reset is exact).
       if (g.target) c.target.copy(g.target)
-      spherical.current.set(
-        ORBIT_RADIUS,
-        g.polar ?? polar,
-        g.azimuth ?? azimuth,
-      )
+      spherical.current.set(ORBIT_RADIUS, g.polar ?? polar, goalAzimuth)
       offset.current.setFromSpherical(spherical.current)
       camera.position.copy(c.target).add(offset.current)
       camera.zoom = g.zoom ?? zoom
@@ -275,8 +287,6 @@ export function CameraRig({
         zoomSpeed={0.7}
         minPolarAngle={CAMERA_LIMITS.minPolar}
         maxPolarAngle={CAMERA_LIMITS.maxPolar}
-        minAzimuthAngle={CAMERA_LIMITS.minAzimuth}
-        maxAzimuthAngle={CAMERA_LIMITS.maxAzimuth}
         minZoom={base * CAMERA_LIMITS.minZoomFactor}
         maxZoom={base * CAMERA_LIMITS.maxZoomFactor}
         // The user takes over: drop any programmatic tween in progress.

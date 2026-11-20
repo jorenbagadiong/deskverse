@@ -11,6 +11,12 @@ import { employees, type Employee } from "@/config/employees"
 
 export type FloorId = 1 | 2
 
+/** Floor 2 sits this high above Floor 1 (scene units). */
+export const FLOOR_HEIGHT = 3.6
+
+/** Where an employee stands relative to their desk center (behind it). */
+export const DESK_STAND_OFFSET_Z = -0.74
+
 /** Camera / floor navigation modes. */
 export type ViewMode = "building" | "floor-1" | "floor-2"
 
