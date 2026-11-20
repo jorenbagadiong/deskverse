@@ -1,225 +1,325 @@
 /**
- * Walkable navigation for Deskverse HQ: a small waypoint graph per floor,
- * joined by the staircase, plus the furniture footprints it routes around.
+ * Walkable navigation for Deskverse HQ: one floor, four rooms, a hand-placed
+ * waypoint graph and the furniture and partition footprints it routes around.
  *
  * Pure data and functions (no three.js, no React), so routes are
  * deterministic and unit-tested (tests/navigation.test.ts). The 3D scene only
  * samples `positionAt(route, distance)` each frame.
  *
- * Coordinates are world units: x ∈ [-7, 7], z ∈ [-5, 5]; y is height
- * (0 on Floor 1, FLOOR_HEIGHT on Floor 2, in between on the stairs).
+ * Coordinates are world units on the ground plane: x ∈ [-9, 9], z ∈ [-6.5, 6.5],
+ * y = 0 everywhere (Vec3 keeps a y so positions plug straight into three.js).
+ *
+ * Layout (top view, +z toward the default camera):
+ *
+ *   z -6.5 ┌──────────────┬────────────┬───────────────┐
+ *          │ Meeting Room │   Pantry   │ Gaming & Rest │
+ *          │  (8 seats)   │ (3 spots)  │ Lounge (3+3)  │
+ *   z -2.2 ├────door──────┴───door─────┴────door───────┤  glass partitions
+ *          │  corridor z = -1.3                        │
+ *          │  desks row 1: Scout Quill Pixel Vera      │  Operations Room
+ *          │  aisle z = 2.3                            │
+ *          │  desks row 2:   Tempo Relay Ledger        │
+ *   z  6.5 └───────────────────────────────────────────┘
+ *        x -9                                         9
  */
 import {
+  BACK_ROOMS_Z,
   DESK_STAND_OFFSET_Z,
-  FLOOR_HEIGHT,
+  OFFICE_BOUNDS,
   officeEmployees,
-  type FloorId,
   type OfficeEmployeeId,
+  type RoomId,
 } from "@/config/office"
 
 export type Vec3 = readonly [number, number, number]
 
+export type SpotKind = "desk" | "pantry" | "lounge" | "gaming" | "meeting"
+
 export type NavNode = {
   id: string
-  floor: FloorId
   x: number
   y: number
   z: number
-  /** Facing when standing here (radians; 0 faces +z, the camera side). */
+  /** Facing when standing or sitting here (radians; 0 faces +z, the camera side). */
   heading?: number
-  /** Seats and counter spots: the last step may enter furniture to sit or lean. */
-  spot?: "desk" | "pantry" | "lounge"
+  /** Desks, counter spots and seats: the last step may enter that furniture. */
+  spot?: SpotKind
 }
 
-export type DestinationKind = "desk" | "pantry" | "lounge"
+export type DestinationKind = SpotKind
 
 /** Collision radius used to check that every corridor clears the furniture. */
 export const WALKER_RADIUS = 0.25
-export const WALK_SPEED = 1.25 // units per second on flat floor
-export const STAIR_SPEED = 0.85 // along the stair slope
+export const WALK_SPEED = 1.25 // units per second
 
-const Y2 = FLOOR_HEIGHT
 const n = (
   id: string,
-  floor: FloorId,
   x: number,
   z: number,
   extra: Partial<NavNode> = {},
-): NavNode => ({
-  id,
-  floor,
-  x,
-  y: floor === 1 ? 0 : Y2,
-  z,
-  ...extra,
-})
+): NavNode => ({ id, x, y: 0, z, ...extra })
 
-// ── Desk stand points (behind each desk, facing the room) ─────────────────────
+/** A seat node just in front of a chair or sofa cushion, facing like the seat. */
+const seat = (
+  id: string,
+  spot: SpotKind,
+  x: number,
+  z: number,
+  heading: number,
+  inset = 0.08,
+): NavNode =>
+  n(id, x + Math.sin(heading) * inset, z + Math.cos(heading) * inset, {
+    heading,
+    spot,
+  })
+
+// ── Operations Room ───────────────────────────────────────────────────────────
+/** Corridor along the back rooms; also the aisle behind desk row 1. */
+export const CORRIDOR_Z = -1.3
+/** Aisle behind desk row 2. */
+export const ROW2_AISLE_Z = 2.3
+const aisleZ = (deskZ: number) => (deskZ < 2 ? CORRIDOR_Z : ROW2_AISLE_Z)
+
 const deskNodes = officeEmployees.map((e) =>
-  n(`desk:${e.id}`, e.floor, e.desk[0], e.desk[1] + DESK_STAND_OFFSET_Z, {
+  n(`desk:${e.id}`, e.desk[0], e.desk[1] + DESK_STAND_OFFSET_Z, {
     heading: 0,
     spot: "desk",
   }),
 )
 /** Aisle point behind each desk (where the employee steps back to leave). */
-const deskAisleZ: Record<FloorId, number> = { 1: -0.15, 2: -3.65 }
 const deskAisles = officeEmployees.map((e) =>
-  n(`aisle:${e.id}`, e.floor, e.desk[0], deskAisleZ[e.floor]),
+  n(`aisle:${e.id}`, e.desk[0], aisleZ(e.desk[1])),
 )
+
+// ── Meeting Room: conference table with eight chairs ──────────────────────────
+export const MEETING_TABLE = { x: -6, z: -4.35, width: 2.4, depth: 1.0 }
+/** Chair positions and facings (towards the table). */
+export const MEETING_CHAIRS: { x: number; z: number; heading: number }[] = [
+  ...[-6.85, -6.0, -5.15].map((x) => ({ x, z: -3.4, heading: Math.PI })),
+  ...[-6.85, -6.0, -5.15].map((x) => ({ x, z: -5.3, heading: 0 })),
+  { x: -7.65, z: -4.35, heading: Math.PI / 2 },
+  { x: -4.35, z: -4.35, heading: -Math.PI / 2 },
+]
+const MEETING_FRONT_Z = -2.75
+const MEETING_BACK_Z = -5.95
+const MEETING_WEST_X = -8.45
+const MEETING_EAST_X = -3.55
+/** Where each meeting chair is approached from (on the path around the table). */
+const meetingApproach = (i: number): [number, number] => {
+  const c = MEETING_CHAIRS[i]
+  if (i < 3) return [c.x, MEETING_FRONT_Z]
+  if (i < 6) return [c.x, MEETING_BACK_Z]
+  return [i === 6 ? MEETING_WEST_X : MEETING_EAST_X, c.z]
+}
+
+// ── Gaming & Rest Lounge ──────────────────────────────────────────────────────
+/** Gaming chairs (facing the screens on the back wall). */
+export const GAMING_CHAIRS = [3.5, 4.9, 6.3].map((x) => ({
+  x,
+  z: -5.2,
+  heading: Math.PI,
+}))
+const GAMING_AISLE_Z = -4.5
+export const LOUNGE_APPROACH_X = 7.75
 
 export const PANTRY_SPOTS = ["pantry:1", "pantry:2", "pantry:3"] as const
 export const LOUNGE_SPOTS = ["lounge:1", "lounge:2", "lounge:3"] as const
+export const GAMING_SPOTS = ["gaming:1", "gaming:2", "gaming:3"] as const
+export const MEETING_SPOTS = MEETING_CHAIRS.map((_, i) => `meeting:${i + 1}`)
 
 export const NAV_NODES: NavNode[] = [
   ...deskNodes,
   ...deskAisles,
-  // Floor 1: aisle behind the desks, passages between desks, front hallway
-  n("f1:aisle-west", 1, -5.5, -0.15),
-  n("f1:pass-1", 1, -2.73, -0.15),
-  n("f1:pass-2", 1, 0.43, -0.15),
-  n("f1:pass-3", 1, 3.58, -0.15),
-  n("f1:front-west", 1, -5.4, 2.5),
-  n("f1:front-1", 1, -2.73, 2.5),
-  n("f1:front-2", 1, 0.43, 2.5),
-  n("f1:front-3", 1, 3.58, 2.5),
-  n("f1:stair-approach", 1, -5.5, 4.85),
-  n("f1:stair-foot", 1, -6.35, 4.85),
-  // Pantry (under the mezzanine, back right)
-  n("f1:pantry-hub", 1, 4.6, -2.6),
-  n("pantry:1", 1, 4.1, -3.55, { heading: Math.PI, spot: "pantry" }),
-  n("pantry:2", 1, 5.3, -3.55, { heading: Math.PI, spot: "pantry" }),
-  n("pantry:3", 1, 5.4, -2.5, { heading: Math.PI / 2, spot: "pantry" }),
-  // Staircase (along the left wall)
-  { id: "stairs:bottom", floor: 1, x: -6.35, y: 0, z: 4.6 },
-  { id: "stairs:top", floor: 2, x: -6.35, y: Y2, z: -0.5 },
-  // Floor 2: landing, front aisle along the railing, passages, back aisle
-  n("f2:landing", 2, -6.35, -1.05),
-  n("f2:front-west", 2, -5.0, -1.15),
-  n("f2:front-1", 2, -1.6, -1.15),
-  n("f2:front-2", 2, 1.9, -1.15),
-  n("f2:front-east", 2, 5.8, -1.15),
-  n("f2:back-west", 2, -5.0, -3.65),
-  n("f2:back-1", 2, -1.6, -3.65),
-  n("f2:back-2", 2, 1.9, -3.65),
-  // Lounge (east end of the mezzanine): approach points and seats
-  n("f2:seat-2-approach", 2, 5.8, -1.35),
-  n("f2:seat-1-approach", 2, 5.8, -1.95),
-  n("f2:seat-3-approach", 2, 5.8, -3.3),
-  n("lounge:1", 2, 6.25, -1.95, { heading: -Math.PI / 2, spot: "lounge" }),
-  n("lounge:2", 2, 6.25, -1.35, { heading: -Math.PI / 2, spot: "lounge" }),
-  n("lounge:3", 2, 6.3, -3.3, { heading: -Math.PI / 2, spot: "lounge" }),
+  // Corridor (row 1 aisle) and the passages to row 2
+  n("ops:corridor-west", -8.3, CORRIDOR_Z),
+  n("ops:corridor-1", -4.2, CORRIDOR_Z),
+  n("ops:corridor-2", 0, CORRIDOR_Z),
+  n("ops:corridor-3", 4.2, CORRIDOR_Z),
+  n("ops:corridor-east", 8.3, CORRIDOR_Z),
+  n("ops:row2-west", -8.3, ROW2_AISLE_Z),
+  n("ops:row2-east", 8.3, ROW2_AISLE_Z),
+  // Meeting Room: a path around the table, entered by the door at x = -4.2
+  n("meet:front-west", MEETING_WEST_X, MEETING_FRONT_Z),
+  n("meet:door", -4.2, MEETING_FRONT_Z),
+  n("meet:front-east", MEETING_EAST_X, MEETING_FRONT_Z),
+  n("meet:back-west", MEETING_WEST_X, MEETING_BACK_Z),
+  n("meet:back-east", MEETING_EAST_X, MEETING_BACK_Z),
+  ...MEETING_CHAIRS.map((_, i) => {
+    const [x, z] = meetingApproach(i)
+    return n(`meet:approach-${i + 1}`, x, z)
+  }),
+  ...MEETING_CHAIRS.map((c, i) =>
+    seat(`meeting:${i + 1}`, "meeting", c.x, c.z, c.heading),
+  ),
+  // Pantry (door at x = 0): counter spots and the high table
+  n("pantry:hub", 0, -4.1),
+  n("pantry:1", -0.5, -5.05, { heading: Math.PI, spot: "pantry" }),
+  n("pantry:2", 0.7, -5.05, { heading: Math.PI, spot: "pantry" }),
+  n("pantry:3", 0.8, -4.0, { heading: Math.PI / 2, spot: "pantry" }),
+  // Gaming & Rest Lounge (door at x = 4.2)
+  n("lounge:hub", 4.2, -3.3),
+  ...GAMING_CHAIRS.map((c, i) =>
+    n(`lounge:game-aisle-${i + 1}`, c.x, GAMING_AISLE_Z),
+  ),
+  ...GAMING_CHAIRS.map((c, i) =>
+    seat(`gaming:${i + 1}`, "gaming", c.x, c.z, c.heading),
+  ),
+  n("lounge:seat-2-approach", LOUNGE_APPROACH_X, -3.35),
+  n("lounge:seat-1-approach", LOUNGE_APPROACH_X, -3.95),
+  n("lounge:seat-3-approach", LOUNGE_APPROACH_X, -5.3),
+  n("lounge:1", 8.25, -3.95, { heading: -Math.PI / 2, spot: "lounge" }),
+  n("lounge:2", 8.25, -3.35, { heading: -Math.PI / 2, spot: "lounge" }),
+  n("lounge:3", 8.3, -5.3, { heading: -Math.PI / 2, spot: "lounge" }),
 ]
 
-/** Undirected corridors. Every flat edge is checked against OBSTACLES in tests. */
+const chain = (ids: string[]): [string, string][] =>
+  ids.slice(1).map((id, i) => [ids[i], id])
+
+/** Undirected corridors. Every edge is checked against OBSTACLES in tests. */
 export const NAV_EDGES: [string, string][] = [
   ...officeEmployees.map(
     (e) => [`desk:${e.id}`, `aisle:${e.id}`] as [string, string],
   ),
-  // Floor 1 aisle chain, west → east
-  ["f1:aisle-west", "aisle:scout"],
-  ["aisle:scout", "f1:pass-1"],
-  ["f1:pass-1", "aisle:quill"],
-  ["aisle:quill", "f1:pass-2"],
-  ["f1:pass-2", "aisle:pixel"],
-  ["aisle:pixel", "f1:pass-3"],
-  ["f1:pass-3", "aisle:vera"],
-  // Passages to the front hallway
-  ["f1:pass-1", "f1:front-1"],
-  ["f1:pass-2", "f1:front-2"],
-  ["f1:pass-3", "f1:front-3"],
-  ["f1:aisle-west", "f1:front-west"],
-  ["f1:front-west", "f1:front-1"],
-  ["f1:front-1", "f1:front-2"],
-  ["f1:front-2", "f1:front-3"],
-  // To the stairs
-  ["f1:front-west", "f1:stair-approach"],
-  ["f1:stair-approach", "f1:stair-foot"],
-  ["f1:stair-foot", "stairs:bottom"],
-  ["stairs:bottom", "stairs:top"],
-  ["stairs:top", "f2:landing"],
+  // Corridor west → east (row 1 desks open onto it)
+  ...chain([
+    "ops:corridor-west",
+    "aisle:scout",
+    "ops:corridor-1",
+    "aisle:quill",
+    "ops:corridor-2",
+    "aisle:pixel",
+    "ops:corridor-3",
+    "aisle:vera",
+    "ops:corridor-east",
+  ]),
+  // Row 2 aisle west → east
+  ...chain([
+    "ops:row2-west",
+    "aisle:tempo",
+    "aisle:relay",
+    "aisle:ledger",
+    "ops:row2-east",
+  ]),
+  // Passages between the row 1 desks
+  ["ops:corridor-west", "ops:row2-west"],
+  ["ops:corridor-1", "aisle:tempo"],
+  ["ops:corridor-2", "aisle:relay"],
+  ["ops:corridor-3", "aisle:ledger"],
+  ["ops:corridor-east", "ops:row2-east"],
+  // Meeting Room
+  ["ops:corridor-1", "meet:door"],
+  ...chain([
+    "meet:front-west",
+    "meet:approach-1",
+    "meet:approach-2",
+    "meet:approach-3",
+    "meet:door",
+    "meet:front-east",
+  ]),
+  ...chain([
+    "meet:back-west",
+    "meet:approach-4",
+    "meet:approach-5",
+    "meet:approach-6",
+    "meet:back-east",
+  ]),
+  ...chain(["meet:front-west", "meet:approach-7", "meet:back-west"]),
+  ...chain(["meet:front-east", "meet:approach-8", "meet:back-east"]),
+  ...MEETING_CHAIRS.map(
+    (_, i) =>
+      [`meet:approach-${i + 1}`, `meeting:${i + 1}`] as [string, string],
+  ),
   // Pantry
-  ["aisle:vera", "f1:pantry-hub"],
-  ["f1:pantry-hub", "pantry:1"],
-  ["f1:pantry-hub", "pantry:2"],
-  ["f1:pantry-hub", "pantry:3"],
-  // Floor 2
-  ["f2:landing", "f2:front-west"],
-  ["f2:front-west", "f2:front-1"],
-  ["f2:front-1", "f2:front-2"],
-  ["f2:front-2", "f2:front-east"],
-  ["f2:front-west", "f2:back-west"],
-  ["f2:front-1", "f2:back-1"],
-  ["f2:front-2", "f2:back-2"],
-  ["f2:back-west", "aisle:tempo"],
-  ["aisle:tempo", "f2:back-1"],
-  ["f2:back-1", "aisle:relay"],
-  ["aisle:relay", "f2:back-2"],
-  ["f2:back-2", "aisle:ledger"],
-  ["aisle:ledger", "f2:seat-3-approach"],
-  // Lounge
-  ["f2:front-east", "f2:seat-2-approach"],
-  ["f2:seat-2-approach", "f2:seat-1-approach"],
-  ["f2:seat-1-approach", "f2:seat-3-approach"],
-  ["f2:seat-1-approach", "lounge:1"],
-  ["f2:seat-2-approach", "lounge:2"],
-  ["f2:seat-3-approach", "lounge:3"],
+  ["ops:corridor-2", "pantry:hub"],
+  ["pantry:hub", "pantry:1"],
+  ["pantry:hub", "pantry:2"],
+  ["pantry:hub", "pantry:3"],
+  // Gaming & Rest Lounge
+  ["ops:corridor-3", "lounge:hub"],
+  ["lounge:hub", "lounge:game-aisle-2"],
+  ...chain([
+    "lounge:game-aisle-1",
+    "lounge:game-aisle-2",
+    "lounge:game-aisle-3",
+  ]),
+  ...GAMING_CHAIRS.map(
+    (_, i) =>
+      [`lounge:game-aisle-${i + 1}`, `gaming:${i + 1}`] as [string, string],
+  ),
+  ["lounge:hub", "lounge:seat-2-approach"],
+  ["lounge:seat-2-approach", "lounge:seat-1-approach"],
+  ["lounge:seat-1-approach", "lounge:seat-3-approach"],
+  ["lounge:seat-1-approach", "lounge:1"],
+  ["lounge:seat-2-approach", "lounge:2"],
+  ["lounge:seat-3-approach", "lounge:3"],
 ]
 
-export type Obstacle =
-  | {
-      floor: FloorId
-      kind: "rect"
-      name: string
-      x0: number
-      x1: number
-      z0: number
-      z1: number
-    }
-  | {
-      floor: FloorId
-      kind: "circle"
-      name: string
-      x: number
-      z: number
-      r: number
-    }
+export type Obstacle = {
+  name: string
+  /** Seat nodes allowed to step into this piece (sitting down on it). */
+  seats?: readonly string[]
+} & (
+  | { kind: "rect"; x0: number; x1: number; z0: number; z1: number }
+  | { kind: "circle"; x: number; z: number; r: number }
+)
 
 const rect = (
-  floor: FloorId,
   name: string,
   x0: number,
   x1: number,
   z0: number,
   z1: number,
-): Obstacle => ({
-  floor,
-  kind: "rect",
-  name,
-  x0,
-  x1,
-  z0,
-  z1,
-})
+  seats?: readonly string[],
+): Obstacle => ({ name, kind: "rect", x0, x1, z0, z1, seats })
 const circle = (
-  floor: FloorId,
   name: string,
   x: number,
   z: number,
   r: number,
-): Obstacle => ({
-  floor,
-  kind: "circle",
-  name,
-  x,
-  z,
-  r,
-})
+  seats?: readonly string[],
+): Obstacle => ({ name, kind: "circle", x, z, r, seats })
+
+const WALL_HALF = 0.05
+/** Doorways in the back-room partition (x ranges). */
+export const DOORWAYS: { room: RoomId; x0: number; x1: number }[] = [
+  { room: "meeting", x0: -4.85, x1: -3.55 },
+  { room: "pantry", x0: -0.65, x1: 0.65 },
+  { room: "lounge", x0: 3.55, x1: 4.85 },
+]
+
+/** Glass partitions between the rooms (segments of [x0, z0] → [x1, z1]). */
+export const PARTITIONS: { from: [number, number]; to: [number, number] }[] = [
+  // Front wall of the back rooms, with the three doorways
+  {
+    from: [OFFICE_BOUNDS.x0, BACK_ROOMS_Z],
+    to: [DOORWAYS[0].x0, BACK_ROOMS_Z],
+  },
+  { from: [DOORWAYS[0].x1, BACK_ROOMS_Z], to: [DOORWAYS[1].x0, BACK_ROOMS_Z] },
+  { from: [DOORWAYS[1].x1, BACK_ROOMS_Z], to: [DOORWAYS[2].x0, BACK_ROOMS_Z] },
+  {
+    from: [DOORWAYS[2].x1, BACK_ROOMS_Z],
+    to: [OFFICE_BOUNDS.x1, BACK_ROOMS_Z],
+  },
+  // Between Meeting Room | Pantry | Lounge
+  { from: [-3, OFFICE_BOUNDS.z0], to: [-3, BACK_ROOMS_Z] },
+  { from: [2.5, OFFICE_BOUNDS.z0], to: [2.5, BACK_ROOMS_Z] },
+]
+
+const partitionObstacles = PARTITIONS.map(({ from, to }, i) =>
+  rect(
+    `wall-${i + 1}`,
+    Math.min(from[0], to[0]) - WALL_HALF,
+    Math.max(from[0], to[0]) + WALL_HALF,
+    Math.min(from[1], to[1]) - WALL_HALF,
+    Math.max(from[1], to[1]) + WALL_HALF,
+  ),
+)
 
 /** Furniture footprints (from building.tsx / furniture.tsx / workstation.tsx). */
 export const OBSTACLES: Obstacle[] = [
+  ...partitionObstacles,
   ...officeEmployees.map((e) =>
     rect(
-      e.floor,
       `desk:${e.id}`,
       e.desk[0] - 0.85,
       e.desk[0] + 0.85,
@@ -227,41 +327,49 @@ export const OBSTACLES: Obstacle[] = [
       e.desk[1] + 0.39,
     ),
   ),
-  // Floor 1
-  circle(1, "column-1", -2.73, -0.7, 0.15),
-  circle(1, "column-2", 0.43, -0.7, 0.15),
-  circle(1, "column-3", 3.58, -0.7, 0.15),
-  rect(1, "meeting-table", -2.9, 0.5, 3.0, 4.6),
-  rect(1, "reception", 3.45, 6.05, 3.5, 4.3),
-  rect(1, "stairs", -6.9, -5.8, -0.5, 4.6),
-  rect(1, "hot-desks", -5.75, -3.45, -4.4, -1.8),
-  rect(1, "project-board", -0.6, 2.4, -2.85, -2.35),
-  rect(1, "pantry-counter", 3.45, 6.15, -4.75, -4.05),
-  rect(1, "pantry-fridge", 6.15, 6.95, -4.75, -4.0),
-  circle(1, "pantry-table", 6.1, -2.5, 0.4),
-  circle(1, "plant-front", -4.6, 4.55, 0.32),
-  circle(1, "plant-front-mid", 2.1, 4.4, 0.28),
-  circle(1, "plant-east", 6.45, 2.3, 0.26),
-  circle(1, "plant-back", -2.0, -4.45, 0.3),
-  // Floor 2
-  circle(2, "transmitter", 1.32, -2.75, 0.1),
-  rect(2, "lounge-sofa", 6.07, 6.75, -2.4, -0.9),
-  rect(2, "lounge-chair", 6.05, 6.75, -3.65, -2.95),
-  circle(2, "lounge-table", 5.15, -1.8, 0.3),
-  circle(2, "plant-east", 6.45, -4.45, 0.3),
-  circle(2, "plant-west", -6.45, -4.45, 0.3),
-  circle(2, "plant-mid", 1.95, -4.5, 0.25),
-  // The railing along the mezzanine edge (except the stair opening)
-  rect(2, "railing", -5.75, 7, -0.55, -0.4),
+  // Operations Room
+  rect("reception", 5.45, 7.75, 5.4, 6.0),
+  circle("plant-front-west", -8.45, 5.95, 0.32),
+  circle("plant-front-east", 8.55, 4.6, 0.28),
+  // Meeting Room
+  rect(
+    "meeting-table",
+    MEETING_TABLE.x - MEETING_TABLE.width / 2,
+    MEETING_TABLE.x + MEETING_TABLE.width / 2,
+    MEETING_TABLE.z - MEETING_TABLE.depth / 2,
+    MEETING_TABLE.z + MEETING_TABLE.depth / 2,
+  ),
+  ...MEETING_CHAIRS.map((c, i) =>
+    circle(`meeting-chair-${i + 1}`, c.x, c.z, 0.25, [`meeting:${i + 1}`]),
+  ),
+  // Pantry
+  rect("pantry-counter", -1.15, 1.55, -6.25, -5.55),
+  rect("pantry-fridge", 1.55, 2.35, -6.25, -5.5),
+  circle("pantry-table", 1.5, -4.0, 0.4),
+  circle("pantry-stools", 2.05, -4.0, 0.5),
+  circle("plant-pantry", -2.5, -6.0, 0.3),
+  // Gaming & Rest Lounge
+  ...GAMING_CHAIRS.map((c, i) =>
+    rect(`gaming-desk-${i + 1}`, c.x - 0.5, c.x + 0.5, -6.3, -5.7),
+  ),
+  ...GAMING_CHAIRS.map((c, i) =>
+    circle(`gaming-chair-${i + 1}`, c.x, c.z, 0.25, [`gaming:${i + 1}`]),
+  ),
+  rect("lounge-sofa", 8.07, 8.75, -4.4, -2.9, ["lounge:1", "lounge:2"]),
+  rect("lounge-chair", 8.05, 8.75, -5.65, -4.95, ["lounge:3"]),
+  circle("lounge-table", 7.0, -4.0, 0.3),
+  circle("lounge-side-table", 8.5, -4.68, 0.16),
+  circle("lounge-lamp", 8.55, -2.78, 0.14),
+  circle("plant-lounge-door", 2.95, -2.65, 0.3),
+  circle("plant-lounge-back", 8.6, -6.1, 0.3),
 ]
 
-/** Walkable bounds per floor (inside walls, railings and floor edges). */
-export const FLOOR_BOUNDS: Record<
-  FloorId,
-  { x0: number; x1: number; z0: number; z1: number }
-> = {
-  1: { x0: -6.9, x1: 6.9, z0: -4.9, z1: 4.95 },
-  2: { x0: -6.9, x1: 6.9, z0: -4.9, z1: -0.55 },
+/** Walkable bounds: inside the back and left walls and the open front/right edges. */
+export const WALKABLE_BOUNDS = {
+  x0: OFFICE_BOUNDS.x0 + 0.1,
+  x1: OFFICE_BOUNDS.x1 - 0.1,
+  z0: OFFICE_BOUNDS.z0 + 0.1,
+  z1: OFFICE_BOUNDS.z1 - 0.1,
 }
 
 // ── Graph ─────────────────────────────────────────────────────────────────────
@@ -384,8 +492,6 @@ export type RouteSample = {
   heading: number
   /** Index of the segment being walked (between points i and i+1). */
   segment: number
-  /** On the staircase segment. */
-  onStairs: boolean
   done: boolean
 }
 
@@ -398,7 +504,6 @@ export function positionAt(route: Route, d: number): RouteSample {
       position: [p.x, p.y, p.z],
       heading: 0,
       segment: 0,
-      onStairs: false,
       done: true,
     }
   }
@@ -415,13 +520,9 @@ export function positionAt(route: Route, d: number): RouteSample {
     position: [a.x + dx * k, a.y + (b.y - a.y) * k, a.z + dz * k],
     heading: dx === 0 && dz === 0 ? 0 : Math.atan2(dx, dz),
     segment: i,
-    onStairs: isStairSegment(a, b),
     done: clamped >= total,
   }
 }
-
-export const isStairSegment = (a: RoutePoint, b: RoutePoint) =>
-  Math.abs(b.y - a.y) > 0.5
 
 /** Corridor (pair of nodes) that a route segment lies on, for interruptions. */
 export function segmentEdge(
@@ -436,31 +537,8 @@ export function segmentEdge(
   return null
 }
 
-/** Walking time for a route (stairs are slower). */
-export function routeDuration(route: Route) {
-  let t = 0
-  for (let i = 1; i < route.points.length; i++) {
-    const len = route.lengths[i] - route.lengths[i - 1]
-    t +=
-      len /
-      (isStairSegment(route.points[i - 1], route.points[i])
-        ? STAIR_SPEED
-        : WALK_SPEED)
-  }
-  return t
-}
-
-/** Walking speed on a given segment. */
-export const speedFor = (route: Route, segment: number) =>
-  isStairSegment(
-    route.points[segment],
-    route.points[segment + 1] ?? route.points[segment],
-  )
-    ? STAIR_SPEED
-    : WALK_SPEED
-
-export const floorOfHeight = (y: number): FloorId =>
-  y >= FLOOR_HEIGHT - 0.05 ? 2 : 1
+/** Walking time for a route (one floor, one speed). */
+export const routeDuration = (route: Route) => route.total / WALK_SPEED
 
 export const deskNode = (id: OfficeEmployeeId) => `desk:${id}`
 
@@ -468,20 +546,33 @@ export function spotsFor(
   kind: DestinationKind,
   id: OfficeEmployeeId,
 ): readonly string[] {
-  if (kind === "desk") return [deskNode(id)]
-  return kind === "pantry" ? PANTRY_SPOTS : LOUNGE_SPOTS
+  switch (kind) {
+    case "desk":
+      return [deskNode(id)]
+    case "pantry":
+      return PANTRY_SPOTS
+    case "lounge":
+      return LOUNGE_SPOTS
+    case "gaming":
+      return GAMING_SPOTS
+    case "meeting":
+      return MEETING_SPOTS
+  }
 }
 
 export const DESTINATION_LABEL: Record<DestinationKind, string> = {
   desk: "workstation",
   pantry: "pantry",
   lounge: "lounge",
+  gaming: "gaming stations",
+  meeting: "meeting room",
 }
 
-export const DESTINATION_FLOOR: Record<
-  Exclude<DestinationKind, "desk">,
-  FloorId
-> = {
-  pantry: 1,
-  lounge: 2,
+/** The room each kind of destination is in. */
+export const DESTINATION_ROOM: Record<DestinationKind, RoomId> = {
+  desk: "operations",
+  pantry: "pantry",
+  lounge: "lounge",
+  gaming: "lounge",
+  meeting: "meeting",
 }

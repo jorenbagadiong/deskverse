@@ -2,10 +2,10 @@ import {
   clearInteractionState,
   draws,
   expect,
-  FLOOR_OF,
   noHorizontalOverflow,
   officeView,
   openOffice,
+  ROOM_VIEWS,
   SEVEN,
   setDirectState,
   test,
@@ -13,10 +13,13 @@ import {
   waitForIdleScene,
 } from "./fixtures"
 
-const floorRadio = (n: 1 | 2) => new RegExp(`^Floor ${n}:`)
+const roomRadio = (name: (typeof ROOM_VIEWS)[number]) => ({
+  name,
+  exact: true,
+})
 
 test.describe("3D office (desktop)", () => {
-  test("renders the two-floor office with all seven employees", async ({
+  test("renders the single-floor office with all seven employees", async ({
     page,
   }) => {
     await openOffice(page)
@@ -24,20 +27,18 @@ test.describe("3D office (desktop)", () => {
     await expect(nameplates).toHaveCount(7)
     await expect(nameplates).toHaveText([...SEVEN])
     await expect(
-      page.getByRole("radio", { name: "Whole building" }),
+      page.getByRole("radio", roomRadio("Entire office")),
     ).toBeChecked()
     expect(await noHorizontalOverflow(page)).toBeLessThanOrEqual(0)
   })
 
-  test("selects each of the seven employees and activates their floor", async ({
-    page,
-  }) => {
+  test("selects each of the seven employees", async ({ page }) => {
     await openOffice(page)
     for (const name of SEVEN) {
       await page.getByRole("radio", { name: new RegExp(`^${name}`) }).click()
       await expect(page.locator("#employee-details-title")).toHaveText(name)
       await expect(
-        page.getByRole("radio", { name: floorRadio(FLOOR_OF[name]) }),
+        page.getByRole("radio", roomRadio("Entire office")),
       ).toBeChecked()
       await expect(
         page.locator("p[aria-live='polite'].sr-only").first(),
@@ -45,27 +46,30 @@ test.describe("3D office (desktop)", () => {
     }
   })
 
-  test("keyboard: arrow keys move within a floor, Tab between floors", async ({
-    page,
-  }) => {
+  test("keyboard: arrow keys move through the whole team", async ({ page }) => {
     await openOffice(page)
-    await page.getByRole("radio", { name: /^Scout/ }).focus()
-    for (let i = 0; i < 3; i++) {
+    const member = (name: string) =>
+      page.getByRole("radio", { name: new RegExp(`^${name}`) })
+    await member("Scout").focus()
+    // Roving focus: wait until each arrow press has actually moved focus
+    // before the next key, instead of sleeping a fixed time.
+    for (const name of ["Quill", "Pixel", "Vera"]) {
       await page.keyboard.press("ArrowDown")
-      await page.waitForTimeout(120)
+      await expect(member(name)).toBeFocused()
     }
     await page.keyboard.press("Space")
     await expect(page.locator("#employee-details-title")).toHaveText("Vera")
+    await expect(member("Vera")).toBeFocused()
     const outline = await page.evaluate(
       () => getComputedStyle(document.activeElement as Element).outlineStyle,
     )
     expect(outline).toBe("solid")
 
-    // Tab moves into the Floor 2 group (its first item gets focus).
-    await page.keyboard.press("Tab")
+    // One group for all seven: the next arrow reaches the second desk row.
+    await page.keyboard.press("ArrowDown")
+    await expect(member("Tempo")).toBeFocused()
     await page.keyboard.press("Space")
     await expect(page.locator("#employee-details-title")).toHaveText("Tempo")
-    await expect(page.getByRole("radio", { name: floorRadio(2) })).toBeChecked()
   })
 
   test("supports all five simulated states and records activity", async ({
@@ -101,34 +105,31 @@ test.describe("3D office (desktop)", () => {
     await expect(page.locator("[data-status-badge]")).toHaveText("Completed")
   })
 
-  test("floor controls switch between building, Floor 1 and Floor 2", async ({
-    page,
-  }) => {
+  test("room controls focus each room of the floor", async ({ page }) => {
     await openOffice(page)
-    const tempoPlate = officeView(page).locator("[aria-hidden='true'] span", {
-      hasText: "Tempo",
+    const scoutPlate = officeView(page).locator("[aria-hidden='true'] span", {
+      hasText: "Scout",
     })
-
-    await page.getByRole("radio", { name: floorRadio(1) }).click()
+    const where = () =>
+      scoutPlate.evaluate((el) => (el as HTMLElement).style.transform)
     await waitForCameraSettled(page)
-    // Floor 2 lifts away: its nameplates are hidden.
-    await expect(tempoPlate).toHaveCSS("opacity", "0")
-
-    await page.getByRole("radio", { name: floorRadio(2) }).click()
+    const office = await where()
+    for (const room of ROOM_VIEWS.slice(1)) {
+      await page.getByRole("radio", roomRadio(room)).click()
+      await expect(page.getByRole("radio", roomRadio(room))).toBeChecked()
+      await waitForCameraSettled(page)
+      expect(await where(), room).not.toBe(office)
+    }
+    await page.getByRole("radio", roomRadio("Entire office")).click()
     await waitForCameraSettled(page)
-    await expect(tempoPlate).toHaveCSS("opacity", "1")
-
-    await page.getByRole("radio", { name: "Whole building" }).click()
-    await expect(
-      page.getByRole("radio", { name: "Whole building" }),
-    ).toBeChecked()
+    expect(await where()).toBe(office)
   })
 
   test("clicking a robot in the 3D scene selects that employee", async ({
     page,
   }) => {
     await openOffice(page)
-    await page.getByRole("radio", { name: floorRadio(1) }).click()
+    await page.getByRole("radio", roomRadio("Operations Room")).click()
     await waitForCameraSettled(page)
     const plate = officeView(page).locator("[aria-hidden='true'] span", {
       hasText: "Pixel",
@@ -140,21 +141,21 @@ test.describe("3D office (desktop)", () => {
     await expect(page.locator("#employee-details-title")).toHaveText("Pixel")
   })
 
-  test("2D map toggle shows both floors and stays operable", async ({
+  test("2D map toggle shows the single-floor plan and stays operable", async ({
     page,
   }) => {
     await openOffice(page)
     await page.getByRole("radio", { name: "2D map" }).click()
     await expect(officeView(page).locator("canvas")).toHaveCount(0)
-    await expect(
-      page.getByRole("heading", { level: 3, name: /Floor 2 · Operations/ }),
-    ).toBeVisible()
-    await expect(
-      page.getByRole("heading", {
-        level: 3,
-        name: /Floor 1 · Creative Production/,
-      }),
-    ).toBeVisible()
+    for (const room of [
+      "Operations Room",
+      "Pantry",
+      "Gaming & Rest Lounge",
+      "Meeting Room",
+    ])
+      await expect(
+        page.getByRole("heading", { level: 3, name: new RegExp(`^${room}`) }),
+      ).toBeVisible()
     await page.getByRole("button", { name: /Ledger/ }).click()
     await expect(page.locator("#employee-details-title")).toHaveText("Ledger")
     await page.getByRole("radio", { name: "3D", exact: true }).click()
@@ -189,7 +190,7 @@ test.describe("reduced motion", () => {
     // Compare only the 3D render: mask the overlay controls drawn on top of it.
     const overlays = [
       page.getByRole("toolbar", { name: "Camera" }),
-      page.getByRole("radiogroup", { name: "Floors" }),
+      page.getByRole("radiogroup", { name: "Rooms" }),
       page.getByRole("radiogroup", { name: "Office display" }),
       page.getByRole("button", { name: "Enter fullscreen" }),
     ]

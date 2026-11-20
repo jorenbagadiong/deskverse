@@ -297,7 +297,17 @@ export function blinkOpenness(since: number) {
 // ── Movement activities (independent of task status) ─────────────────────────
 
 export type BodyActivity =
-  "at-desk" | "walking" | "coffee-break" | "resting" | "standing"
+  | "at-desk"
+  | "walking"
+  | "coffee-break"
+  | "resting"
+  | "gaming"
+  | "meeting"
+  | "standing"
+
+/** Activities where the body sits (sofa, gaming chair, meeting chair). */
+export const isSeated = (activity: BodyActivity) =>
+  activity === "resting" || activity === "gaming" || activity === "meeting"
 
 /** Distance of one full walk cycle (two steps), in scene units. */
 export const STRIDE_LENGTH = 0.62
@@ -348,6 +358,9 @@ export function activityPose(
     case "coffee-break":
       return COFFEE_POSE
     case "resting":
+    case "gaming":
+    case "meeting":
+      // Phase A: one shared seated pose (gaming and meeting animations come later).
       return SEATED_POSE
     case "standing":
       // Working poses need the workstation.

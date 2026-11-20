@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest"
 
 import {
-  BUILDING,
   cameraAxes,
   fitZoom,
-  floorY,
   focusTarget,
   framingBox,
+  OFFICE,
   VIEW_MODES,
 } from "@/components/office/scene/camera-framing"
 
@@ -14,30 +13,27 @@ const ISO = Math.acos(1 / Math.sqrt(3))
 const AZ = Math.PI / 4
 
 describe("camera framing", () => {
-  it("stacks Floor 2 physically above Floor 1", () => {
-    expect(floorY(1)).toBe(0)
-    expect(floorY(2)).toBe(BUILDING.floorHeight)
+  it("frames the entire office and each room on the ground floor", () => {
+    const office = framingBox("office")
+    expect(office.min[1]).toBe(0)
+    expect(office.max[1]).toBe(OFFICE.wallHeight)
+    expect(office.max[0] - office.min[0]).toBe(OFFICE.width)
+    expect(office.max[2] - office.min[2]).toBe(OFFICE.depth)
+    for (const room of ["operations", "pantry", "lounge", "meeting"] as const) {
+      const box = framingBox(room)
+      expect(box.min[1]).toBe(0)
+      expect(box.min[0]).toBeGreaterThanOrEqual(office.min[0])
+      expect(box.max[0]).toBeLessThanOrEqual(office.max[0])
+      expect(box.min[2]).toBeGreaterThanOrEqual(office.min[2])
+      expect(box.max[2]).toBeLessThanOrEqual(office.max[2])
+    }
   })
 
-  it("frames each mode around the right part of the building", () => {
-    const building = framingBox("building")
-    const f1 = framingBox("floor-1")
-    const f2 = framingBox("floor-2")
-    expect(building.max[1]).toBe(BUILDING.wallHeight)
-    expect(f1.max[1]).toBeLessThan(BUILDING.floorHeight)
-    expect(f2.min[1]).toBe(BUILDING.floorHeight)
-    expect(f2.max[2]).toBeLessThanOrEqual(BUILDING.mezzanineEdge + 1)
-  })
-
-  it("zooms in further for a single floor than for the whole building", () => {
+  it("zooms in further for a room than for the entire office", () => {
     const [w, h] = [900, 640]
-    const building = fitZoom(framingBox("building"), w, h, ISO, AZ)
-    expect(fitZoom(framingBox("floor-1"), w, h, ISO, AZ)).toBeGreaterThan(
-      building,
-    )
-    expect(fitZoom(framingBox("floor-2"), w, h, ISO, AZ)).toBeGreaterThan(
-      building,
-    )
+    const office = fitZoom(framingBox("office"), w, h, ISO, AZ)
+    for (const room of ["operations", "pantry", "lounge", "meeting"] as const)
+      expect(fitZoom(framingBox(room), w, h, ISO, AZ)).toBeGreaterThan(office)
   })
 
   it("fits responsively: larger viewports get proportionally larger zoom", () => {
@@ -72,14 +68,14 @@ describe("camera framing", () => {
     }
   })
 
-  it("moves the focus toward a selected employee and stays on their floor", () => {
-    const point = [5, BUILDING.floorHeight, -3] as const
-    const t = focusTarget("floor-2", point)
-    const center = focusTarget("floor-2", null)
+  it("moves the focus toward a selected employee at chest height", () => {
+    const point = [6.3, 0, -5.2] as const
+    const t = focusTarget("office", point)
+    const center = focusTarget("office", null)
     expect(Math.abs(t[0] - point[0])).toBeLessThan(
       Math.abs(center[0] - point[0]),
     )
-    expect(t[1]).toBeGreaterThanOrEqual(BUILDING.floorHeight)
+    expect(t[1]).toBeCloseTo(0.8)
   })
 
   it("uses an orthonormal camera basis", () => {

@@ -3,19 +3,14 @@
 import { useEffect, useRef } from "react"
 import { useFrame, useThree } from "@react-three/fiber"
 
-import {
-  officeEmployees,
-  type FloorId,
-  type OfficeEmployeeId,
-} from "@/config/office"
+import { officeEmployees, type OfficeEmployeeId } from "@/config/office"
 import { entryFor, type LiveStore } from "@/lib/office-live"
 import type { Movement } from "@/lib/office-movement"
 import {
-  floorOfHeight,
   getNode,
   positionAt,
   segmentEdge,
-  speedFor,
+  WALK_SPEED,
 } from "@/lib/office-navigation"
 
 import { shortestAngle } from "../camera-framing"
@@ -26,21 +21,19 @@ const TURN_RATE = 9
 /**
  * Advances walking employees along their routes each frame and writes their
  * live position into the shared store. Navigation (the route) is data from
- * the reducer; this only samples it. Discrete events (arrival, floor change)
- * are reported back once; nothing here sets React state per frame.
+ * the reducer; this only samples it. Arrivals are reported back once; nothing
+ * here sets React state per frame.
  */
 export function MovementSystem({
   movement,
   live,
   reducedMotion,
   onArrive,
-  onFloorChange,
 }: {
   movement: Record<OfficeEmployeeId, Movement>
   live: React.RefObject<LiveStore>
   reducedMotion: boolean
   onArrive: (id: OfficeEmployeeId, routeId: number) => void
-  onFloorChange: (id: OfficeEmployeeId, floor: FloorId) => void
 }) {
   const invalidate = useThree((s) => s.invalidate)
   const progress = useRef(
@@ -71,10 +64,9 @@ export function MovementSystem({
           progress.current.set(id, p)
         }
         const before = p.distance
-        const segment = positionAt(m.route, before).segment
         p.distance = reducedMotion
           ? m.route.total
-          : Math.min(m.route.total, before + speedFor(m.route, segment) * dt)
+          : Math.min(m.route.total, before + WALK_SPEED * dt)
         const sample = positionAt(m.route, p.distance)
         const turn = shortestAngle(prev.heading, sample.heading)
         next = {
@@ -84,9 +76,7 @@ export function MovementSystem({
           heading: reducedMotion
             ? sample.heading
             : prev.heading + turn * (1 - Math.exp(-TURN_RATE * dt)),
-          floor: floorOfHeight(sample.position[1]),
           moving: !sample.done,
-          onStairs: sample.onStairs,
           stride: prev.stride + (p.distance - before),
           node: sample.done ? m.target : null,
           edge: segmentEdge(m.route, sample.segment),
@@ -113,7 +103,6 @@ export function MovementSystem({
         next = { ...base, heading, stride: prev.stride }
       }
 
-      if (next.floor !== prev.floor) onFloorChange(id, next.floor)
       store.set(id, next)
     }
 

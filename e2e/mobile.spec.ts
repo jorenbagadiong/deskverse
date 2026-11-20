@@ -28,7 +28,7 @@ test.describe("3D office (mobile)", () => {
     await expect(page.getByRole("button", { name: "Zoom in" })).toBeVisible()
     await expect(page.getByRole("button", { name: "Reset view" })).toBeVisible()
     await expect(
-      page.getByRole("radio", { name: "Whole building" }),
+      page.getByRole("radio", { name: "Entire office" }),
     ).toBeVisible()
   })
 
@@ -42,9 +42,11 @@ test.describe("3D office (mobile)", () => {
     }
   })
 
-  test("floor switcher works on touch", async ({ page }) => {
+  test("room switcher works on touch", async ({ page }) => {
     await openOffice(page)
-    await page.getByRole("radio", { name: /^Floor 2:/ }).tap()
-    await expect(page.getByRole("radio", { name: /^Floor 2:/ })).toBeChecked()
+    await page.getByRole("radio", { name: "Pantry", exact: true }).tap()
+    await expect(
+      page.getByRole("radio", { name: "Pantry", exact: true }),
+    ).toBeChecked()
   })
 })

@@ -6,9 +6,11 @@ import {
   Armchair,
   Coffee,
   Footprints,
+  Gamepad2,
   Hand,
   Monitor,
   MousePointerClick,
+  Users,
   X,
 } from "lucide-react"
 
@@ -44,6 +46,8 @@ const MOVE_ICON = {
   desk: Monitor,
   pantry: Coffee,
   lounge: Armchair,
+  gaming: Gamepad2,
+  meeting: Users,
   stop: Hand,
 } as const
 

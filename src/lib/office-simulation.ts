@@ -10,19 +10,18 @@ import { statusMeta, type EmployeeStatus } from "@/config/employee-status"
 import {
   getOfficeEmployee,
   officeEmployees,
-  viewForFloor,
-  type FloorId,
   type OfficeEmployeeId,
+  type RoomId,
   type ViewMode,
 } from "@/config/office"
 
 import {
   activityOf,
   arrivalMessage,
-  floorOf,
   freeSpot,
   isAtDesk,
   isHeadingTo,
+  roomOf,
   startOf,
   type Activity,
   type LiveLocation,
@@ -108,7 +107,7 @@ export type ActivityEntry = {
 
 export type OfficeState = {
   selectedId: OfficeEmployeeId | null
-  /** Camera / floor navigation: whole building or one floor. */
+  /** Camera view: the whole office or one room. */
   view: ViewMode
   statuses: Record<OfficeEmployeeId, EmployeeStatus>
   /** Physical movement, independent of task status. */
@@ -123,8 +122,9 @@ export type OfficeState = {
 }
 
 export type OfficeAction =
-  | { type: "select"; id: OfficeEmployeeId | null; floor?: FloorId }
-  | { type: "setView"; view: ViewMode; selectedFloor?: FloorId }
+  /** `room`: where the employee is right now (the scene's live reading). */
+  | { type: "select"; id: OfficeEmployeeId | null; room?: RoomId | null }
+  | { type: "setView"; view: ViewMode; selectedRoom?: RoomId | null }
   | {
       type: "setStatus"
       id: OfficeEmployeeId
@@ -143,8 +143,6 @@ export type OfficeAction =
     }
   | { type: "stop"; id: OfficeEmployeeId; at: LiveLocation }
   | { type: "arrive"; id: OfficeEmployeeId; routeId: number }
-  /** A walking, selected employee reached another floor. */
-  | { type: "followFloor"; id: OfficeEmployeeId; floor: FloorId }
   | { type: "setWander"; on: boolean }
   | { type: "ambientTick"; instant?: boolean }
 
@@ -155,7 +153,7 @@ export const BREAK_TICKS = 3
 export function createInitialOfficeState(): OfficeState {
   return {
     selectedId: null,
-    view: "building",
+    view: "office",
     statuses: Object.fromEntries(
       officeEmployees.map((e) => [e.id, e.initialStatus]),
     ) as Record<OfficeEmployeeId, EmployeeStatus>,
@@ -248,8 +246,11 @@ function moveTo(
   })
 }
 
-const currentFloor = (state: OfficeState, id: OfficeEmployeeId) =>
-  floorOf(state.movement[id])
+const currentRoom = (
+  state: OfficeState,
+  id: OfficeEmployeeId,
+  live?: RoomId | null,
+) => (live === undefined ? roomOf(state.movement[id]) : live)
 
 export function officeReducer(
   state: OfficeState,
@@ -262,32 +263,26 @@ export function officeReducer(
           ? state
           : { ...state, selectedId: null }
       }
-      // Selecting someone activates the floor they are actually on.
-      const view = viewForFloor(action.floor ?? currentFloor(state, action.id))
+      // A room view only frames that room: show the whole office when the
+      // employee is somewhere else. The camera then focuses them either way.
+      const room = currentRoom(state, action.id, action.room)
+      const view =
+        state.view === "office" || state.view === room ? state.view : "office"
       if (state.selectedId === action.id && state.view === view) return state
       return { ...state, selectedId: action.id, view }
     }
     case "setView": {
       if (state.view === action.view) return state
-      // Keep the selection only if it is still visible in the new view.
-      const floor = state.selectedId
-        ? (action.selectedFloor ?? currentFloor(state, state.selectedId))
+      // Keep the selection only if they are in the room being framed.
+      const room = state.selectedId
+        ? currentRoom(state, state.selectedId, action.selectedRoom)
         : null
-      const keep =
-        floor === null ||
-        action.view === "building" ||
-        viewForFloor(floor) === action.view
+      const keep = action.view === "office" || room === action.view
       return {
         ...state,
         view: action.view,
         selectedId: keep ? state.selectedId : null,
       }
-    }
-    case "followFloor": {
-      if (state.selectedId !== action.id || state.view === "building")
-        return state
-      const view = viewForFloor(action.floor)
-      return state.view === view ? state : { ...state, view }
     }
     case "setStatus": {
       if (state.statuses[action.id] === action.status) return state
@@ -391,9 +386,9 @@ export function officeReducer(
           (status === "idle" || status === "completed") &&
           isAtDesk(next.movement[e.id], e.id)
         ) {
-          // Prefer a break spot on the employee's own floor.
+          // Alternate between the pantry and the lounge.
           const destination: DestinationKind =
-            e.floor === 1 ? "pantry" : "lounge"
+            index % 2 === 0 ? "pantry" : "lounge"
           next = { ...next, wanderCursor: index + 1 }
           return moveTo(next, e.id, destination, undefined, action.instant)
         }

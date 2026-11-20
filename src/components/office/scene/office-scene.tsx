@@ -1,23 +1,20 @@
 "use client"
 
+// Must run before <Canvas> creates its clock (see the module for why).
+import "./three-console"
+
 import { useEffect, useMemo, useRef, useState } from "react"
 import { Canvas, useFrame, useThree } from "@react-three/fiber"
 import * as THREE from "three"
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js"
 
 import type { EmployeeStatus } from "@/config/employee-status"
-import {
-  employeesOnFloor,
-  officeEmployees,
-  type FloorId,
-  type OfficeEmployeeId,
-} from "@/config/office"
+import { officeEmployees, type OfficeEmployeeId } from "@/config/office"
 import type { LiveStore } from "@/lib/office-live"
 import { activityOf, type Movement } from "@/lib/office-movement"
 import { cn } from "@/lib/utils"
 
 import { Building } from "./building/building"
-import { FloorGroup, LIFT_HEIGHT } from "./building/floor-group"
 import type { ViewMode } from "./camera-framing"
 import { CameraRig, type CameraApi } from "./camera-rig"
 import { Character } from "./character/character"
@@ -45,7 +42,6 @@ export type OfficeSceneProps = {
   movement: Record<OfficeEmployeeId, Movement>
   live: React.RefObject<LiveStore>
   onArrive: (id: OfficeEmployeeId, routeId: number) => void
-  onFloorChange: (id: OfficeEmployeeId, floor: FloorId) => void
 }
 
 const EMPLOYEE_IDS = officeEmployees.map((e) => e.id)
@@ -70,7 +66,6 @@ export default function OfficeScene({
   movement,
   live,
   onArrive,
-  onFloorChange,
 }: OfficeSceneProps) {
   const [hoveredId, setHoveredId] = useState<OfficeEmployeeId | null>(null)
   const labels = useRef<LabelElements>({})
@@ -78,9 +73,6 @@ export default function OfficeScene({
   const active = useRef(false)
   const ambient = useMemo<AmbientStore>(() => ({ requests, active }), [])
   const env = environment[theme]
-  const floor2Lifted = view === "floor-1"
-  /** Current Floor 2 lift offset, written by its FloorGroup each frame. */
-  const floor2Offset = useRef(floor2Lifted ? LIFT_HEIGHT : 0)
 
   // Activity-aware lifecycle: when Next.js hides this route, effects clean up.
   // Pause idle animations and release shared geometry buffers until visible again.
@@ -92,8 +84,8 @@ export default function OfficeScene({
     }
   }, [])
 
-  const renderDesks = (floor: FloorId) =>
-    employeesOnFloor(floor).map((employee) => {
+  const desks = () =>
+    officeEmployees.map((employee) => {
       const [x, z] = employee.desk
       const status = statuses[employee.id]
       // Workstation tools animate only while their owner is working at the desk.
@@ -110,15 +102,10 @@ export default function OfficeScene({
       )
     })
 
-  // Characters live at world level so they can walk between floors.
-  const renderPeople = () =>
+  // Characters live at world level so they can walk between rooms.
+  const people = () =>
     officeEmployees.map((employee) => (
-      <Walker
-        key={employee.id}
-        id={employee.id}
-        live={live}
-        floor2Offset={floor2Offset}
-      >
+      <Walker key={employee.id} id={employee.id} live={live}>
         <Character
           employee={employee}
           status={statuses[employee.id]}
@@ -152,11 +139,7 @@ export default function OfficeScene({
         <SceneMaterialsProvider theme={theme}>
           <StudioEnvironment intensity={theme === "dark" ? 0.55 : 0.42} />
           <PointerCursor active={hoveredId !== null} />
-          <LabelProjector
-            labels={labels}
-            live={live}
-            floor2Offset={floor2Offset}
-          />
+          <LabelProjector labels={labels} live={live} />
           <AmbientScheduler
             store={ambient}
             ids={EMPLOYEE_IDS}
@@ -167,19 +150,20 @@ export default function OfficeScene({
             args={[env.hemiSky, env.hemiGround, env.hemiIntensity * 0.6]}
           />
           <directionalLight
-            position={[8, 14, 9]}
+            position={[9, 16, 10]}
             intensity={env.keyIntensity}
             castShadow
-            shadow-mapSize={[1024, 1024]}
+            shadow-mapSize={[2048, 2048]}
             shadow-radius={3}
             shadow-bias={-0.0004}
             shadow-normalBias={0.03}
-            shadow-camera-left={-11}
-            shadow-camera-right={11}
-            shadow-camera-top={11}
-            shadow-camera-bottom={-11}
+            // Covers the whole single floor (18 × 13 units).
+            shadow-camera-left={-14}
+            shadow-camera-right={14}
+            shadow-camera-top={14}
+            shadow-camera-bottom={-14}
             shadow-camera-near={1}
-            shadow-camera-far={40}
+            shadow-camera-far={50}
           />
 
           <CameraRig
@@ -190,24 +174,14 @@ export default function OfficeScene({
             reducedMotion={reducedMotion}
           />
 
-          <Building floor={1} statuses={statuses} />
-          {renderDesks(1)}
-          <FloorGroup
-            floor={2}
-            lifted={floor2Lifted}
-            reducedMotion={reducedMotion}
-            offsetRef={floor2Offset}
-          >
-            <Building floor={2} statuses={statuses} />
-            {renderDesks(2)}
-          </FloorGroup>
-          {renderPeople()}
+          <Building statuses={statuses} />
+          {desks()}
+          {people()}
           <MovementSystem
             movement={movement}
             live={live}
             reducedMotion={reducedMotion}
             onArrive={onArrive}
-            onFloorChange={onFloorChange}
           />
         </SceneMaterialsProvider>
       </Canvas>
@@ -266,30 +240,22 @@ function StudioEnvironment({ intensity }: { intensity: number }) {
 /**
  * Positions the DOM nameplates under each employee's feet, wherever they are.
  * Runs only on frames that are rendered anyway and writes styles directly: no
- * React state per frame. Floor 2 nameplates follow the floor's lift and hide
- * with it.
+ * React state per frame.
  */
 function LabelProjector({
   labels,
   live,
-  floor2Offset,
 }: {
   labels: React.RefObject<LabelElements>
   live: React.RefObject<LiveStore>
-  floor2Offset: React.RefObject<number>
 }) {
   const projected = useRef(new THREE.Vector3())
   useFrame(({ camera, size }) => {
     for (const [id, e] of live.current) {
       const el = labels.current[id]
       if (!el) continue
-      const lift = e.floor === 2 && !e.onStairs ? floor2Offset.current : 0
-      if (lift > LIFT_HEIGHT * 0.5) {
-        el.style.setProperty("opacity", "0")
-        continue
-      }
       const p = projected.current
-        .set(e.x, e.y + lift + LABEL_HEIGHT, e.z)
+        .set(e.x, e.y + LABEL_HEIGHT, e.z)
         .project(camera)
       const x = (p.x * 0.5 + 0.5) * size.width
       const y = (-p.y * 0.5 + 0.5) * size.height + LABEL_DROP_PX
