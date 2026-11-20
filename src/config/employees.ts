@@ -10,12 +10,7 @@ export type Employee = {
   name: string
   role: string
   /** Semantic color token used for the employee's identity accent. */
-  colorToken:
-    | "--primary"
-    | "--secondary"
-    | "--accent"
-    | "--status-completed"
-    | "--status-info"
+  colorToken: `--identity-${string}`
   silhouette: string
   accessory: string
   sampleStatus: EmployeeStatus
@@ -27,7 +22,7 @@ export const employees: Employee[] = [
     id: "scout",
     name: "Scout",
     role: "Research",
-    colorToken: "--primary",
+    colorToken: "--identity-scout",
     silhouette: "Compact rounded body with a tall periscope antenna.",
     accessory: "Telescoping lens eye and a satchel of index cards.",
     sampleStatus: "working",
@@ -37,7 +32,7 @@ export const employees: Employee[] = [
     id: "quill",
     name: "Quill",
     role: "Scriptwriting",
-    colorToken: "--secondary",
+    colorToken: "--identity-quill",
     silhouette: "Slim upright body with a single curved quill-shaped fin.",
     accessory: "Floating holographic notepad.",
     sampleStatus: "waiting",
@@ -47,7 +42,7 @@ export const employees: Employee[] = [
     id: "pixel",
     name: "Pixel",
     role: "Video Creator",
-    colorToken: "--accent",
+    colorToken: "--identity-pixel",
     silhouette: "Boxy camera-shaped head on a short square body.",
     accessory: "Clapperboard visor and shoulder-mounted light.",
     sampleStatus: "working",
@@ -57,7 +52,7 @@ export const employees: Employee[] = [
     id: "vera",
     name: "Vera",
     role: "Quality Review",
-    colorToken: "--status-completed",
+    colorToken: "--identity-vera",
     silhouette: "Tall oval body with a wide visor band.",
     accessory: "Magnifier monocle and checklist clipboard.",
     sampleStatus: "idle",
@@ -67,9 +62,9 @@ export const employees: Employee[] = [
     id: "tempo",
     name: "Tempo",
     role: "Scheduling",
-    colorToken: "--status-info",
-    silhouette: "Round clock-face torso on a single wheel.",
-    accessory: "Orbiting ring with hour markers.",
+    colorToken: "--identity-tempo",
+    silhouette: "Faceted orb head on a hovering base.",
+    accessory: "Orbiting hour ring and a clock-face chest.",
     sampleStatus: "completed",
     sampleTask: "Published the content calendar for next week",
   },
@@ -77,7 +72,7 @@ export const employees: Employee[] = [
     id: "relay",
     name: "Relay",
     role: "Publishing",
-    colorToken: "--primary",
+    colorToken: "--identity-relay",
     silhouette: "Streamlined forward-leaning body with twin antennae.",
     accessory: "Delivery backpack with signal fins.",
     sampleStatus: "failed",
@@ -87,7 +82,7 @@ export const employees: Employee[] = [
     id: "ledger",
     name: "Ledger",
     role: "Analytics",
-    colorToken: "--secondary",
+    colorToken: "--identity-ledger",
     silhouette: "Wide, stable rectangular body like a filing cabinet.",
     accessory: "Chest display showing a tiny live bar chart.",
     sampleStatus: "completed",

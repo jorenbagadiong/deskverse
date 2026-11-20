@@ -159,55 +159,71 @@ Sunken surfaces (`bg-surface-sunken`) have no shadow.
 Labels and descriptions live in `src/config/employee-status.ts`.
 `<StatusBadge>` renders the pill.
 
-## 8. Future 3D employees (DV-002 direction)
+## 8. 3D employees and Deskverse HQ
 
-Not implemented yet. Three.js / React Three Fiber are intentionally **not**
-installed in DV-001.
+Implemented in DV-002 at `/office`: all seven employees in a two-story office.
+How it is built: [3d-office-architecture.md](3d-office-architecture.md).
 
-### World
+### World: Deskverse HQ
 
-- A **futuristic miniature office**: a tilt-shift, diorama-like floor with
-  desks, glowing portals and cable runs, seen from a soft isometric camera.
-- Palette pulled from the tokens: navy shell (`--background`/`--surface`),
-  teal light strips (`--primary`), violet holograms (`--secondary`), warm desk
-  lamps (`--accent`).
-- Professional first: clean surfaces, readable labels and no visual noise
-  behind data.
+- A **premium miniature office** in an open-front isometric cutaway. Floor 1
+  (Creative Production) has an open atrium. Floor 2 (Operations & Automation)
+  is a mezzanine with glass railings, joined by a floating staircase.
+- **Professional first, never neon-heavy.** Glow is reserved for screens,
+  identity strips, edge lights and status. Warm details (wood, coffee bar,
+  amber downlights, plants) balance the teal and violet.
+- **Themes:** the room switches between a navy night office and a cool
+  blue-grey day office. Identity and status glows keep their bright values in
+  both themes.
+- **The characters stay the visual focus:** surfaces are calm and furniture is
+  rounded and quiet.
 
-### Characters
+### Characters: collectible-toy robots
 
-- **Friendly low-poly robots**: flat-shaded, faceted, 300–1,500 triangles each.
-- **Consistent proportions**: about 2.5 heads tall, oversized head with a
-  single visor "face" (echoing the logo), short limbs and rounded bevels.
-- **Distinct silhouettes**: each robot must be recognizable in a solid-black
-  silhouette at 48px.
-- **Identity color**: one token-based accent per employee on the visor or
-  accessory; the body stays neutral (light gray-blue in light theme, slate in dark).
+- **Proportions (one shared rig):** an oversized head (~45% of height), a
+  compact egg-shaped body, two-joint arms with mitten hands, and stubby legs
+  with colored toy feet.
+- **Face:** a glossy dark screen (with an identity-colored bezel on boxy heads)
+  showing digital eyes, a mouth and soft cheek blush. Expressions change with
+  status, so the face is the main emotional channel and must stay visible from
+  the office camera.
+- **Materials:** clear-coated white plastic shells, painted identity accents,
+  and unlit glowing eyes. No textures.
+- **Distinct silhouettes:** each employee differs in head shape, headgear,
+  chest accessory and build, not only color (enforced by tests).
+- **Identity colors** are `--identity-*` tokens: a bright value for 3D and dark
+  UI, and a darker, text-safe value for light UI (WCAG AA, tested).
 
-| Employee | Role           | Silhouette                                   | Accessory                          | Accent    |
-| -------- | -------------- | -------------------------------------------- | ---------------------------------- | --------- |
-| Scout    | Research       | Compact rounded body, tall periscope antenna | Telescoping lens eye, index cards  | Primary   |
-| Quill    | Scriptwriting  | Slim upright body, curved quill-shaped fin   | Floating holographic notepad       | Secondary |
-| Pixel    | Video Creator  | Boxy camera-shaped head, short square body   | Clapperboard visor, shoulder light | Accent    |
-| Vera     | Quality Review | Tall oval body, wide visor band              | Magnifier monocle, clipboard       | Completed |
-| Tempo    | Scheduling     | Round clock-face torso on a single wheel     | Orbiting hour-marker ring          | Info      |
-| Relay    | Publishing     | Streamlined forward-leaning, twin antennae   | Delivery backpack with fins        | Primary   |
-| Ledger   | Analytics      | Wide, stable cabinet-like body               | Chest display with live bar chart  | Secondary |
-
-The roster data lives in `src/config/employees.ts`.
+| Employee | Role           | Color token               | Head                  | Headgear                                  | Chest               | Personality                          |
+| -------- | -------------- | ------------------------- | --------------------- | ----------------------------------------- | ------------------- | ------------------------------------ |
+| Scout    | Research       | `--identity-scout` teal   | Soft rounded          | Explorer cap + headlamp, handheld scanner | Satchel             | Curious explorer (round eyes)        |
+| Quill    | Scriptwriting  | `--identity-quill` purple | Tall rounded          | Quill feather                             | Floating notebook   | Focused storyteller (half-lid eyes)  |
+| Pixel    | Video          | `--identity-pixel` orange | Wide screen           | Studio headset + camera                   | Film belt           | Expressive creative (big eyes, grin) |
+| Vera     | Quality Review | `--identity-vera` blue    | Soft rounded          | Inspector visor + antenna                 | Shield badge        | Observant inspector (narrow eyes)    |
+| Tempo    | Scheduling     | `--identity-tempo` violet | Orb, curved visor     | Alarm bells + orbiting hour ring          | Chest clock         | Calm organizer                       |
+| Relay    | Publishing     | `--identity-relay` coral  | Capsule, curved visor | Messenger wings + broadcast antenna       | Messenger bag       | Energetic messenger                  |
+| Ledger   | Analytics      | `--identity-ledger` gold  | Wide rounded          | Analyst glasses                           | Chest chart display | Analytical thinker (sturdy build)    |
 
 ### State visuals in 3D
 
-| State     | Pose / animation                                           | Visor & light                           |
-| --------- | ---------------------------------------------------------- | --------------------------------------- |
-| Idle      | Relaxed stance, slow breathing bob, occasional look-around | Dim, `--status-idle`                    |
-| Working   | Leaning into desk, typing/tool loop                        | Bright `--status-working`, desk glow on |
-| Waiting   | Turns to camera, raises a small card/hand                  | Steady `--status-waiting` beacon above  |
-| Completed | Quick celebratory hop, thumbs-up, returns to idle          | Brief `--status-completed` flash        |
-| Failed    | Slumps, small spark puff, points at the problem            | `--status-failed` visor + warning icon  |
+| State     | Pose and motion                                                            | Face                        | Marker                 |
+| --------- | -------------------------------------------------------------------------- | --------------------------- | ---------------------- |
+| Idle      | Relaxed; occasional blink and glance                                       | Personality face            | none                   |
+| Working   | Role-specific loop (scan, type, edit, inspect, schedule, publish, analyze) | Focused                     | "•••" bubble           |
+| Waiting   | Turns to the viewer, raises a hand, short wave                             | Attentive "o"               | Hourglass bubble       |
+| Completed | One hop and spin with arms up, then relaxed                                | Happy ^ ^ and grin          | Check bubble           |
+| Failed    | Slumped, head tilted, short shake                                          | Sad slanted red eyes, frown | "!" bubble, red screen |
 
-Every 3D state must also appear as a 2D `StatusBadge` in the UI so it stays
-accessible, and all 3D motion must respect `prefers-reduced-motion`.
+Every 3D state also appears as a 2D `StatusBadge` in the UI, and all 3D motion
+respects `prefers-reduced-motion`.
+
+### Asset licensing
+
+All 3D content is procedural code in this repository: no downloaded models,
+textures, fonts or HDR files. There is nothing third-party to attribute.
+If GLB models are added later, store them in the repository with their source
+and license recorded next to them (e.g. `public/models/LICENSES.md`), and only
+use assets with clear redistribution rights.
 
 ## 9. Ideas parked for later: customer demonstration mode
 

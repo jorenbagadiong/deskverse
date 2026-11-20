@@ -15,14 +15,14 @@ const milestones = [
     title: "Brand & design system",
     body: "Tokens, themes, logo, motion patterns and the /brand showcase.",
     Icon: Palette,
-    current: true,
+    current: false,
   },
   {
     id: "DV-002",
     title: "3D virtual office",
-    body: "Low-poly robot employees in a miniature futuristic office.",
+    body: "All seven AI employees at work across two floors of an interactive isometric HQ.",
     Icon: Boxes,
-    current: false,
+    current: true,
   },
   {
     id: "Later",
@@ -44,10 +44,13 @@ export default function Home() {
         </div>
         <div className="flex flex-wrap gap-3">
           <Button asChild size="lg">
-            <Link href="/brand">
-              Explore the brand system
+            <Link href="/office">
+              Enter the office
               <ArrowRight aria-hidden="true" />
             </Link>
+          </Button>
+          <Button asChild size="lg" variant="outline">
+            <Link href="/brand">Explore the brand system</Link>
           </Button>
         </div>
       </section>

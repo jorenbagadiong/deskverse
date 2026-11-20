@@ -6,6 +6,7 @@ import { brand } from "@/config/brand"
 
 const nav = [
   { href: "/", label: "Overview" },
+  { href: "/office", label: "Office" },
   { href: "/brand", label: "Brand" },
 ]
 
