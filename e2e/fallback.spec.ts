@@ -2,21 +2,21 @@ import { expect, officeView, SEVEN, setDirectState, test } from "./fixtures"
 
 /** Runs in the "no-webgl" project: Chrome launched with WebGL disabled. */
 test.describe("WebGL unavailable", () => {
-  test("shows the 2D floor plan of both floors, fully operable", async ({
+  test("shows the single-floor plan with all four rooms, fully operable", async ({
     page,
   }) => {
     await page.goto("/office")
     await expect(page.getByText(/doesn't support WebGL/)).toBeVisible()
     await expect(page.locator("canvas")).toHaveCount(0)
-    await expect(
-      page.getByRole("heading", { level: 3, name: /Floor 2 · Operations/ }),
-    ).toBeVisible()
-    await expect(
-      page.getByRole("heading", {
-        level: 3,
-        name: /Floor 1 · Creative Production/,
-      }),
-    ).toBeVisible()
+    for (const room of [
+      "Operations Room",
+      "Pantry",
+      "Gaming & Rest Lounge",
+      "Meeting Room",
+    ])
+      await expect(
+        page.getByRole("heading", { level: 3, name: new RegExp(`^${room}`) }),
+      ).toBeVisible()
 
     // One button per desk (the viewport also has a Fullscreen button).
     const deskButtons = officeView(page)

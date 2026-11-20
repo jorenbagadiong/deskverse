@@ -2,6 +2,11 @@
 
 import type { EmployeeStatus } from "@/config/employee-status"
 import { officeEmployees, type OfficeEmployeeId } from "@/config/office"
+import {
+  GAMING_CHAIRS,
+  MEETING_CHAIRS,
+  MEETING_TABLE,
+} from "@/lib/office-navigation"
 
 import { g } from "../character/geometry"
 import { statusGlowKey, useSceneMaterials, type GlowKey } from "../materials"
@@ -78,180 +83,11 @@ export function Reception() {
   )
 }
 
-/** Oval meeting table with chairs and a small hologram. */
-export function MeetingTable() {
-  const m = useSceneMaterials()
-  const seats: [number, number][] = [
-    [-1.05, 0],
-    [1.05, 0],
-    [-0.45, 0.66],
-    [0.45, 0.66],
-    [-0.45, -0.66],
-    [0.45, -0.66],
-  ]
-  return (
-    <group>
-      <mesh
-        geometry={g.circle(1.55, 40)}
-        rotation-x={-Math.PI / 2}
-        position-y={0.005}
-        scale={[1.25, 0.82, 1]}
-        material={m.floorInset}
-        receiveShadow
-      />
-      <mesh
-        geometry={g.cylinder(0.8, 0.8, 0.06, 40)}
-        position-y={0.62}
-        scale={[1.45, 1, 0.75]}
-        material={m.wood}
-        castShadow
-        receiveShadow
-      />
-      <mesh
-        geometry={g.cylinder(0.08, 0.22, 0.6, 16)}
-        position-y={0.3}
-        material={m.metal}
-      />
-      {seats.map(([x, z], i) => (
-        // Each chair turns to face the table center.
-        <Chair key={i} position={[x, 0, z]} rotationY={Math.atan2(-x, -z)} />
-      ))}
-      {/* Hologram */}
-      <mesh
-        geometry={g.cylinder(0.12, 0.14, 0.03, 20)}
-        position-y={0.665}
-        material={m.metal}
-      />
-      <mesh
-        geometry={g.sphere(0.2, 16, 12)}
-        position-y={1.0}
-        material={m.screen.secondary}
-      />
-      <mesh
-        geometry={g.torus(0.26, 0.008, Math.PI * 2, 6, 32)}
-        position-y={1.0}
-        rotation-x={Math.PI / 2}
-        material={m.glow.secondary}
-      />
-    </group>
-  )
-}
-
-/** Free-standing holographic project board (kanban). */
-export function ProjectBoard() {
-  const m = useSceneMaterials()
-  const columns: GlowKey[] = ["muted", "primary", "accent", "success"]
-  return (
-    <group>
-      {[-1.45, 1.45].map((x) => (
-        <group key={x} position-x={x}>
-          <mesh
-            geometry={g.box(0.12, 2.3, 0.12, 0.04)}
-            position-y={1.15}
-            material={m.metal}
-            castShadow
-          />
-          <mesh
-            geometry={g.box(0.5, 0.05, 0.4, 0.02)}
-            position-y={0.025}
-            material={m.metal}
-          />
-        </group>
-      ))}
-      <mesh
-        geometry={g.box(2.8, 1.5, 0.02, 0.04)}
-        position-y={1.4}
-        material={m.screen.primary}
-      />
-      <mesh
-        geometry={g.box(2.8, 0.03, 0.03, 0.01)}
-        position-y={2.16}
-        material={m.glow.primary}
-      />
-      <mesh
-        geometry={g.box(2.8, 0.03, 0.03, 0.01)}
-        position-y={0.64}
-        material={m.glow.primary}
-      />
-      {columns.map((key, c) => (
-        <group key={key} position={[-1.05 + c * 0.7, 1.4, 0.02]}>
-          <mesh
-            geometry={g.box(0.56, 0.06, 0.006, 0.02)}
-            position-y={0.6}
-            material={m.glow[key]}
-          />
-          {Array.from({ length: 3 - (c % 2) }, (_, i) => (
-            <mesh
-              key={i}
-              geometry={g.box(0.52, 0.24, 0.008, 0.03)}
-              position-y={0.36 - i * 0.32}
-              material={m.screen[key]}
-            />
-          ))}
-        </group>
-      ))}
-    </group>
-  )
-}
-
-/** Unassigned creative hot desks: two facing desks with monitors. */
-export function HotDesks() {
-  const m = useSceneMaterials()
-  return (
-    <group>
-      <mesh
-        geometry={g.box(2.0, 0.06, 1.3, 0.03)}
-        position-y={0.6}
-        material={m.deskTop}
-        castShadow
-        receiveShadow
-      />
-      {[-0.9, 0.9].map((x) => (
-        <mesh
-          key={x}
-          geometry={g.box(0.08, 0.57, 1.2, 0.03)}
-          position={[x, 0.285, 0]}
-          material={m.desk}
-        />
-      ))}
-      {[-1, 1].map((side) => (
-        <group
-          key={side}
-          position-z={side * 0.3}
-          rotation-y={side > 0 ? Math.PI : 0}
-        >
-          {[-0.45, 0.45].map((x) => (
-            <group key={x} position={[x, 0.63, -0.1]}>
-              <mesh
-                geometry={g.cylinder(0.02, 0.05, 0.14, 10)}
-                position-y={0.07}
-                material={m.metal}
-              />
-              <mesh
-                geometry={g.box(0.5, 0.3, 0.03, 0.02)}
-                position-y={0.3}
-                material={m.joint}
-                castShadow
-              />
-              <mesh
-                geometry={g.box(0.46, 0.26, 0.004, 0.012)}
-                position={[0, 0.3, 0.017]}
-                material={m.screen.secondary}
-              />
-            </group>
-          ))}
-          <Chair position={[0, 0, -0.95]} rotationY={0} />
-        </group>
-      ))}
-    </group>
-  )
-}
-
 /**
- * Pantry (Floor 1, under the mezzanine, back right): counter with a coffee
- * machine, a fridge, a high table with stools and warm pendant lights.
- * Footprints match OBSTACLES in lib/office-navigation.ts; the three standing
- * spots (pantry:1–3) sit in front of the counter and at the table.
+ * Pantry: counter with a coffee machine, a fridge and a high table with
+ * stools. Modeled in local coordinates; building.tsx places it with
+ * PANTRY_OFFSET. Footprints match OBSTACLES in lib/office-navigation.ts; the
+ * three standing spots (pantry:1–3) sit in front of the counter and at the table.
  */
 export function Pantry() {
   const m = useSceneMaterials()
@@ -395,32 +231,11 @@ export function Pantry() {
           </group>
         ))}
       </group>
-      {/* Pendant lights hanging from the mezzanine */}
-      {[4.2, 5.4].map((x) => (
-        <group key={x} position={[x, 0, -3.9]}>
-          <mesh
-            geometry={g.cylinder(0.006, 0.006, 0.5, 4)}
-            position-y={3.05}
-            material={m.metal}
-          />
-          <mesh
-            geometry={g.cylinder(0.08, 0.16, 0.12, 16)}
-            position-y={2.75}
-            material={m.joint}
-          />
-          <mesh
-            geometry={g.circle(0.13, 16)}
-            position-y={2.688}
-            rotation-x={Math.PI / 2}
-            material={m.glow.accent}
-          />
-        </group>
-      ))}
     </group>
   )
 }
 
-/** Wall shelves above the pantry counter (mounted on the back wall). */
+/** Wall shelves above the pantry counter (back wall; same local frame as Pantry). */
 export function PantryShelves() {
   const m = useSceneMaterials()
   return (
@@ -458,8 +273,9 @@ export function PantryShelves() {
 }
 
 /**
- * Lounge (Floor 2, east end): sofa with two seats, a lounge chair, coffee
- * table, rug, floor lamp and plants. Seats lounge:1–3 face the room (-x).
+ * Rest corner of the Gaming & Rest Lounge: sofa with two seats, a lounge
+ * chair, coffee table, rug and floor lamp, in local coordinates (building.tsx
+ * places it with LOUNGE_OFFSET). Seats lounge:1–3 face the room (-x).
  */
 export function Lounge() {
   const m = useSceneMaterials()
@@ -486,7 +302,7 @@ export function Lounge() {
         />
       ))}
       {/* Coffee table */}
-      <group position={[5.15, 0, -1.8]}>
+      <group position={[5.0, 0, -2.0]}>
         <mesh
           geometry={g.cylinder(0.3, 0.3, 0.05, 24)}
           position-y={0.38}
@@ -735,6 +551,173 @@ export function WallPanels({
         position={[0, -height / 2 + 0.18, 0.045]}
         material={m.glow.secondary}
       />
+    </group>
+  )
+}
+
+/**
+ * Meeting Room centerpiece: a long conference table with a hologram and
+ * eight chairs (seats meeting:1–8), positioned from the navigation data so
+ * seats and furniture can never drift apart.
+ */
+export function ConferenceTable() {
+  const m = useSceneMaterials()
+  const { x, z, width, depth } = MEETING_TABLE
+  return (
+    <group>
+      <mesh
+        geometry={g.box(width + 2.2, 0.012, depth + 2.2, 0.3)}
+        position={[x, 0.006, z]}
+        material={m.floorInset}
+        receiveShadow
+      />
+      <group position={[x, 0, z]}>
+        <mesh
+          geometry={g.box(width, 0.07, depth, 0.2)}
+          position-y={0.66}
+          material={m.wood}
+          castShadow
+          receiveShadow
+        />
+        {[-width / 2 + 0.45, width / 2 - 0.45].map((dx) => (
+          <mesh
+            key={dx}
+            geometry={g.box(0.12, 0.62, depth * 0.6, 0.04)}
+            position={[dx, 0.31, 0]}
+            material={m.metal}
+          />
+        ))}
+        <mesh
+          geometry={g.box(width - 0.3, 0.012, 0.03, 0.006)}
+          position={[0, 0.7, 0]}
+          material={m.glow.secondary}
+        />
+        {/* Hologram */}
+        <mesh
+          geometry={g.cylinder(0.14, 0.16, 0.03, 20)}
+          position-y={0.71}
+          material={m.metal}
+        />
+        <mesh
+          geometry={g.sphere(0.2, 16, 12)}
+          position-y={1.05}
+          material={m.screen.secondary}
+        />
+        <mesh
+          geometry={g.torus(0.27, 0.008, Math.PI * 2, 6, 32)}
+          position-y={1.05}
+          rotation-x={Math.PI / 2}
+          material={m.glow.secondary}
+        />
+      </group>
+      {MEETING_CHAIRS.map((c, i) => (
+        <Chair key={i} position={[c.x, 0, c.z]} rotationY={c.heading} />
+      ))}
+    </group>
+  )
+}
+
+/**
+ * Three gaming stations along the lounge's back wall: a desk with a curved
+ * glowing screen, a controller and a gaming chair (seats gaming:1–3).
+ */
+export function GamingStations() {
+  const m = useSceneMaterials()
+  const glows: GlowKey[] = ["primary", "accent", "secondary"]
+  return (
+    <group>
+      <mesh
+        geometry={g.box(4.4, 0.012, 2.2, 0.2)}
+        position={[4.9, 0.006, -5.3]}
+        material={m.floorInset}
+        receiveShadow
+      />
+      {GAMING_CHAIRS.map((c, i) => (
+        <group key={c.x}>
+          <group position={[c.x, 0, -6.0]}>
+            <mesh
+              geometry={g.box(1.0, 0.06, 0.6, 0.03)}
+              position-y={0.72}
+              material={m.deskTop}
+              castShadow
+            />
+            {[-0.42, 0.42].map((dx) => (
+              <mesh
+                key={dx}
+                geometry={g.box(0.06, 0.7, 0.5, 0.02)}
+                position={[dx, 0.35, 0]}
+                material={m.metal}
+              />
+            ))}
+            {/* Screen */}
+            <group position={[0, 1.1, -0.12]}>
+              <mesh
+                geometry={g.box(0.86, 0.5, 0.05, 0.03)}
+                material={m.joint}
+              />
+              <mesh
+                geometry={g.box(0.8, 0.44, 0.006, 0.02)}
+                position-z={0.028}
+                material={m.screen[glows[i]]}
+              />
+              <mesh
+                geometry={g.box(0.8, 0.02, 0.01, 0.005)}
+                position={[0, -0.27, 0.03]}
+                material={m.glow[glows[i]]}
+              />
+            </group>
+            <mesh
+              geometry={g.cylinder(0.03, 0.06, 0.32, 10)}
+              position={[0, 0.9, -0.12]}
+              material={m.metal}
+            />
+            {/* Controller */}
+            <mesh
+              geometry={g.box(0.18, 0.035, 0.09, 0.02)}
+              position={[0.12, 0.77, 0.12]}
+              material={m.glow[glows[i]]}
+            />
+          </group>
+          <Chair position={[c.x, 0, c.z]} rotationY={c.heading} />
+        </group>
+      ))}
+    </group>
+  )
+}
+
+/** Glowing header over a doorway, colored per room. */
+export function DoorSign({
+  x,
+  z,
+  width,
+  glow,
+}: {
+  x: number
+  z: number
+  width: number
+  glow: GlowKey
+}) {
+  const m = useSceneMaterials()
+  return (
+    <group position={[x, 0, z]}>
+      <mesh
+        geometry={g.box(width + 0.1, 0.1, 0.1, 0.03)}
+        position-y={2.05}
+        material={m.metal}
+      />
+      <mesh
+        geometry={g.box(width - 0.1, 0.03, 0.12, 0.01)}
+        position-y={2.05}
+        material={m.glow[glow]}
+      />
+      {[-1, 1].map((side) => (
+        <mesh
+          key={side}
+          geometry={g.box(0.06, 2.05, 0.08, 0.02)}
+          position={[(side * (width + 0.04)) / 2, 1.025, 0]}
+          material={m.metal}
+        />
+      ))}
     </group>
   )
 }

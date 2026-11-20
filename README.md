@@ -133,16 +133,22 @@ e2e/                    Playwright browser tests
 **Out of scope:** the 3D office (now DV-002), a database, authentication,
 deployment and real AI integrations.
 
-## DV-002 scope: Deskverse HQ, a 3D office 🚧
+## DV-002 / DV-002B scope: Deskverse HQ, a 3D office 🚧
 
 Open http://localhost:3000/office.
 
-- **Two-floor building** in an open-front isometric cutaway.
-  - **Floor 1, Creative Production:** atrium workstations, reception, a meeting
-    table with a hologram, a holographic project board, hot desks and a pantry.
-  - **Floor 2, Operations & Automation:** a mezzanine with glass railings, a
-    live operations board, a calendar wall, an analytics wall and a lounge.
-  - A floating staircase joins the two floors.
+- **One large floor** (DV-002B Phase A) in an open-front isometric cutaway,
+  with four rooms:
+  - **Operations Room** (the largest): all seven workstations in two rows, a
+    live operations board, an analytics wall and reception.
+  - **Pantry:** coffee counter, fridge and a high table.
+  - **Gaming & Rest Lounge:** three gaming stations, a sofa and a lounge chair.
+  - **Meeting Room:** a conference table with seats for the whole team.
+
+  The back rooms sit behind glass partitions with lit doorways onto the
+  corridor, so they're clearly separate but never hide anyone. (DV-002 was a
+  two-story building with a mezzanine and stairs; Phase A replaced it.)
+
 - **All seven employees** as collectible-toy robots built on one shared rig.
   Each has a distinct head, headgear, chest accessory, build and personality face:
   Scout, Quill, Pixel, Vera, Tempo, Relay and Ledger.
@@ -150,26 +156,28 @@ Open http://localhost:3000/office.
   failed) for everyone. Each state has its own pose and facial expression, and
   working employees play a role-specific animation. Everything is labelled
   _Simulated_.
-- **A living office:** employees walk between workstations along a waypoint
-  graph (Dijkstra routes, collision-checked corridors, stairs between floors),
-  take coffee breaks in the Floor 1 pantry and rest on the Floor 2 lounge sofa.
-  Return to workstation / Visit the pantry / Rest in the lounge / Stop, plus
-  optional ambient breaks (off by default). Movement is independent of task
-  status; working employees stay at their desk.
-- **Camera and floors:** Building / Floor 1 / Floor 2 modes. Selecting someone
-  activates the floor they're on and the camera follows them while they walk.
-  Floor 2 lifts away to reveal Floor 1. Full 360° rotation (walls in the way
-  hide themselves), controlled zoom and an exact Reset view.
+- **A living office:** employees walk between rooms along a waypoint graph
+  (Dijkstra routes, collision-checked corridors and doorways). Return to
+  workstation / Visit the pantry / Rest in the lounge / Go to a gaming station /
+  Go to the meeting room / Stop, plus optional ambient breaks (off by default).
+  Movement is independent of task status; working employees stay at their desk.
+- **Camera and rooms:** Entire office / Operations / Pantry / Gaming Lounge /
+  Meeting Room views. The camera follows a selected employee while they walk.
+  Full 360° rotation (outer walls in the way hide themselves), controlled zoom
+  and an exact Reset view.
 - **Full-width viewport and fullscreen:** the simulation spans the page with
   the team, details and activity cards below it; a Fullscreen button (Escape to
   leave) keeps the scene and selection intact.
-- **Accessible by design:** a keyboard employee list per floor, a detail panel
-  with live announcements, and a 2D floor plan of both floors when WebGL is
-  unavailable (or by choice). It also supports reduced motion, light and dark
-  themes, and mobile layouts.
+- **Accessible by design:** a keyboard employee list, a detail panel with live
+  announcements, and a 2D plan of the four rooms when WebGL is unavailable (or
+  by choice). It also supports reduced motion, light and dark themes, and
+  mobile layouts.
 - **Performance:** on-demand rendering (no frames when nothing moves),
   material batching, shared geometry and materials, a DPR cap, and a lazy 3D
   chunk that other pages never load.
+
+**Next DV-002B phases (not started):** autonomous leisure routines,
+interactive gaming, and simulated meetings with conversations.
 
 Everything is procedural code: no downloaded models, textures or HDRs.
 Details: [3D office architecture](docs/3d-office-architecture.md).
@@ -187,9 +195,9 @@ yarn test:e2e
 This builds the app, serves it on port 3210 and runs `e2e/` in your installed
 Google Chrome (no browser download) at desktop, 375px and 360px widths, plus a
 WebGL-disabled profile. It covers selecting all seven employees, keyboard
-navigation, floor switching, simulated states, walking to the pantry and
-back, stopping mid-walk, the "busy at work" rule, instant cross-floor moves
-under reduced motion, a full 360° turn back to the identical view, fullscreen
+navigation, room views, simulated states, walking to the pantry, on to the
+meeting room and back, stopping mid-walk, the "busy at work" rule, instant
+room-to-room moves under reduced motion, a full 360° turn back to the identical view, fullscreen
 (enter, leave, rejected request), the full-width layout, the 2D fallback,
 themes, reduced motion and DV-001 regressions.
 

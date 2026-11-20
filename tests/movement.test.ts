@@ -216,43 +216,121 @@ describe("task status independence", () => {
 })
 
 describe("movement options", () => {
-  it("offers return / pantry / lounge / stop with clear availability", () => {
+  it("offers return / pantry / lounge / gaming / meeting / stop with clear availability", () => {
     const state = createInitialOfficeState()
     const options = movementOptions("vera", "idle", state.movement)
     expect(options.map((o) => o.kind)).toEqual([
       "desk",
       "pantry",
       "lounge",
+      "gaming",
+      "meeting",
       "stop",
     ])
     expect(options.find((o) => o.kind === "desk")).toMatchObject({
       enabled: false,
       reason: "Already at the workstation",
     })
-    expect(options.find((o) => o.kind === "pantry")?.enabled).toBe(true)
-    // Cross-floor: the lounge (Floor 2) is reachable from Floor 1 via the stairs.
-    expect(options.find((o) => o.kind === "lounge")?.enabled).toBe(true)
+    for (const kind of ["pantry", "lounge", "gaming", "meeting"] as const)
+      expect(options.find((o) => o.kind === kind)?.enabled, kind).toBe(true)
     expect(options.find((o) => o.kind === "stop")?.enabled).toBe(false)
   })
 })
 
-describe("selection follows the real location", () => {
-  it("selecting an employee in the lounge shows Floor 2", () => {
-    const state = run([
-      { type: "goTo", id: "quill", destination: "lounge", instant: true },
-      { type: "select", id: "quill" },
-    ])
-    expect(state.view).toBe("floor-2")
+describe("walking between rooms", () => {
+  it("reaches every room and sits down where there is a seat", () => {
+    const expected = {
+      pantry: "coffee-break",
+      lounge: "resting",
+      gaming: "gaming",
+      meeting: "meeting",
+    } as const
+    for (const [destination, activity] of Object.entries(expected)) {
+      let state = run([
+        { type: "goTo", id: "pixel", destination } as OfficeAction,
+      ])
+      const walk = walking(state, "pixel")
+      expect(walk.route.total, destination).toBeGreaterThan(2)
+      state = officeReducer(state, {
+        type: "arrive",
+        id: "pixel",
+        routeId: walk.routeId,
+      })
+      expect(activityOf(state.movement.pixel), destination).toBe(activity)
+      expect(state.statuses.pixel).toBe("waiting")
+    }
   })
 
-  it("switches floors when a selected walker reaches the other floor", () => {
+  it("walks from one room straight to another without passing the desk", () => {
     let state = run([
-      { type: "goTo", id: "quill", destination: "lounge" },
-      { type: "select", id: "quill", floor: 1 },
+      { type: "goTo", id: "vera", destination: "pantry", instant: true },
+      { type: "goTo", id: "vera", destination: "meeting" },
     ])
-    expect(state.view).toBe("floor-1")
-    state = officeReducer(state, { type: "followFloor", id: "quill", floor: 2 })
-    expect(state.view).toBe("floor-2")
+    const walk = walking(state, "vera")
+    expect(walk.route.points[0].node).toMatch(/^pantry:/)
+    expect(walk.route.points.map((p) => p.node)).not.toContain("desk:vera")
+    state = officeReducer(state, {
+      type: "arrive",
+      id: "vera",
+      routeId: walk.routeId,
+    })
+    expect(locationLabel(state.movement.vera)).toBe(
+      "Meeting Room · conference table",
+    )
+  })
+
+  it("keeps meeting seats and gaming stations one per person", () => {
+    const ids = ["quill", "pixel", "vera", "tempo", "ledger"] as const
+    let state = createInitialOfficeState()
+    for (const id of ids)
+      state = officeReducer(state, {
+        type: "goTo",
+        id,
+        destination: "gaming",
+        instant: true,
+      })
+    const seats = ids
+      .map((id) => state.movement[id])
+      .filter((m) => m.kind === "at" && m.node.startsWith("gaming:"))
+    // Three gaming stations: the fourth and fifth player stay put.
+    expect(seats).toHaveLength(3)
+    expect(
+      new Set(seats.map((m) => (m.kind === "at" ? m.node : ""))).size,
+    ).toBe(3)
+    expect(
+      movementOptions("ledger", "completed", state.movement).find(
+        (o) => o.kind === "gaming",
+      ),
+    ).toMatchObject({ enabled: false, reason: "All spots are taken" })
+  })
+})
+
+describe("selection follows the real location", () => {
+  it("selecting someone in the lounge from the Pantry view shows the entire office", () => {
+    const state = run([
+      { type: "goTo", id: "quill", destination: "lounge", instant: true },
+      { type: "setView", view: "pantry" },
+      { type: "select", id: "quill" },
+    ])
+    expect(state.view).toBe("office")
+  })
+
+  it("selecting someone in the room being framed keeps that room", () => {
+    const state = run([
+      { type: "goTo", id: "quill", destination: "lounge", instant: true },
+      { type: "setView", view: "lounge" },
+      { type: "select", id: "quill" },
+    ])
+    expect(state).toMatchObject({ view: "lounge", selectedId: "quill" })
+  })
+
+  it("uses the scene's live room for a walker", () => {
+    const state = run([
+      { type: "goTo", id: "quill", destination: "pantry" },
+      { type: "setView", view: "pantry" },
+      { type: "select", id: "quill", room: "pantry" },
+    ])
+    expect(state.view).toBe("pantry")
   })
 })
 

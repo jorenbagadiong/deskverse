@@ -16,7 +16,7 @@ import { Button } from "@/components/ui/button"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import {
   getOfficeEmployee,
-  type FloorId,
+  type RoomId,
   type OfficeEmployeeId,
   type ViewMode,
 } from "@/config/office"
@@ -26,10 +26,11 @@ import { useWebGLSupport } from "@/hooks/use-webgl-support"
 import {
   createLiveStore,
   liveLocation,
+  liveRoom,
   type LiveStore,
 } from "@/lib/office-live"
 import {
-  floorOf,
+  roomOf,
   locationLabel,
   movementOptions,
   type DestinationOption,
@@ -44,8 +45,8 @@ import { ActivityFeed } from "./activity-feed"
 import { CameraControls } from "./camera-controls"
 import { EmployeeDetails } from "./employee-details"
 import { EmployeeList } from "./employee-list"
-import { FloorSwitcher } from "./floor-switcher"
 import { OfficeMap } from "./office-map"
+import { RoomSwitcher } from "./room-switcher"
 import { SceneErrorBoundary } from "./scene-error-boundary"
 import type { CameraApi } from "./scene/camera-rig"
 import { SimulatedTag } from "./simulated-tag"
@@ -81,19 +82,20 @@ export function OfficeExperience() {
   const show3d = display === "3d" && webgl === true
 
   /** Where someone is right now: the scene's live reading, else the reducer's. */
-  const floorNow = (id: OfficeEmployeeId): FloorId =>
-    (show3d ? live.current.get(id)?.floor : undefined) ??
-    floorOf(state.movement[id])
+  const roomNow = (id: OfficeEmployeeId): RoomId | null =>
+    show3d && live.current.has(id)
+      ? liveRoom(live.current, id)
+      : roomOf(state.movement[id])
   const from = (id: OfficeEmployeeId) =>
     show3d ? liveLocation(live.current, id) : undefined
 
   const select = (id: OfficeEmployeeId | null) =>
-    dispatch({ type: "select", id, floor: id ? floorNow(id) : undefined })
+    dispatch({ type: "select", id, room: id ? roomNow(id) : undefined })
   const setView = (view: ViewMode) =>
     dispatch({
       type: "setView",
       view,
-      selectedFloor: state.selectedId ? floorNow(state.selectedId) : undefined,
+      selectedRoom: state.selectedId ? roomNow(state.selectedId) : undefined,
     })
 
   // Without the 3D scene nothing animates walks, so every move is instant.
@@ -112,12 +114,6 @@ export function OfficeExperience() {
       dispatch({ type: "arrive", id, routeId }),
     [],
   )
-  const onFloorChange = useCallback(
-    (id: OfficeEmployeeId, floor: FloorId) =>
-      dispatch({ type: "followFloor", id, floor }),
-    [],
-  )
-
   // Optional ambient wandering: idle colleagues take short breaks on their own.
   useEffect(() => {
     if (!state.wander) return
@@ -157,8 +153,8 @@ export function OfficeExperience() {
       >
         <p id="office-view-help" className="sr-only">
           {show3d
-            ? "Interactive 3D office with two floors. Drag to rotate all the way around and scroll or pinch to zoom. Use the floor buttons to switch floors. Every action is also available from the employee list and detail panel below."
-            : "2D floor plan of both office floors with one button per employee."}
+            ? "Interactive 3D office on one floor: the Operations Room with all seven workstations, the Pantry, the Gaming & Rest Lounge and the Meeting Room. Drag to rotate all the way around and scroll or pinch to zoom. Use the room buttons to focus a room. Every action is also available from the employee list and detail panel below."
+            : "2D floor plan of the office: the Meeting Room, Pantry and Gaming & Rest Lounge behind the Operations Room, with one button per workstation."}
         </p>
 
         {webgl === null ? (
@@ -180,7 +176,6 @@ export function OfficeExperience() {
               movement={state.movement}
               live={live}
               onArrive={onArrive}
-              onFloorChange={onFloorChange}
             />
           </SceneErrorBoundary>
         ) : (
@@ -287,9 +282,9 @@ export function OfficeExperience() {
         ) : null}
 
         {show3d ? (
-          <div className="pointer-events-none absolute inset-x-3 bottom-3 flex items-end justify-between gap-2">
+          <div className="pointer-events-none absolute inset-x-3 bottom-3 flex flex-wrap items-end justify-between gap-2">
             <CameraControls camera={camera} className="pointer-events-auto" />
-            <FloorSwitcher
+            <RoomSwitcher
               view={state.view}
               onChange={setView}
               className="pointer-events-auto"

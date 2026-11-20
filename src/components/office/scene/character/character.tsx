@@ -33,6 +33,7 @@ import {
   blinkOpenness,
   BLINK_SECONDS,
   glanceYaw,
+  isSeated,
   GLANCE_SECONDS,
   NO_TRANSIENT,
   transient,
@@ -257,11 +258,11 @@ export function Character({
     const p = pose.current
 
     // Legs: walk cycle, seated (legs forward) or standing.
-    const legGoal = activity === "resting" ? SEATED_LEG : 0
+    const legGoal = isSeated(activity) ? SEATED_LEG : 0
     const L = legs.current
     const nextLeft = step ? step.leftLeg : legGoal
     const nextRight = step ? step.rightLeg : legGoal
-    const liftGoal = activity === "resting" ? SEAT_LIFT : 0
+    const liftGoal = isSeated(activity) ? SEAT_LIFT : 0
     const ease = (a: number, b: number) =>
       !motion || step ? b : THREE.MathUtils.damp(a, b, 8, dt)
     L.left = ease(L.left, nextLeft)

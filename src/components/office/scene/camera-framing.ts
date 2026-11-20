@@ -2,52 +2,43 @@
  * Camera framing as pure math (no three.js): which box each view mode must
  * show, and the orthographic zoom that fits it. Unit-tested in tests/camera.test.ts.
  */
-import { FLOOR_HEIGHT, type FloorId, type ViewMode } from "@/config/office"
+import {
+  OFFICE_BOUNDS,
+  ROOMS,
+  type RoomBounds,
+  type ViewMode,
+} from "@/config/office"
 
 export type { ViewMode }
 
 export const VIEW_MODES: readonly ViewMode[] = [
-  "building",
-  "floor-1",
-  "floor-2",
+  "office",
+  "operations",
+  "pantry",
+  "lounge",
+  "meeting",
 ]
 
-export const BUILDING = {
-  /** x extent: [-7, 7] */
-  width: 14,
-  /** z extent: [-5, 5] */
-  depth: 10,
-  /** Floor 2 sits this high above Floor 1. */
-  floorHeight: FLOOR_HEIGHT,
-  /** Floor 2 is a mezzanine over the back of the building: z ∈ [-5, MEZZANINE_EDGE]. */
-  mezzanineEdge: -0.5,
-  wallHeight: 7.3,
+/** One floor: footprint from the room layout, walls one story high. */
+export const OFFICE = {
+  width: OFFICE_BOUNDS.x1 - OFFICE_BOUNDS.x0,
+  depth: OFFICE_BOUNDS.z1 - OFFICE_BOUNDS.z0,
+  wallHeight: 3.0,
 } as const
-
-export const floorY = (floor: FloorId) =>
-  floor === 1 ? 0 : BUILDING.floorHeight
 
 export type Vec3 = readonly [number, number, number]
 export type Box = { min: Vec3; max: Vec3 }
 
-/** The region each mode must keep in view. */
+const boxOf = (b: RoomBounds, height: number): Box => ({
+  min: [b.x0, 0, b.z0],
+  max: [b.x1, height, b.z1],
+})
+
+/** The region each view must keep in view. */
 export function framingBox(mode: ViewMode): Box {
-  const halfW = BUILDING.width / 2
-  const halfD = BUILDING.depth / 2
-  switch (mode) {
-    case "floor-1":
-      return { min: [-halfW, 0, -halfD], max: [halfW, 2.2, halfD] }
-    case "floor-2":
-      return {
-        min: [-halfW, BUILDING.floorHeight, -halfD],
-        max: [halfW, BUILDING.floorHeight + 2.4, BUILDING.mezzanineEdge + 0.6],
-      }
-    default:
-      return {
-        min: [-halfW, 0, -halfD],
-        max: [halfW, BUILDING.wallHeight, halfD],
-      }
-  }
+  // People and furniture stand about 2.2 units tall; walls are taller.
+  if (mode === "office") return boxOf(OFFICE_BOUNDS, OFFICE.wallHeight)
+  return boxOf(ROOMS[mode].bounds, 2.2)
 }
 
 export const boxCenter = (box: Box): Vec3 => [
@@ -109,7 +100,7 @@ export function fitZoom(
 
 /**
  * Where to look when an employee is selected: most of the way toward them
- * (so they come forward) while staying inside their floor.
+ * (so they come forward), at about chest height.
  */
 export function focusTarget(mode: ViewMode, point: Vec3 | null): Vec3 {
   const center = boxCenter(framingBox(mode))

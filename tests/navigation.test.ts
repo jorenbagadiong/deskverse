@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest"
 
-import { FLOOR_HEIGHT, officeEmployees } from "@/config/office"
+import { officeEmployees, ROOMS, roomAt, type RoomId } from "@/config/office"
 import {
-  FLOOR_BOUNDS,
+  DESTINATION_ROOM,
+  DOORWAYS,
+  GAMING_SPOTS,
   getNode,
-  isStairSegment,
   LOUNGE_SPOTS,
+  MEETING_SPOTS,
   NAV_EDGES,
   NAV_NODES,
   OBSTACLES,
@@ -15,7 +17,10 @@ import {
   routeDuration,
   segmentEdge,
   shortestPath,
+  spotsFor,
+  WALKABLE_BOUNDS,
   WALKER_RADIUS,
+  type DestinationKind,
   type NavNode,
   type Obstacle,
 } from "@/lib/office-navigation"
@@ -62,7 +67,16 @@ function clearance(a: NavNode, b: NavNode, o: Obstacle) {
   return min
 }
 
-describe("navigation graph", () => {
+const DESKS = officeEmployees.map((e) => `desk:${e.id}`)
+const ALL_SPOTS = [
+  ...DESKS,
+  ...PANTRY_SPOTS,
+  ...LOUNGE_SPOTS,
+  ...GAMING_SPOTS,
+  ...MEETING_SPOTS,
+]
+
+describe("single-floor navigation graph", () => {
   it("has unique node ids and only references existing nodes", () => {
     const ids = NAV_NODES.map((n) => n.id)
     expect(new Set(ids).size).toBe(ids.length)
@@ -72,42 +86,47 @@ describe("navigation graph", () => {
     }
   })
 
-  it("keeps every node inside its floor's walkable bounds", () => {
+  it("puts every node on the one floor, inside the walkable bounds", () => {
     for (const node of NAV_NODES) {
-      if (node.id.startsWith("stairs:")) continue // stair ends sit on the floor edge
-      const b = FLOOR_BOUNDS[node.floor]
-      expect(node.x, node.id).toBeGreaterThanOrEqual(b.x0)
-      expect(node.x, node.id).toBeLessThanOrEqual(b.x1)
-      expect(node.z, node.id).toBeGreaterThanOrEqual(b.z0)
-      expect(node.z, node.id).toBeLessThanOrEqual(b.z1)
+      expect(node.y, node.id).toBe(0)
+      expect(node.x, node.id).toBeGreaterThanOrEqual(WALKABLE_BOUNDS.x0)
+      expect(node.x, node.id).toBeLessThanOrEqual(WALKABLE_BOUNDS.x1)
+      expect(node.z, node.id).toBeGreaterThanOrEqual(WALKABLE_BOUNDS.z0)
+      expect(node.z, node.id).toBeLessThanOrEqual(WALKABLE_BOUNDS.z1)
     }
   })
 
-  it("puts Floor 1 nodes on the ground and Floor 2 nodes on the mezzanine", () => {
-    for (const node of NAV_NODES)
-      expect(node.y).toBe(node.floor === 1 ? 0 : FLOOR_HEIGHT)
+  it("has no stairs or level changes left", () => {
+    expect(NAV_NODES.some((n) => /stair|landing|f[12]:/.test(n.id))).toBe(false)
   })
 
-  it("every flat corridor clears all furniture by the walker radius", () => {
+  it("places every desk in the Operations Room and every spot in its room", () => {
+    const expected: [readonly string[], RoomId][] = [
+      [DESKS, "operations"],
+      [PANTRY_SPOTS, "pantry"],
+      [LOUNGE_SPOTS, "lounge"],
+      [GAMING_SPOTS, "lounge"],
+      [MEETING_SPOTS, "meeting"],
+    ]
+    for (const [ids, room] of expected)
+      for (const id of ids) {
+        const node = getNode(id)
+        expect(roomAt(node.x, node.z), id).toBe(room)
+      }
+  })
+
+  it("seats the whole team in the Meeting Room", () => {
+    expect(MEETING_SPOTS.length).toBeGreaterThanOrEqual(officeEmployees.length)
+  })
+
+  it("every corridor clears all furniture and walls by the walker radius", () => {
     const problems: string[] = []
     for (const [ia, ib] of NAV_EDGES) {
       const a = getNode(ia)
       const b = getNode(ib)
-      if (a.floor !== b.floor) continue // the staircase edge
       for (const o of OBSTACLES) {
-        if (o.floor !== a.floor) continue
-        // The last step onto a seat or the stair foot may touch that furniture.
-        if (
-          (a.spot === "lounge" || b.spot === "lounge") &&
-          o.name.startsWith("lounge-")
-        )
-          continue
-        if (
-          (ia === "f1:stair-foot" || ib === "f1:stair-foot") &&
-          o.name === "stairs"
-        )
-          continue
-        if (ia === "stairs:bottom" || ib === "stairs:bottom") continue
+        // Sitting down: the last step onto a seat may enter that seat.
+        if (o.seats?.includes(ia) || o.seats?.includes(ib)) continue
         const c = clearance(a, b, o)
         if (c < WALKER_RADIUS - 1e-6)
           problems.push(
@@ -118,14 +137,19 @@ describe("navigation graph", () => {
     expect(problems).toEqual([])
   })
 
-  it("connects every desk, pantry spot and lounge seat to every other", () => {
-    const targets = [
-      ...officeEmployees.map((e) => `desk:${e.id}`),
-      ...PANTRY_SPOTS,
-      ...LOUNGE_SPOTS,
-    ]
-    for (const from of targets)
-      for (const to of targets)
+  it("never puts a standing spot inside furniture", () => {
+    for (const node of NAV_NODES) {
+      for (const o of OBSTACLES) {
+        if (o.seats?.includes(node.id)) continue
+        const d = clearance(node, node, o)
+        expect(d, `${node.id} in ${o.name}`).toBeGreaterThan(0)
+      }
+    }
+  })
+
+  it("connects every desk and room spot to every other", () => {
+    for (const from of ALL_SPOTS)
+      for (const to of ALL_SPOTS)
         expect(shortestPath(from, to), `${from} → ${to}`).not.toBeNull()
   })
 
@@ -135,32 +159,77 @@ describe("navigation graph", () => {
       planRoute({ kind: "node", node: "desk:scout" }, "nowhere"),
     ).toBeNull()
   })
+
+  it("maps every destination kind to spots in its room", () => {
+    const kinds: DestinationKind[] = [
+      "desk",
+      "pantry",
+      "lounge",
+      "gaming",
+      "meeting",
+    ]
+    for (const kind of kinds)
+      for (const id of spotsFor(kind, "quill")) {
+        const node = getNode(id)
+        expect(roomAt(node.x, node.z)).toBe(DESTINATION_ROOM[kind])
+      }
+  })
 })
 
 describe("routes", () => {
-  it("walks a same-floor route to the pantry without leaving Floor 1", () => {
-    const route = planRoute({ kind: "node", node: "desk:quill" }, "pantry:1")!
-    expect(route.points[0].node).toBe("desk:quill")
-    expect(route.points.at(-1)?.node).toBe("pantry:1")
-    expect(route.points.every((p) => p.y === 0)).toBe(true)
-    expect(route.total).toBeGreaterThan(5)
+  it("enters each back room through its doorway, never through a wall", () => {
+    for (const [room, target] of [
+      ["meeting", "meeting:1"],
+      ["pantry", "pantry:1"],
+      ["lounge", "lounge:1"],
+    ] as const) {
+      const route = planRoute({ kind: "node", node: "desk:relay" }, target)!
+      const door = DOORWAYS.find((d) => d.room === room)!
+      // Sample the walk: whenever it crosses the partition line, it's in the doorway.
+      let crossings = 0
+      for (let d = 0; d < route.total; d += 0.02) {
+        const a = positionAt(route, d).position
+        const b = positionAt(route, d + 0.02).position
+        if (
+          (a[2] - ROOMS[room].bounds.z1) * (b[2] - ROOMS[room].bounds.z1) <
+          0
+        ) {
+          crossings++
+          expect(a[0], `${room} crossing x`).toBeGreaterThan(
+            door.x0 + WALKER_RADIUS,
+          )
+          expect(a[0], `${room} crossing x`).toBeLessThan(
+            door.x1 - WALKER_RADIUS,
+          )
+        }
+      }
+      expect(crossings, room).toBe(1)
+    }
   })
 
-  it("crosses floors only via the staircase", () => {
-    const route = planRoute({ kind: "node", node: "desk:scout" }, "lounge:1")!
-    const nodes = route.points.map((p) => p.node)
-    expect(nodes).toContain("stairs:bottom")
-    expect(nodes).toContain("stairs:top")
-    const stairSegments = route.points
-      .slice(1)
-      .filter((p, i) => isStairSegment(route.points[i], p))
-    expect(stairSegments).toHaveLength(1)
-    // Heights change continuously: no jump anywhere along the route.
+  it("keeps every sampled point of every route inside the floor", () => {
+    for (const from of DESKS)
+      for (const to of [...PANTRY_SPOTS, ...GAMING_SPOTS, "meeting:7"]) {
+        const route = planRoute({ kind: "node", node: from }, to)!
+        for (let d = 0; d <= route.total; d += 0.1) {
+          const [x, y, z] = positionAt(route, d).position
+          expect(y).toBe(0)
+          expect(x).toBeGreaterThanOrEqual(WALKABLE_BOUNDS.x0)
+          expect(x).toBeLessThanOrEqual(WALKABLE_BOUNDS.x1)
+          expect(z).toBeGreaterThanOrEqual(WALKABLE_BOUNDS.z0)
+          expect(z).toBeLessThanOrEqual(WALKABLE_BOUNDS.z1)
+        }
+      }
+  })
+
+  it("walks between rooms continuously (no jumps, no teleporting)", () => {
+    const route = planRoute({ kind: "node", node: "pantry:2" }, "gaming:3")!
     for (let d = 0; d <= route.total; d += 0.05) {
-      const a = positionAt(route, d).position[1]
-      const b = positionAt(route, d + 0.05).position[1]
-      expect(Math.abs(b - a)).toBeLessThan(0.06)
+      const a = positionAt(route, d).position
+      const b = positionAt(route, d + 0.05).position
+      expect(Math.hypot(b[0] - a[0], b[2] - a[2])).toBeLessThan(0.051)
     }
+    expect(routeDuration(route)).toBeGreaterThan(4)
   })
 
   it("samples positions deterministically and faces the direction of travel", () => {
@@ -184,7 +253,7 @@ describe("routes", () => {
   })
 
   it("resumes an interrupted walk from the middle of a corridor", () => {
-    const route = planRoute({ kind: "node", node: "desk:quill" }, "pantry:1")!
+    const route = planRoute({ kind: "node", node: "desk:quill" }, "meeting:4")!
     const mid = positionAt(route, route.total / 2)
     const edge = segmentEdge(route, mid.segment)!
     expect(edge).toHaveLength(2)
@@ -197,10 +266,10 @@ describe("routes", () => {
     expect(back.total).toBeLessThan(route.total)
   })
 
-  it("takes a realistic amount of time (no teleporting)", () => {
-    const same = planRoute({ kind: "node", node: "desk:quill" }, "pantry:1")!
-    const cross = planRoute({ kind: "node", node: "desk:quill" }, "lounge:2")!
-    expect(routeDuration(same)).toBeGreaterThan(4)
-    expect(routeDuration(cross)).toBeGreaterThan(routeDuration(same))
+  it("takes longer to reach a farther room", () => {
+    const near = planRoute({ kind: "node", node: "desk:pixel" }, "pantry:1")!
+    const far = planRoute({ kind: "node", node: "desk:pixel" }, "meeting:7")!
+    expect(routeDuration(near)).toBeGreaterThan(2)
+    expect(routeDuration(far)).toBeGreaterThan(routeDuration(near))
   })
 })

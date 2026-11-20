@@ -1,11 +1,7 @@
 import { test as base, expect, type Page } from "@playwright/test"
 
 /** Known third-party noise that is not an app error. */
-const IGNORED = [
-  /THREE\.Clock: This module has been deprecated/, // emitted by @react-three/fiber with three r187
-  /GL Driver Message/,
-  /GPU stall/,
-]
+const IGNORED = [/GL Driver Message/, /GPU stall/]
 
 /**
  * `test` with two extras:
@@ -140,15 +136,14 @@ export const SEVEN = [
   "Relay",
   "Ledger",
 ] as const
-export const FLOOR_OF: Record<(typeof SEVEN)[number], 1 | 2> = {
-  Scout: 1,
-  Quill: 1,
-  Pixel: 1,
-  Vera: 1,
-  Tempo: 2,
-  Relay: 2,
-  Ledger: 2,
-}
+/** Accessible names of the room view buttons. */
+export const ROOM_VIEWS = [
+  "Entire office",
+  "Operations Room",
+  "Pantry",
+  "Gaming & Rest Lounge",
+  "Meeting Room",
+] as const
 
 export async function noHorizontalOverflow(page: Page) {
   return page.evaluate(

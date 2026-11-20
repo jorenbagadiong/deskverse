@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs"
 import path from "node:path"
 import { describe, expect, it } from "vitest"
 
-import { MAP_FLOORS } from "@/components/office/office-map"
+import { MAP_BACK_ROOMS } from "@/components/office/office-map"
 import { frameDelta } from "@/components/office/scene/frame-delta"
 import {
   environment,
@@ -12,11 +12,12 @@ import {
 import { EMPLOYEE_STATUSES } from "@/config/employee-status"
 import { employees } from "@/config/employees"
 import {
-  employeesOnFloor,
-  FLOORS,
   getOfficeEmployee,
+  OFFICE_BOUNDS,
   officeEmployees,
-  viewForFloor,
+  ROOM_IDS,
+  roomAt,
+  ROOMS,
 } from "@/config/office"
 import {
   MAX_ACTIVITY,
@@ -94,51 +95,48 @@ describe("office employee registry", () => {
   })
 })
 
-describe("floor assignment", () => {
-  it("puts the creative team on Floor 1 and operations on Floor 2", () => {
-    expect(employeesOnFloor(1).map((e) => e.id)).toEqual([
-      "scout",
-      "quill",
-      "pixel",
-      "vera",
-    ])
-    expect(employeesOnFloor(2).map((e) => e.id)).toEqual([
-      "tempo",
-      "relay",
-      "ledger",
-    ])
-    expect(FLOORS[1].name).toBe("Creative Production")
-    expect(FLOORS[2].name).toBe("Operations & Automation")
-  })
-
-  it("gives desks on the same floor enough room (no overlapping stations)", () => {
-    for (const floor of [1, 2] as const) {
-      const xs = employeesOnFloor(floor)
-        .map((e) => e.desk[0])
-        .sort((a, b) => a - b)
-      for (let i = 1; i < xs.length; i++)
-        expect(xs[i] - xs[i - 1]).toBeGreaterThanOrEqual(3)
+describe("single-floor layout", () => {
+  it("defines the four rooms inside one footprint, with Operations the largest", () => {
+    expect([...ROOM_IDS].sort()).toEqual(
+      ["lounge", "meeting", "operations", "pantry"].sort(),
+    )
+    const area = (id: (typeof ROOM_IDS)[number]) => {
+      const b = ROOMS[id].bounds
+      return (b.x1 - b.x0) * (b.z1 - b.z0)
     }
+    for (const id of ROOM_IDS) {
+      const b = ROOMS[id].bounds
+      expect(b.x0).toBeGreaterThanOrEqual(OFFICE_BOUNDS.x0)
+      expect(b.x1).toBeLessThanOrEqual(OFFICE_BOUNDS.x1)
+      expect(b.z0).toBeGreaterThanOrEqual(OFFICE_BOUNDS.z0)
+      expect(b.z1).toBeLessThanOrEqual(OFFICE_BOUNDS.z1)
+      if (id !== "operations")
+        expect(area("operations")).toBeGreaterThan(area(id) * 2)
+    }
+    expect(ROOMS.lounge.name).toBe("Gaming & Rest Lounge")
   })
 
-  it("places Floor 2 desks on the mezzanine and Floor 1 desks in the open atrium", () => {
-    for (const e of employeesOnFloor(2)) expect(e.desk[1]).toBeLessThan(-1)
-    for (const e of employeesOnFloor(1)) expect(e.desk[1]).toBeGreaterThan(0)
+  it("puts all seven workstations in the Operations Room", () => {
+    for (const e of officeEmployees)
+      expect(roomAt(e.desk[0], e.desk[1]), e.id).toBe("operations")
   })
 
-  it("maps each floor to its camera view", () => {
-    expect(viewForFloor(1)).toBe("floor-1")
-    expect(viewForFloor(2)).toBe("floor-2")
+  it("gives every desk enough room (no overlapping stations)", () => {
+    for (const a of officeEmployees)
+      for (const b of officeEmployees) {
+        if (a === b) continue
+        const dx = Math.abs(a.desk[0] - b.desk[0])
+        const dz = Math.abs(a.desk[1] - b.desk[1])
+        expect(dx >= 3 || dz >= 3, `${a.id} / ${b.id}`).toBe(true)
+      }
   })
 })
 
 describe("2D floor plan data", () => {
-  it("covers both floors, upper floor first", () => {
-    expect(MAP_FLOORS).toEqual([2, 1])
-    const shown = MAP_FLOORS.flatMap((f) =>
-      employeesOnFloor(f).map((e) => e.id),
-    )
-    expect(shown.sort()).toEqual(officeEmployees.map((e) => e.id).sort())
+  it("shows the three back rooms in plan order above the Operations Room", () => {
+    expect(MAP_BACK_ROOMS).toEqual(["meeting", "pantry", "lounge"])
+    const xs = MAP_BACK_ROOMS.map((r) => ROOMS[r].bounds.x0)
+    expect([...xs].sort((a, b) => a - b)).toEqual(xs)
   })
 })
 
@@ -193,24 +191,24 @@ describe("simulated actions", () => {
 })
 
 describe("office reducer", () => {
-  it("starts on the whole building with nothing selected and registry statuses", () => {
+  it("starts on the entire office with nothing selected and registry statuses", () => {
     const state = createInitialOfficeState()
     expect(state.selectedId).toBeNull()
-    expect(state.view).toBe("building")
+    expect(state.view).toBe("office")
     expect(state.statuses).toEqual(
       Object.fromEntries(officeEmployees.map((e) => [e.id, e.initialStatus])),
     )
     expect(state.activity).toEqual([])
   })
 
-  it("selecting an employee activates their floor", () => {
+  it("selecting an employee keeps the whole office in view", () => {
     let state = officeReducer(createInitialOfficeState(), {
       type: "select",
       id: "pixel",
     })
-    expect(state).toMatchObject({ selectedId: "pixel", view: "floor-1" })
+    expect(state).toMatchObject({ selectedId: "pixel", view: "office" })
     state = officeReducer(state, { type: "select", id: "ledger" })
-    expect(state).toMatchObject({ selectedId: "ledger", view: "floor-2" })
+    expect(state).toMatchObject({ selectedId: "ledger", view: "office" })
   })
 
   it("every one of the seven employees can be selected", () => {
@@ -220,28 +218,42 @@ describe("office reducer", () => {
         id: e.id,
       })
       expect(state.selectedId).toBe(e.id)
-      expect(state.view).toBe(viewForFloor(e.floor))
     }
   })
 
-  it("deselecting keeps the current floor view", () => {
+  it("selecting someone outside the framed room returns to the entire office", () => {
     let state = officeReducer(createInitialOfficeState(), {
-      type: "select",
-      id: "relay",
+      type: "setView",
+      view: "operations",
     })
-    state = officeReducer(state, { type: "select", id: null })
-    expect(state).toMatchObject({ selectedId: null, view: "floor-2" })
+    state = officeReducer(state, { type: "select", id: "relay" })
+    expect(state).toMatchObject({ selectedId: "relay", view: "operations" })
+    state = officeReducer(state, { type: "setView", view: "pantry" })
+    state = officeReducer(state, { type: "select", id: "relay" })
+    expect(state).toMatchObject({ selectedId: "relay", view: "office" })
   })
 
-  it("switching floors keeps a visible selection and drops one on the other floor", () => {
+  it("deselecting keeps the current view", () => {
+    let state = officeReducer(createInitialOfficeState(), {
+      type: "setView",
+      view: "operations",
+    })
+    state = officeReducer(state, { type: "select", id: "relay" })
+    state = officeReducer(state, { type: "select", id: null })
+    expect(state).toMatchObject({ selectedId: null, view: "operations" })
+  })
+
+  it("room views keep a selection inside the room and drop one elsewhere", () => {
     let state = officeReducer(createInitialOfficeState(), {
       type: "select",
       id: "scout",
     })
-    state = officeReducer(state, { type: "setView", view: "building" })
-    expect(state).toMatchObject({ selectedId: "scout", view: "building" })
-    state = officeReducer(state, { type: "setView", view: "floor-2" })
-    expect(state).toMatchObject({ selectedId: null, view: "floor-2" })
+    state = officeReducer(state, { type: "setView", view: "operations" })
+    expect(state).toMatchObject({ selectedId: "scout", view: "operations" })
+    state = officeReducer(state, { type: "setView", view: "office" })
+    expect(state).toMatchObject({ selectedId: "scout", view: "office" })
+    state = officeReducer(state, { type: "setView", view: "meeting" })
+    expect(state).toMatchObject({ selectedId: null, view: "meeting" })
   })
 
   it("changes status and records simulated activity", () => {

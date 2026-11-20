@@ -18,7 +18,7 @@ import {
   sipAmount,
   STRIDE_LENGTH,
 } from "@/components/office/scene/character/pose"
-import { officeEmployees } from "@/config/office"
+import { officeEmployees, roomAt } from "@/config/office"
 import { createLiveStore, entryFor, liveLocation } from "@/lib/office-live"
 import { activityOf } from "@/lib/office-movement"
 import {
@@ -62,10 +62,11 @@ describe("360° camera", () => {
   })
 
   it("focus follows a walker's live position", () => {
-    const a = focusTarget("building", [1, 0, 1])
-    const b = focusTarget("building", [4, 0, -2])
+    const a = focusTarget("office", [1, 0, 1])
+    const b = focusTarget("office", [4, 0, -2])
     expect(a).not.toEqual(b)
-    expect(focusTarget("floor-2", [4, 3.6, -2])[1]).toBeGreaterThan(3)
+    // Room views focus inside the room being framed.
+    expect(focusTarget("pantry", [0.7, 0, -5.05])[2]).toBeLessThan(-3)
   })
 })
 
@@ -129,11 +130,12 @@ describe("walking and break animations", () => {
 })
 
 describe("live positions", () => {
-  it("starts every walker at their own desk on the right floor", () => {
+  it("starts every walker at their own desk in the Operations Room", () => {
     const store = createLiveStore(createInitialOfficeState().movement)
     for (const e of officeEmployees) {
       const entry = store.get(e.id)!
-      expect(entry.floor).toBe(e.floor)
+      expect(entry.y).toBe(0)
+      expect(roomAt(entry.x, entry.z)).toBe("operations")
       expect(entry.moving).toBe(false)
       expect(entry.x).toBeCloseTo(e.desk[0])
     }

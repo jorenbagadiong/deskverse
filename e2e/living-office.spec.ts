@@ -24,7 +24,7 @@ test.describe("living office: walking (desktop)", () => {
   }) => {
     await openOffice(page)
     await pick(page, "Quill")
-    await expect(location(page)).toHaveText("At workstation · Floor 1")
+    await expect(location(page)).toHaveText("At workstation · Operations Room")
     const before = await plate(page, "Quill").evaluate(
       (el) => (el as HTMLElement).style.transform,
     )
@@ -41,7 +41,7 @@ test.describe("living office: walking (desktop)", () => {
         ),
       )
       .not.toBe(before)
-    await expect(location(page)).toHaveText("Pantry · Floor 1", {
+    await expect(location(page)).toHaveText("Pantry · coffee counter", {
       timeout: 30_000,
     })
     await expect(page.locator("[data-status-badge]")).toHaveText("Idle")
@@ -49,12 +49,25 @@ test.describe("living office: walking (desktop)", () => {
       page.locator("[data-activity-kind='movement']").first(),
     ).toHaveText("Coffee break")
 
+    // Room to room: from the pantry straight to the meeting room.
+    await movement(page)
+      .getByRole("button", { name: "Go to the meeting room" })
+      .click()
+    await expect(location(page)).toHaveText("Walking to the meeting room")
+    await expect(location(page)).toHaveText("Meeting Room · conference table", {
+      timeout: 30_000,
+    })
+    await expect(page.locator("[data-status-badge]")).toHaveText("Idle")
+
     await movement(page)
       .getByRole("button", { name: "Return to workstation" })
       .click()
-    await expect(location(page)).toHaveText("At workstation · Floor 1", {
-      timeout: 30_000,
-    })
+    await expect(location(page)).toHaveText(
+      "At workstation · Operations Room",
+      {
+        timeout: 30_000,
+      },
+    )
     // Arrived: rendering settles again (frame-on-demand is preserved).
     await waitForIdleScene(page, 800, 20_000).catch(() => {
       // Scout and Relay keep working at their desks, which animates; that's fine.
@@ -77,14 +90,17 @@ test.describe("living office: walking (desktop)", () => {
     // The camera eases onto where she stopped; then nothing moves any more
     // (a walker still heading to the lounge would keep the nameplate moving).
     await waitForCameraSettled(page)
-    await expect(location(page)).toHaveText(/^Stopped · Floor 1$|^Floor 1$/)
-    await expect(location(page)).not.toHaveText("Lounge · Floor 2")
+    await expect(location(page)).toHaveText(/^Stopped · |^Operations Room$/)
+    await expect(location(page)).not.toHaveText(/sofa/)
     await movement(page)
       .getByRole("button", { name: "Return to workstation" })
       .click()
-    await expect(location(page)).toHaveText("At workstation · Floor 1", {
-      timeout: 30_000,
-    })
+    await expect(location(page)).toHaveText(
+      "At workstation · Operations Room",
+      {
+        timeout: 30_000,
+      },
+    )
   })
 
   test("working employees stay at their desk until the task is done", async ({
@@ -102,19 +118,32 @@ test.describe("living office: walking (desktop)", () => {
 test.describe("living office: reduced motion", () => {
   test.use({ contextOptions: { reducedMotion: "reduce" } })
 
-  test("cross-floor moves are instant and the floor follows", async ({
-    page,
-  }) => {
+  test("moves between rooms are instant", async ({ page }) => {
     await openOffice(page)
     await pick(page, "Quill")
     await movement(page)
       .getByRole("button", { name: "Rest in the lounge" })
       .click()
-    await expect(location(page)).toHaveText("Lounge · Floor 2")
-    await expect(page.getByRole("radio", { name: /^Floor 2:/ })).toBeChecked()
+    await expect(location(page)).toHaveText("Gaming & Rest Lounge · sofa")
     await expect(page.getByRole("radio", { name: /^Quill/ })).toContainText(
       "Resting",
     )
+    await movement(page)
+      .getByRole("button", { name: "Go to a gaming station" })
+      .click()
+    await expect(location(page)).toHaveText(
+      "Gaming & Rest Lounge · gaming station",
+    )
+    await movement(page)
+      .getByRole("button", { name: "Go to the meeting room" })
+      .click()
+    await expect(location(page)).toHaveText("Meeting Room · conference table")
+    // A working task brings them straight back to the desk.
+    await page
+      .getByRole("radiogroup", { name: "Set state directly" })
+      .getByRole("radio", { name: "Working" })
+      .click()
+    await expect(location(page)).toHaveText("At workstation · Operations Room")
   })
 
   test("the camera rotates a full 360° and back to the identical view", async ({
@@ -125,7 +154,7 @@ test.describe("living office: reduced motion", () => {
     const canvas = officeView(page).locator("canvas")
     const overlays = [
       page.getByRole("toolbar", { name: "Camera" }),
-      page.getByRole("radiogroup", { name: "Floors" }),
+      page.getByRole("radiogroup", { name: "Rooms" }),
       page.getByRole("radiogroup", { name: "Office display" }),
       page.getByRole("button", { name: "Enter fullscreen" }),
     ]
