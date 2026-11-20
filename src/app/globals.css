@@ -1,0 +1,277 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+/* `.dark` on <html> (set by next-themes) enables the dark variant. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ==========================================================================
+   Deskverse design tokens
+   --------------------------------------------------------------------------
+   Raw values live on :root (light) and .dark (dark). Components only use the
+   semantic names below — never hex values — so themes and rebrands stay a
+   token-level change. Contrast pairs are checked by tests/design-tokens.test.ts.
+   ========================================================================== */
+
+/* `.light` / `.dark` can also be applied to any subtree to preview a theme locally. */
+:root,
+.light {
+  color-scheme: light;
+
+  /* Surfaces */
+  --background: #f5f8fc;
+  --foreground: #17202e;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --surface-sunken: #eaf0f7;
+  --card: var(--surface);
+  --card-foreground: var(--foreground);
+  --popover: var(--surface-raised);
+  --popover-foreground: var(--foreground);
+  --muted: #e6edf5;
+  --muted-foreground: #4a5b70;
+
+  /* Brand */
+  --primary: #087d76;
+  --primary-foreground: #ffffff;
+  --secondary: #6a45d1;
+  --secondary-foreground: #ffffff;
+  --accent: #9a4a0a;
+  --accent-foreground: #ffffff;
+  --destructive: #c0262d;
+  --destructive-foreground: #ffffff;
+
+  /* Lines & focus */
+  --border: #d3dde9;
+  --input: #74859b;
+  --ring: #087d76;
+
+  /* Employee status */
+  --status-idle: #526378;
+  --status-working: #087d76;
+  --status-waiting: #9a4a0a;
+  --status-completed: #157f3c;
+  --status-failed: #c0262d;
+  --status-info: #1d5fc4;
+
+  /* Elevation */
+  --elevation-1: 0 1px 2px rgb(23 32 46 / 0.06), 0 1px 3px rgb(23 32 46 / 0.08);
+  --elevation-2:
+    0 4px 12px -2px rgb(23 32 46 / 0.1), 0 2px 4px -2px rgb(23 32 46 / 0.06);
+  --elevation-3: 0 18px 40px -12px rgb(23 32 46 / 0.22);
+  --elevation-glow:
+    0 0 0 1px color-mix(in oklab, var(--primary) 35%, transparent),
+    0 10px 30px -10px color-mix(in oklab, var(--primary) 40%, transparent);
+
+  /* Charts */
+  --chart-1: var(--primary);
+  --chart-2: var(--secondary);
+  --chart-3: var(--accent);
+  --chart-4: var(--status-info);
+  --chart-5: var(--status-completed);
+
+  /* Sidebar (reserved for the future dashboard shell) */
+  --sidebar: var(--surface);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: var(--muted);
+  --sidebar-accent-foreground: var(--foreground);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring);
+
+  --radius: 0.75rem;
+}
+
+.dark {
+  color-scheme: dark;
+
+  --background: #080f1c;
+  --foreground: #eaf3ff;
+  --surface: #111d2e;
+  --surface-raised: #18273c;
+  --surface-sunken: #0b1424;
+  --muted: #1a2a40;
+  --muted-foreground: #9eb2c9;
+
+  --primary: #2dd4bf;
+  --primary-foreground: #04221f;
+  --secondary: #a78bfa;
+  --secondary-foreground: #160b33;
+  --accent: #ffb86b;
+  --accent-foreground: #2b1500;
+  --destructive: #f87171;
+  --destructive-foreground: #2a0606;
+
+  --border: #24364f;
+  --input: #5a7394;
+  --ring: #2dd4bf;
+
+  --status-idle: #9eb2c9;
+  --status-working: #2dd4bf;
+  --status-waiting: #ffb86b;
+  --status-completed: #4ade80;
+  --status-failed: #f87171;
+  --status-info: #60a5fa;
+
+  --elevation-1: 0 1px 2px rgb(0 0 0 / 0.4);
+  --elevation-2:
+    0 6px 16px -4px rgb(0 0 0 / 0.5), 0 0 0 1px rgb(234 243 255 / 0.03);
+  --elevation-3: 0 24px 48px -12px rgb(0 0 0 / 0.65);
+  --elevation-glow:
+    0 0 0 1px color-mix(in oklab, var(--primary) 40%, transparent),
+    0 12px 36px -10px color-mix(in oklab, var(--primary) 45%, transparent);
+}
+
+/* Map runtime variables into Tailwind utilities (bg-surface, text-status-failed, shadow-raised…). */
+@theme inline {
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-heading: var(--font-sans);
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-sunken: var(--surface-sunken);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-status-idle: var(--status-idle);
+  --color-status-working: var(--status-working);
+  --color-status-waiting: var(--status-waiting);
+  --color-status-completed: var(--status-completed);
+  --color-status-failed: var(--status-failed);
+  --color-status-info: var(--status-info);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --shadow-flat: var(--elevation-1);
+  --shadow-raised: var(--elevation-2);
+  --shadow-overlay: var(--elevation-3);
+  --shadow-glow: var(--elevation-glow);
+
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+/* Static (theme-independent) scales: spacing rhythm, type scale, layout, motion. */
+@theme {
+  --spacing-gutter: 1rem;
+  --spacing-gutter-lg: 2rem;
+  --spacing-stack: 1.5rem;
+  --spacing-section: 4rem;
+  --spacing-section-lg: 6rem;
+
+  --container-content: 72rem;
+
+  --text-display: 3.25rem;
+  --text-display--line-height: 1.05;
+  --text-display--letter-spacing: -0.035em;
+  --text-display--font-weight: 700;
+  --text-headline: 2rem;
+  --text-headline--line-height: 1.15;
+  --text-headline--letter-spacing: -0.025em;
+  --text-headline--font-weight: 650;
+  --text-title: 1.25rem;
+  --text-title--line-height: 1.3;
+  --text-title--letter-spacing: -0.015em;
+  --text-title--font-weight: 600;
+  --text-eyebrow: 0.75rem;
+  --text-eyebrow--line-height: 1rem;
+  --text-eyebrow--letter-spacing: 0.12em;
+  --text-eyebrow--font-weight: 600;
+
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+  --duration-fast: 150ms;
+  --duration-base: 250ms;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html {
+    @apply font-sans;
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+  }
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+}
+
+/* Unlayered on purpose: beats `outline-none` utilities so every focusable element
+   gets a high-contrast keyboard focus indicator in both themes. */
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+/* --------------------------------------------------------------------------
+   Anime.js entrance support
+   Elements marked [data-reveal] start hidden only when JS runs and motion is
+   allowed, so there is no flash before Anime.js takes over. Anime.js code marks
+   them [data-revealed] when it takes control (see revealTargets in lib/motion).
+   A late CSS fallback guarantees content becomes visible even if that never
+   happens (script error, blocked bundle).
+   -------------------------------------------------------------------------- */
+@media (scripting: enabled) and (prefers-reduced-motion: no-preference) {
+  [data-reveal]:not([data-revealed]) {
+    opacity: 0;
+    animation: dv-reveal-fallback 0s linear 2.5s forwards;
+  }
+}
+
+@keyframes dv-reveal-fallback {
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
