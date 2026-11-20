@@ -10,17 +10,26 @@ import type { OfficeEmployee } from "@/config/office"
 
 import { frameDelta } from "../frame-delta"
 import { useSceneMaterials } from "../materials"
+import type { LiveStore } from "@/lib/office-live"
+
 import type { AmbientStore } from "../shared/ambient"
 import { Batch } from "../shared/batch"
 
-import { Arm, ChestItem, Legs, Scanner, Torso } from "./body"
+import { Arm, ChestItem, CoffeeCup, Legs, Scanner, Torso } from "./body"
 import { expressionFor } from "./expression"
 import { g, HEADS, RIG } from "./geometry"
 import { Head } from "./head"
 import { FloorRing, StatusBubble } from "./marker"
 import {
+  activityPose,
   addPose,
   basePose,
+  gait,
+  SEAT_LIFT,
+  SEATED_LEG,
+  SIP_ARM,
+  sipAmount,
+  type BodyActivity,
   blinkOpenness,
   BLINK_SECONDS,
   glanceYaw,
@@ -106,8 +115,8 @@ export function Character({
   hovered,
   reducedMotion,
   ambient,
-  position,
-  rotationY = 0,
+  activity = "at-desk",
+  live,
   onSelect,
   onHover,
 }: {
@@ -117,8 +126,10 @@ export function Character({
   hovered: boolean
   reducedMotion: boolean
   ambient: AmbientStore
-  position: [number, number, number]
-  rotationY?: number
+  /** What the body is doing (walking, coffee break…); independent of status. */
+  activity?: BodyActivity
+  /** Live positions, for the walk cycle. */
+  live?: React.RefObject<LiveStore>
   onSelect: () => void
   onHover: (hovering: boolean) => void
 }) {
@@ -136,6 +147,9 @@ export function Character({
   const leftElbow = useRef<THREE.Group>(null)
   const rightShoulder = useRef<THREE.Group>(null)
   const rightElbow = useRef<THREE.Group>(null)
+  const leftLeg = useRef<THREE.Group>(null)
+  const rightLeg = useRef<THREE.Group>(null)
+  const legs = useRef({ left: 0, right: 0, lift: 0 })
   const orbit = useRef<THREE.Group>(null)
   const notebook = useRef<THREE.Group>(null)
   const bubble = useRef<THREE.Group>(null)
@@ -180,20 +194,30 @@ export function Character({
       ambient.requests.current.delete(employee.id)
       const a = ambientEvent.current
       a.blinkAt = t
-      if (request === "glance" && status !== "working") {
+      if (
+        request === "glance" &&
+        (status !== "working" || activity !== "at-desk")
+      ) {
         a.glanceAt = t
         a.glanceDir = a.glanceDir === 1 ? -1 : 1
       }
     }
 
     const sinceStatus = t - statusEvent.current.at
-    const working = status === "working" && motion
-    let animating = working
+    const atDesk = activity === "at-desk"
+    const walkingNow = activity === "walking"
+    // Working loops only play at the workstation.
+    const working = status === "working" && atDesk && motion
+    let animating = working || walkingNow
 
-    // 1. Target pose: base + role-specific working loop + one-off reactions.
-    let goal = basePose(status, kind)
+    // 1. Target pose: activity/status base + working loop + one-off reactions.
+    let goal = atDesk
+      ? basePose(status, kind)
+      : activityPose(activity, status, kind)
     if (working) goal = addPose(goal, workingMotion(kind, t + seed))
-    const tr = motion ? transient(status, sinceStatus) : NO_TRANSIENT
+    // Status reactions (hop, shake, wave) only when standing still.
+    const reacts = atDesk || activity === "standing"
+    const tr = motion && reacts ? transient(status, sinceStatus) : NO_TRANSIENT
     if (motion && sinceStatus < (TRANSIENT_SECONDS[status] ?? 0))
       animating = true
     if (tr.armsUp > 0 || tr.wave !== 0) {
@@ -203,7 +227,21 @@ export function Character({
       goal.right.raise += tr.wave
     }
     const sinceGlance = t - ambientEvent.current.glanceAt
-    if (motion && sinceGlance < GLANCE_SECONDS) {
+    // Walk cycle, driven by distance walked so the steps match the ground speed.
+    const entry = live?.current.get(employee.id)
+    const step = walkingNow && entry ? gait(entry.stride, motion ? 1 : 0) : null
+    if (step) {
+      goal = clonePose(goal)
+      goal.left.swing += step.leftArm
+      goal.right.swing += step.rightArm
+    }
+    // Coffee break: a glance becomes a sip.
+    if (activity === "coffee-break" && motion && sinceGlance < GLANCE_SECONDS) {
+      goal = clonePose(goal)
+      goal.right = blendArm(goal.right, SIP_ARM, sipAmount(sinceGlance))
+      goal.headPitch -= 0.12 * sipAmount(sinceGlance)
+      animating = true
+    } else if (motion && sinceGlance < GLANCE_SECONDS) {
       goal = {
         ...goal,
         headYaw:
@@ -213,11 +251,38 @@ export function Character({
     }
 
     // 2. Ease the rig toward it (snap under reduced motion).
-    const remaining = dampPose(pose.current, goal, 10, dt, !motion)
+    // Gait drives limbs directly; poses ease (snap under reduced motion).
+    const remaining = dampPose(pose.current, goal, step ? 18 : 10, dt, !motion)
     if (remaining > 0.001) animating = true
     const p = pose.current
+
+    // Legs: walk cycle, seated (legs forward) or standing.
+    const legGoal = activity === "resting" ? SEATED_LEG : 0
+    const L = legs.current
+    const nextLeft = step ? step.leftLeg : legGoal
+    const nextRight = step ? step.rightLeg : legGoal
+    const liftGoal = activity === "resting" ? SEAT_LIFT : 0
+    const ease = (a: number, b: number) =>
+      !motion || step ? b : THREE.MathUtils.damp(a, b, 8, dt)
+    L.left = ease(L.left, nextLeft)
+    L.right = ease(L.right, nextRight)
+    L.lift = !motion ? liftGoal : THREE.MathUtils.damp(L.lift, liftGoal, 8, dt)
+    if (
+      Math.abs(L.left - nextLeft) +
+        Math.abs(L.right - nextRight) +
+        Math.abs(L.lift - liftGoal) >
+      0.002
+    )
+      animating = true
+    leftLeg.current?.rotation.set(L.left, 0, 0)
+    rightLeg.current?.rotation.set(L.right, 0, 0)
+
     if (motionGroup.current) {
-      motionGroup.current.position.set(tr.shake, tr.hop, 0)
+      motionGroup.current.position.set(
+        tr.shake,
+        tr.hop + L.lift + (step?.bob ?? 0),
+        0,
+      )
       motionGroup.current.rotation.y = p.twist + tr.spin
     }
     lean.current?.rotation.set(p.lean, 0, 0)
@@ -233,7 +298,7 @@ export function Character({
       eyes.current.scale.y = motion ? blinkOpenness(sinceBlink) : 1
     if (motion && sinceBlink < BLINK_SECONDS) animating = true
 
-    // 4. Accessories that move only while working.
+    // 4. Accessories that move only while working at the desk.
     if (orbit.current && working) orbit.current.rotation.y += dt * 0.9
     if (notebook.current) {
       notebook.current.position.y =
@@ -264,8 +329,6 @@ export function Character({
 
   return (
     <group
-      position={position}
-      rotation-y={rotationY}
       onClick={(event) => {
         event.stopPropagation()
         onSelect()
@@ -281,9 +344,7 @@ export function Character({
       </Batch>
 
       <group ref={motionGroup}>
-        <Batch>
-          <Legs employee={employee} />
-        </Batch>
+        <Legs employee={employee} leftRef={leftLeg} rightRef={rightLeg} />
         <group ref={lean} position-y={RIG.hipY}>
           <group position-y={-RIG.hipY}>
             {/* Rigid parts are merged per material; moving parts are flagged dynamic. */}
@@ -302,7 +363,9 @@ export function Character({
                 shoulderRef={rightShoulder}
                 elbowRef={rightElbow}
               >
-                {employee.look.headgear === "explorer-cap" ? (
+                {activity === "coffee-break" ? (
+                  <CoffeeCup />
+                ) : employee.look.headgear === "explorer-cap" ? (
                   <Scanner employee={employee} />
                 ) : null}
               </Arm>

@@ -14,11 +14,15 @@ test.describe("3D office (mobile)", () => {
     await openOffice(page)
     expect(await noHorizontalOverflow(page)).toBeLessThanOrEqual(0)
 
+    // Full-width simulation, cards stacked below it.
     const view = await officeView(page).boundingBox()
-    const aside = await page
-      .getByRole("complementary", { name: "Employees" })
+    const cards = await page
+      .getByRole("region", { name: "Employees" })
       .boundingBox()
-    expect(view && aside && aside.y >= view.y + view.height).toBeTruthy()
+    const width = page.viewportSize()!.width
+    expect(view && cards && cards.y >= view.y + view.height).toBeTruthy()
+    expect(view!.width).toBeGreaterThan(width - 40)
+    expect(view!.height).toBeGreaterThanOrEqual(22 * 16 - 1)
 
     await expect(page.getByRole("button", { name: "Rotate left" })).toBeHidden()
     await expect(page.getByRole("button", { name: "Zoom in" })).toBeVisible()

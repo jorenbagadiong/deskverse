@@ -14,6 +14,11 @@ import {
   type OfficeEmployeeId,
 } from "@/config/office"
 import { ease, motionQueries } from "@/lib/motion"
+import {
+  ACTIVITY_LABEL,
+  activityOf,
+  type Movement,
+} from "@/lib/office-movement"
 
 /**
  * Keyboard-first way to pick an employee: one radio group per floor
@@ -22,10 +27,12 @@ import { ease, motionQueries } from "@/lib/motion"
  */
 export function EmployeeList({
   statuses,
+  movement,
   selectedId,
   onSelect,
 }: {
   statuses: Record<OfficeEmployeeId, EmployeeStatus>
+  movement?: Record<OfficeEmployeeId, Movement>
   selectedId: OfficeEmployeeId | null
   onSelect: (id: OfficeEmployeeId) => void
 }) {
@@ -82,6 +89,9 @@ export function EmployeeList({
             >
               {people.map((employee) => {
                 const selected = employee.id === selectedId
+                const activity = movement
+                  ? activityOf(movement[employee.id])
+                  : "at-desk"
                 return (
                   <ToggleGroupItem
                     key={employee.id}
@@ -100,6 +110,9 @@ export function EmployeeList({
                       </span>
                       <span className="block truncate text-xs font-normal text-muted-foreground">
                         {employee.agentTitle}
+                        {activity !== "at-desk"
+                          ? ` · ${ACTIVITY_LABEL[activity]}`
+                          : null}
                       </span>
                     </span>
                     <StatusBadge

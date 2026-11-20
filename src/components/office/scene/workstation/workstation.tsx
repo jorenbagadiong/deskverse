@@ -1,7 +1,7 @@
 "use client"
 
 import type { EmployeeStatus } from "@/config/employee-status"
-import type { OfficeEmployee } from "@/config/office"
+import { DESK_STAND_OFFSET_Z, type OfficeEmployee } from "@/config/office"
 
 import { g } from "../character/geometry"
 import {
@@ -15,7 +15,7 @@ import { StationProps } from "./props"
 
 /** Shared desk dimensions; the character stands behind the desk (local -z). */
 export const DESK = { width: 1.7, depth: 0.78, height: 0.58 } as const
-export const CHARACTER_OFFSET_Z = -0.74
+export const CHARACTER_OFFSET_Z = DESK_STAND_OFFSET_Z
 
 /**
  * Reusable workstation: one desk design for everyone, plus props that match

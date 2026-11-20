@@ -139,7 +139,7 @@ Open http://localhost:3000/office.
 
 - **Two-floor building** in an open-front isometric cutaway.
   - **Floor 1, Creative Production:** atrium workstations, reception, a meeting
-    table with a hologram, a holographic project board, hot desks and a coffee bar.
+    table with a hologram, a holographic project board, hot desks and a pantry.
   - **Floor 2, Operations & Automation:** a mezzanine with glass railings, a
     live operations board, a calendar wall, an analytics wall and a lounge.
   - A floating staircase joins the two floors.
@@ -150,9 +150,19 @@ Open http://localhost:3000/office.
   failed) for everyone. Each state has its own pose and facial expression, and
   working employees play a role-specific animation. Everything is labelled
   _Simulated_.
+- **A living office:** employees walk between workstations along a waypoint
+  graph (Dijkstra routes, collision-checked corridors, stairs between floors),
+  take coffee breaks in the Floor 1 pantry and rest on the Floor 2 lounge sofa.
+  Return to workstation / Visit the pantry / Rest in the lounge / Stop, plus
+  optional ambient breaks (off by default). Movement is independent of task
+  status; working employees stay at their desk.
 - **Camera and floors:** Building / Floor 1 / Floor 2 modes. Selecting someone
-  activates their floor and moves the camera to them. Floor 2 lifts away to
-  reveal Floor 1. Limited orbit, controlled zoom and an exact Reset view.
+  activates the floor they're on and the camera follows them while they walk.
+  Floor 2 lifts away to reveal Floor 1. Full 360° rotation (walls in the way
+  hide themselves), controlled zoom and an exact Reset view.
+- **Full-width viewport and fullscreen:** the simulation spans the page with
+  the team, details and activity cards below it; a Fullscreen button (Escape to
+  leave) keeps the scene and selection intact.
 - **Accessible by design:** a keyboard employee list per floor, a detail panel
   with live announcements, and a 2D floor plan of both floors when WebGL is
   unavailable (or by choice). It also supports reduced motion, light and dark
@@ -177,8 +187,11 @@ yarn test:e2e
 This builds the app, serves it on port 3210 and runs `e2e/` in your installed
 Google Chrome (no browser download) at desktop, 375px and 360px widths, plus a
 WebGL-disabled profile. It covers selecting all seven employees, keyboard
-navigation, floor switching, simulated states, the 2D fallback, themes,
-reduced motion and DV-001 regressions.
+navigation, floor switching, simulated states, walking to the pantry and
+back, stopping mid-walk, the "busy at work" rule, instant cross-floor moves
+under reduced motion, a full 360° turn back to the identical view, fullscreen
+(enter, leave, rejected request), the full-width layout, the 2D fallback,
+themes, reduced motion and DV-001 regressions.
 
 - Reuse a running server: `E2E_BASE_URL=http://localhost:3000 yarn test:e2e`
 - Use Playwright's Chromium instead of Chrome: `yarn playwright install chromium`,

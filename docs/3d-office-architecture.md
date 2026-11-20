@@ -12,13 +12,14 @@ state library or downloaded asset.
 ## 1. Building structure
 
 Deskverse HQ is one building with two physically stacked floors, drawn as an
-open-front cutaway. The front and right walls are removed, so the camera always
-looks into the interior.
+open-front cutaway. The front and right walls are removed, and the back and
+left walls hide themselves when the camera orbits behind them (§12), so the
+camera sees into the interior from every horizontal angle.
 
 | Part                                 | Where                                                    | Contents                                                                                                                                                                                                                 |
 | ------------------------------------ | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Floor 1: Creative Production**     | Full footprint, x ∈ [-7, 7], z ∈ [-5, 5], y = 0          | Scout, Quill, Pixel and Vera in the open **atrium** (front half), reception, meeting table with hologram, hallways. Under the mezzanine: holographic project board (kanban), creative hot desks, coffee bar, wall panels |
-| **Floor 2: Operations & Automation** | Mezzanine over the back half, z ∈ [-5, -0.5], y = 3.6    | Tempo, Relay and Ledger, live **operations board** (the team's simulated statuses), calendar wall, analytics monitor wall, lounge, glass railings overlooking the atrium                                                 |
+| **Floor 1: Creative Production**     | Full footprint, x ∈ [-7, 7], z ∈ [-5, 5], y = 0          | Scout, Quill, Pixel and Vera in the open **atrium** (front half), reception, meeting table with hologram, hallways. Under the mezzanine: holographic project board (kanban), creative hot desks, **pantry**, wall panels |
+| **Floor 2: Operations & Automation** | Mezzanine over the back half, z ∈ [-5, -0.5], y = 3.6    | Tempo, Relay and Ledger, live **operations board** (the team's simulated statuses), calendar wall, analytics monitor wall, **lounge**, glass railings overlooking the atrium                                             |
 | **Staircase**                        | Along the left wall from the front to the mezzanine edge | Floating treads, central stringer, glass balustrades                                                                                                                                                                     |
 | **Shell**                            | Back and left walls, split per floor                     | Atrium windows with a skyline, light strips, columns under the mezzanine edge                                                                                                                                            |
 
@@ -40,23 +41,30 @@ Constants live in `scene/camera-framing.ts` (`BUILDING`) and
 ```
 src/app/office/page.tsx                  Server Component: heading + <OfficeExperience>
 src/components/office/
-  office-experience.tsx                  Client root: reducer state, layout, 3D/2D display,
-                                         WebGL detection, lazy scene, overlays
+  office-experience.tsx                  Client root: reducer state, live position store, full-width
+                                         layout, fullscreen, 3D/2D display, WebGL detection, lazy
+                                         scene, overlays, movement dispatches, ambient wander timer
   floor-switcher.tsx                     Building / Floor 1 / Floor 2 (compact on mobile)
   camera-controls.tsx                    Rotate / zoom / reset buttons
   employee-list.tsx                      Keyboard list: one radio group per floor
-  employee-details.tsx                   Detail panel: status, simulated actions, state picker
+  employee-details.tsx                   Detail panel: location + movement controls, status,
+                                         simulated actions, state picker
   activity-feed.tsx                      Simulated notifications
   office-map.tsx                         2D floor plan of both floors (fallback + optional view)
   scene-error-boundary.tsx, simulated-tag.tsx
   scene/                                 Everything that imports three.js (one lazy chunk)
     office-scene.tsx                     <Canvas>, lights, environment, floors, stations, nameplates
-    camera-rig.tsx                       Orthographic camera, OrbitControls, modes, tweens
-    camera-framing.ts                    Pure framing math (fit zoom, focus target) – tested
+    camera-rig.tsx                       Orthographic camera, OrbitControls, modes, tweens, 360°
+                                         rotation, follows a selected walker
+    camera-framing.ts                    Pure framing math (fit zoom, focus target, shortest angle,
+                                         wall facing) – tested
+    movement/movement-system.tsx         Advances walks along their routes, writes live positions
+    movement/walker.tsx                  Places a character from its live position (+ Floor 2 lift)
+    building/camera-hider.tsx            Hides the back/left walls when the camera is behind them
     building/building.tsx                Floor 1 + Floor 2 composition (batched)
     building/floor-group.tsx             Lifts Floor 2 away to reveal Floor 1
     building/architecture.tsx            Railing, window, column, staircase, plant, chairs, sofa
-    building/furniture.tsx               Reception, meeting table, boards, coffee bar, walls…
+    building/furniture.tsx               Reception, meeting table, boards, pantry, lounge, walls…
     character/character.tsx              Shared character rig + frame-loop animation
     character/head.tsx                   Head shapes, face screen, eyes/mouth, 7 headgear pieces
     character/body.tsx                   Legs, torso, arms, 7 chest accessories
@@ -73,12 +81,19 @@ src/components/office/
     materials.tsx                        Shared + per-identity materials, disposal
     palette.ts, frame-delta.ts
 src/config/office.ts                     Typed registry: floors, desks, looks, tasks
-src/lib/office-simulation.ts             Pure reducer: selection, view mode, statuses, activity
+src/lib/office-simulation.ts             Pure reducer: selection, view mode, statuses, movement,
+                                         activity, ambient wandering
+src/lib/office-navigation.ts             Waypoint graph, obstacles, Dijkstra routes, sampling – tested
+src/lib/office-movement.ts               Movement states, activities, labels, options – tested
+src/lib/office-live.ts                   Live per-frame position store (mutable Map in a ref)
+src/hooks/use-fullscreen.ts              Fullscreen API wrapper (state follows the browser)
 ```
 
 Data flows one way. `OfficeExperience` owns all state (`selectedId`, `view`,
-`statuses`, `activity`). The 3D scene and DOM panels only render it, and the
-scene only reports clicks.
+`statuses`, `movement`, `activity`). The 3D scene and DOM panels only render
+it. The scene reports clicks and two discrete movement events (a walker
+arrived; a walker reached another floor) and writes per-frame positions into
+the live store, never into React state.
 
 ## 3. Employee registry
 
@@ -217,16 +232,20 @@ pose, face, marker and color.
 - **Fit:** `fitZoom(box, viewport)` projects the mode's bounding box onto the
   camera axes, so framing is exact on any screen. A resize keeps the user's
   relative zoom.
-- **Selection:** selecting an employee activates their floor, glides the target
-  70% of the way to them, and zooms 1.45× (`FOCUS_ZOOM`). They also get a white
+- **Selection:** selecting an employee activates the floor they are actually
+  on, glides the target 70% of the way to their live position, and zooms 1.45×
+  (`FOCUS_ZOOM`). While they walk, the camera follows them, and it switches
+  floors when they climb the stairs. They also get a white
   floor ring, a chevron and a highlighted nameplate.
 - **Limits:**
   - polar 0.55–1.15 rad (always above the floors)
-  - azimuth 0.1–π/2−0.1 (always looking into the cutaway)
+  - azimuth: unrestricted, a full 360° (walls facing the camera hide, §12)
   - zoom 0.8×–3.2× of the mode's fit
   - no panning
   - orbit radius 40 with an orthographic camera, so there's no near-plane clipping through geometry
-- **Controls:** drag/pinch, plus buttons for rotate, zoom and reset. Reset is
+- **Controls:** drag/pinch, plus buttons for rotate (18° per press, 20 presses
+  for a full turn; tweens take the shortest way across the 0°/360° seam), zoom
+  and reset. Reset is
   pixel-exact: tweens snap onto the goal, and leftover OrbitControls momentum
   is flushed. Mobile hides the rotate buttons and uses compact `All / 1F / 2F`
   floor labels.
@@ -243,8 +262,11 @@ pose, face, marker and color.
 - **No WebGL**, or a runtime WebGL failure, shows the **2D floor plan of both
   floors** (all seven desk buttons, fully operable). "2D map" can also be
   chosen at any time.
-- Visible focus rings, reduced motion (see §6), and mobile layouts where the
-  panels stack below the viewport.
+- Movement controls are ordinary buttons in the detail panel; unavailable
+  ones are disabled with a reason ("Busy with a task…", "All spots are
+  taken"). The live region also announces the employee's location.
+- Visible focus rings, reduced motion (see §6, §12), and a layout where the
+  cards always sit below the full-width viewport (stacked on mobile).
 
 ## 9. Performance decisions
 
@@ -332,3 +354,109 @@ two-story building for about twice that.
    approvals in the DOM panel, not only in 3D.
 5. **More people or rooms:** add registry entries and desks. Camera framing
    reads from `BUILDING`.
+6. **Movement:** `goTo` / `stop` are plain reducer actions, so a runner can
+   send employees to the pantry or back to their desk the same way the UI
+   does. A real "working" event already brings an employee back to their desk.
+
+## 12. Living office: walking, breaks, 360° camera, fullscreen
+
+### Navigation
+
+`src/lib/office-navigation.ts` is a hand-placed **waypoint graph**: one desk
+node and one aisle node per employee, corridor nodes on each floor, pantry and
+lounge spots (each with a facing), and two stair nodes. `shortestPath` is
+Dijkstra over the edges (Euclidean weights). Routes are polylines with their
+cumulative lengths, so `positionAt(route, distance)` samples position,
+heading, floor and "on the stairs" in O(log n).
+
+Collision avoidance is static: every edge is checked in the unit tests against
+the obstacle list (desks, columns, meeting table, reception, pantry counter,
+fridge and table, sofas, lounge table, plants, railing, stair footprint) with
+the walker's radius, and every node must lie inside its floor's bounds. Walkers
+don't avoid each other; break spots are **reserved** instead (one employee per
+spot, "All spots are taken" when full), so two people never stand in the same
+place.
+
+Interrupted walks resume from where the walker actually is: the DOM reads the
+live store at click time and passes `{ point, node, edge }` with the action,
+and `planRoute` continues via whichever end of the current corridor is
+shorter. Unreachable targets return `null` and the action is refused.
+
+### Movement state (independent of task status)
+
+`Movement` per employee is `at <node>`, `walking <route>` or
+`stopped <point>`; the body activity (`at-desk`, `walking`, `coffee-break`,
+`resting`, `standing`) is derived from it. Task status and movement are
+separate:
+
+- Walking never changes the status, and status changes never move anyone,
+  with one rule: **starting work while away sends the employee back to their
+  desk** (the status changes at once; the workstation animates once they're
+  seated).
+- **Working employees can't leave for a break** (they can always return to the
+  desk).
+- Each walk has a `routeId`; arrivals from an older route are ignored, so
+  re-routing mid-walk is race-free.
+- Movement and status changes are logged as separate activity entries (the
+  feed shows a footprints badge for movement).
+- **Ambient breaks** (off by default): every 7 s one idle colleague in
+  round-robin order goes to a free pantry or lounge spot and returns after
+  three ticks. Working employees are never picked.
+
+### Rendering walkers
+
+- `MovementSystem` (inside the canvas) advances each walk at 1.25 units/s
+  (0.85 on stairs), eases the heading toward the direction of travel, adds
+  distance to a stride counter, and writes everything to the live store. It
+  calls `invalidate()` only while someone is walking or turning; once everyone
+  has arrived, rendering stops again.
+- `Walker` positions each character from the live store. Characters live at
+  world level (not inside a floor group) so they can cross floors; Floor 2
+  walkers follow the Floor 2 lift offset (shared by `FloorGroup` through a
+  ref) and hide with it.
+- The **walk cycle** is a function of distance, not time (`gait(stride)`),
+  so steps match the ground speed and feet don't slide. Legs pivot at the
+  hips; arms swing in opposition; the body bobs slightly.
+- **Coffee break:** the robot holds a cup, takes a sip on its glance events,
+  and faces the counter. **Lounge:** it sits on the sofa (hips raised onto the
+  seat, legs forward, hands on the lap). Status still shows through the face
+  and bubble.
+- Nameplates, the selection ring and the camera all read the live store, so
+  they follow the walker; the details panel, list and 2D map show the
+  location ("Walking to the pantry", "Lounge · Floor 2").
+
+### 360° camera and wall hiding
+
+Azimuth limits are gone. `CameraHider` wraps the back and left walls (and
+everything mounted on them: windows, light strips, boards, shelves) and hides
+a wall when the direction from the orbit target to the camera points out
+through it (`wallFacesCamera > 0.12`, shown again below 0.02, so slow orbits
+don't flicker). The check runs only on frames that render anyway.
+
+### Layout and fullscreen
+
+- The viewport spans the page width (up to 120 rem) at
+  `clamp(22rem, 78dvh, 56rem)`. Team, details and activity cards sit below it
+  in a responsive grid (one column on mobile, two on tablets, three on wide
+  screens).
+- **Fullscreen** (`useFullscreen`): the button requests fullscreen on the
+  viewport section only. Its state follows `fullscreenchange`, so Escape or
+  the browser UI restore the layout as well. A rejected request shows a
+  dismissible notice. The camera keeps its relative zoom across the resize, and
+  the scene is not remounted, so selection, walks and camera state survive.
+  In fullscreen, a chip shows the selected employee's location.
+
+### Measured (2026-11-20)
+
+Production build, Chrome, same Radeon R9 M390 machine as §10, viewport
+1440×900, Floor 1 view with Quill walking to the pantry while Scout and Relay
+work: **59.6 fps**, 281 draw calls and ≈99k triangles per frame. When nobody
+walks, rendering stops as before (the reduced-motion idle test still sees
+0 draw calls).
+
+### Reduced motion
+
+Every move is instant (the reducer jumps to the destination), headings snap,
+and there is no walk cycle, camera follow easing or tweened rotation. The 2D
+map also uses instant moves, and switching to it finishes any walk in
+progress.

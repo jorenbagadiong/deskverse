@@ -10,30 +10,68 @@ import { beveledPlate } from "../shared/shapes"
 
 import { BUILDS, g, RIG, torsoGeometry } from "./geometry"
 
-/** Two stubby legs with rounded toy feet in the identity color. */
-export function Legs({ employee }: { employee: OfficeEmployee }) {
+/**
+ * Two stubby legs with rounded toy feet in the identity color. Each leg
+ * pivots at the hip (walk cycle, sitting); each is one batched rigid group.
+ */
+export function Legs({
+  employee,
+  leftRef,
+  rightRef,
+}: {
+  employee: OfficeEmployee
+  leftRef: React.Ref<THREE.Group>
+  rightRef: React.Ref<THREE.Group>
+}) {
   const m = useSceneMaterials()
   const id = useIdentityMaterials(employee.glow)
   const [bx] = BUILDS[employee.look.build]
   return (
     <>
-      {[-1, 1].map((side) => (
-        <group key={side} position-x={side * RIG.legX * bx}>
-          <mesh
-            geometry={g.capsule(0.062, 0.12)}
-            position-y={0.19}
-            material={m.shellShade}
-          />
-          <mesh
-            geometry={g.sphere(0.092, 18, 12)}
-            position={[0, 0.052, 0.03]}
-            scale={[1, 0.6, 1.32]}
-            material={id.accent}
-            castShadow
-          />
+      {([-1, 1] as const).map((side) => (
+        <group
+          key={side}
+          ref={side < 0 ? leftRef : rightRef}
+          position={[side * RIG.legX * bx, RIG.hipY, 0]}
+          userData={{ dynamic: true }}
+        >
+          <Batch>
+            <mesh
+              geometry={g.capsule(0.062, 0.12)}
+              position-y={0.19 - RIG.hipY}
+              material={m.shellShade}
+            />
+            <mesh
+              geometry={g.sphere(0.092, 18, 12)}
+              position={[0, 0.052 - RIG.hipY, 0.03]}
+              scale={[1, 0.6, 1.32]}
+              material={id.accent}
+              castShadow
+            />
+          </Batch>
         </group>
       ))}
     </>
+  )
+}
+
+/** A coffee cup held at the pantry. */
+export function CoffeeCup() {
+  const m = useSceneMaterials()
+  return (
+    <group position={[0.02, -0.02, 0.07]}>
+      <mesh geometry={g.cylinder(0.042, 0.036, 0.09, 16)} material={m.shell} />
+      <mesh
+        geometry={g.cylinder(0.034, 0.034, 0.004, 16)}
+        position-y={0.044}
+        material={m.wood}
+      />
+      <mesh
+        geometry={g.torus(0.026, 0.008, Math.PI * 2, 6, 14)}
+        position={[0.045, 0, 0]}
+        material={m.shell}
+      />
+    </group>
   )
 }
 

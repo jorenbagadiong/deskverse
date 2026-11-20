@@ -124,7 +124,7 @@ test.describe("3D office (desktop)", () => {
     ).toBeChecked()
   })
 
-  test("clicking a desk in the 3D scene selects that employee", async ({
+  test("clicking a robot in the 3D scene selects that employee", async ({
     page,
   }) => {
     await openOffice(page)
@@ -135,7 +135,7 @@ test.describe("3D office (desktop)", () => {
     })
     const box = await plate.boundingBox()
     if (!box) throw new Error("Pixel nameplate not positioned")
-    // The nameplate sits just in front of the desk; the desk front is right above it.
+    // The nameplate sits just under the robot's feet; the robot is right above it.
     await page.mouse.click(box.x + box.width / 2, box.y - 14)
     await expect(page.locator("#employee-details-title")).toHaveText("Pixel")
   })
@@ -191,6 +191,7 @@ test.describe("reduced motion", () => {
       page.getByRole("toolbar", { name: "Camera" }),
       page.getByRole("radiogroup", { name: "Floors" }),
       page.getByRole("radiogroup", { name: "Office display" }),
+      page.getByRole("button", { name: "Enter fullscreen" }),
     ]
     const shot = () => canvas.screenshot({ mask: overlays })
     await clearInteractionState(page)

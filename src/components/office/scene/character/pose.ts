@@ -293,3 +293,96 @@ export function blinkOpenness(since: number) {
   if (since < 0 || since >= BLINK_SECONDS) return 1
   return Math.max(0.08, Math.abs(Math.cos((Math.PI * since) / BLINK_SECONDS)))
 }
+
+// ── Movement activities (independent of task status) ─────────────────────────
+
+export type BodyActivity =
+  "at-desk" | "walking" | "coffee-break" | "resting" | "standing"
+
+/** Distance of one full walk cycle (two steps), in scene units. */
+export const STRIDE_LENGTH = 0.62
+/** How far the hips rise to sit on the lounge sofa. */
+export const SEAT_LIFT = 0.14
+/** Leg angle when seated (legs forward). */
+export const SEATED_LEG = -1.45
+
+const WALK_POSE: Pose = {
+  ...RELAXED,
+  lean: 0.06,
+  headPitch: -0.02,
+  left: arm(0, 0.1, -0.35),
+  right: arm(0, 0.1, -0.35),
+}
+
+/** Holding a coffee cup near the chest. */
+export const COFFEE_POSE: Pose = {
+  ...RELAXED,
+  headPitch: 0.04,
+  right: arm(-0.55, 0.2, -1.75),
+}
+/** Bringing the cup up for a sip. */
+export const SIP_ARM: ArmPose = arm(-1.0, 0.28, -2.25)
+
+/** Sitting back on the sofa, hands on the lap. */
+export const SEATED_POSE: Pose = {
+  ...RELAXED,
+  lean: -0.14,
+  headPitch: 0.04,
+  left: arm(-0.55, 0.12, -0.5),
+  right: arm(-0.55, 0.12, -0.5),
+}
+
+/**
+ * Base pose for what the body is doing. At the desk the task status decides
+ * (working, waiting, …); away from it, the activity decides and the status
+ * still shows through the face and the status bubble.
+ */
+export function activityPose(
+  activity: BodyActivity,
+  status: EmployeeStatus,
+  kind: WorkstationKind,
+): Pose {
+  switch (activity) {
+    case "walking":
+      return WALK_POSE
+    case "coffee-break":
+      return COFFEE_POSE
+    case "resting":
+      return SEATED_POSE
+    case "standing":
+      // Working poses need the workstation.
+      return status === "working" ? RELAXED : basePose(status, kind)
+    default:
+      return basePose(status, kind)
+  }
+}
+
+export type Gait = {
+  leftLeg: number
+  rightLeg: number
+  leftArm: number
+  rightArm: number
+  bob: number
+}
+
+/**
+ * Walk cycle as a function of distance walked (not time), so steps match the
+ * ground speed and feet never slide. Legs and arms swing in opposition.
+ */
+export function gait(stride: number, amplitude = 1): Gait {
+  const phase = (stride / STRIDE_LENGTH) * Math.PI * 2
+  const s = Math.sin(phase)
+  return {
+    leftLeg: 0.55 * s * amplitude,
+    rightLeg: -0.55 * s * amplitude,
+    leftArm: -0.45 * s * amplitude,
+    rightArm: 0.45 * s * amplitude,
+    bob: Math.abs(Math.cos(phase)) * 0.035 * amplitude,
+  }
+}
+
+/** Sip curve: 0 → 1 → 0 over the glance window. */
+export function sipAmount(since: number) {
+  if (since < 0 || since >= GLANCE_SECONDS) return 0
+  return Math.sin((Math.PI * since) / GLANCE_SECONDS)
+}

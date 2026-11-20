@@ -2,16 +2,18 @@
 
 import { useEffect, useLayoutEffect, useRef } from "react"
 import { animate, createScope, type Scope } from "animejs"
+import { Footprints } from "lucide-react"
 
 import { StatusBadge } from "@/components/employees/status-badge"
 import { getOfficeEmployee } from "@/config/office"
 import { duration, ease, motionQueries } from "@/lib/motion"
+import { ACTIVITY_LABEL } from "@/lib/office-movement"
 import { MAX_ACTIVITY, type ActivityEntry } from "@/lib/office-simulation"
 
 import { SimulatedTag } from "./simulated-tag"
 
 /**
- * UI notifications for simulated status changes. Not a live region: the detail
+ * UI notifications for simulated status changes and movement. Not a live region: the detail
  * panel already announces changes, so screen readers don't hear them twice.
  */
 export function ActivityFeed({ entries }: { entries: ActivityEntry[] }) {
@@ -61,7 +63,8 @@ export function ActivityFeed({ entries }: { entries: ActivityEntry[] }) {
       <div style={{ minHeight: `${MAX_ACTIVITY * 3.6}rem` }}>
         {entries.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            No activity yet. Pick an employee and try a simulated action.
+            No activity yet. Pick an employee and try a simulated action or send
+            them on a break.
           </p>
         ) : (
           <ol className="flex flex-col gap-2">
@@ -75,7 +78,17 @@ export function ActivityFeed({ entries }: { entries: ActivityEntry[] }) {
                   <span className="text-sm font-semibold">
                     {getOfficeEmployee(entry.employeeId).name}
                   </span>
-                  <StatusBadge status={entry.status} />
+                  {entry.kind === "movement" && entry.activity ? (
+                    <span
+                      data-activity-kind="movement"
+                      className="inline-flex items-center gap-1 rounded-full bg-surface px-2 py-0.5 text-xs font-medium ring-1 ring-border"
+                    >
+                      <Footprints aria-hidden="true" className="size-3" />
+                      {ACTIVITY_LABEL[entry.activity]}
+                    </span>
+                  ) : (
+                    <StatusBadge status={entry.status} />
+                  )}
                 </div>
                 <p className="text-xs text-muted-foreground">{entry.message}</p>
               </li>

@@ -2,7 +2,15 @@
 
 import { useEffect, useLayoutEffect, useRef } from "react"
 import { animate, createScope, stagger, type Scope } from "animejs"
-import { MousePointerClick, X } from "lucide-react"
+import {
+  Armchair,
+  Coffee,
+  Footprints,
+  Hand,
+  Monitor,
+  MousePointerClick,
+  X,
+} from "lucide-react"
 
 import { EmployeeAvatar } from "@/components/employees/employee-card"
 import { StatusBadge } from "@/components/employees/status-badge"
@@ -15,6 +23,13 @@ import {
 } from "@/config/employee-status"
 import { getOfficeEmployee, type OfficeEmployeeId } from "@/config/office"
 import { duration, ease, motionQueries } from "@/lib/motion"
+import {
+  ACTIVITY_LABEL,
+  activityOf,
+  locationLabel,
+  type DestinationOption,
+  type Movement,
+} from "@/lib/office-movement"
 import { simulatedActions } from "@/lib/office-simulation"
 
 import { SimulatedTag } from "./simulated-tag"
@@ -25,14 +40,28 @@ const intentVariant = {
   danger: "destructive",
 } as const
 
+const MOVE_ICON = {
+  desk: Monitor,
+  pantry: Coffee,
+  lounge: Armchair,
+  stop: Hand,
+} as const
+
 export function EmployeeDetails({
   selectedId,
   status,
+  movement,
+  moveOptions,
+  onMove,
   onSetStatus,
   onClose,
 }: {
   selectedId: OfficeEmployeeId | null
   status: EmployeeStatus | null
+  /** Physical movement, shown and controlled separately from the task status. */
+  movement: Movement | null
+  moveOptions: DestinationOption[]
+  onMove: (option: DestinationOption["kind"]) => void
   onSetStatus: (status: EmployeeStatus) => void
   onClose: () => void
 }) {
@@ -91,6 +120,11 @@ export function EmployeeDetails({
   }, [selectedId, status])
 
   const employee = selectedId ? getOfficeEmployee(selectedId) : null
+  const location = movement ? locationLabel(movement) : null
+  // One explanation for unavailable breaks (busy, spots taken…), shown once.
+  const breakNote = moveOptions.find(
+    (o) => (o.kind === "pantry" || o.kind === "lounge") && !o.enabled,
+  )?.reason
 
   return (
     <section
@@ -160,6 +194,53 @@ export function EmployeeDetails({
             </p>
           </div>
 
+          {movement ? (
+            <div
+              data-panel-item=""
+              className="space-y-2 rounded-xl bg-surface-sunken p-3 ring-1 ring-border"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 id="movement-label" className="text-sm font-medium">
+                  Location
+                </h3>
+                <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                  <Footprints aria-hidden="true" className="size-3.5" />
+                  {ACTIVITY_LABEL[activityOf(movement)]}
+                </span>
+              </div>
+              <p data-location="" className="text-sm">
+                {location}
+              </p>
+              <div
+                role="group"
+                aria-labelledby="movement-label"
+                className="flex flex-wrap gap-2"
+              >
+                {moveOptions.map((option) => {
+                  const Icon = MOVE_ICON[option.kind]
+                  return (
+                    <Button
+                      key={option.kind}
+                      size="sm"
+                      variant="outline"
+                      disabled={!option.enabled}
+                      title={option.reason}
+                      onClick={() => onMove(option.kind)}
+                    >
+                      <Icon aria-hidden="true" />
+                      {option.label}
+                    </Button>
+                  )
+                })}
+              </div>
+              {breakNote ? (
+                <p className="text-xs text-muted-foreground">
+                  Breaks: {breakNote}.
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+
           <div data-panel-item="" className="space-y-2">
             <h3 className="text-sm font-medium">Simulated actions</h3>
             <div className="flex flex-wrap gap-2">
@@ -209,7 +290,7 @@ export function EmployeeDetails({
       {/* One polite announcement for selection and status changes. */}
       <p aria-live="polite" className="sr-only">
         {employee && status
-          ? `${employee.name}: ${statusMeta[status].label} (simulated status).`
+          ? `${employee.name}: ${statusMeta[status].label} (simulated status). ${location ?? ""}`
           : ""}
       </p>
     </section>

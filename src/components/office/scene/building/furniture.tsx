@@ -6,7 +6,7 @@ import { officeEmployees, type OfficeEmployeeId } from "@/config/office"
 import { g } from "../character/geometry"
 import { statusGlowKey, useSceneMaterials, type GlowKey } from "../materials"
 
-import { Chair } from "./architecture"
+import { Chair, Sofa } from "./architecture"
 
 /** Reception desk with the (provisional) brand mark. */
 export function Reception() {
@@ -247,64 +247,310 @@ export function HotDesks() {
   )
 }
 
-/** Coffee bar: the warm heart of the office. */
-export function CoffeeBar() {
+/**
+ * Pantry (Floor 1, under the mezzanine, back right): counter with a coffee
+ * machine, a fridge, a high table with stools and warm pendant lights.
+ * Footprints match OBSTACLES in lib/office-navigation.ts; the three standing
+ * spots (pantry:1–3) sit in front of the counter and at the table.
+ */
+export function Pantry() {
   const m = useSceneMaterials()
   return (
     <group>
+      {/* Floor zone */}
       <mesh
-        geometry={g.box(2.2, 0.95, 0.6, 0.08)}
-        position-y={0.475}
+        geometry={g.box(3.7, 0.012, 2.7, 0.006)}
+        position={[5.05, 0.007, -3.35]}
+        material={m.floorInset}
+        receiveShadow
+      />
+      {/* Counter */}
+      <mesh
+        geometry={g.box(2.6, 0.92, 0.62, 0.06)}
+        position={[4.8, 0.46, -4.4]}
         material={m.wood}
         castShadow
         receiveShadow
       />
       <mesh
-        geometry={g.box(2.3, 0.05, 0.7, 0.02)}
-        position-y={0.97}
+        geometry={g.box(2.7, 0.05, 0.7, 0.02)}
+        position={[4.8, 0.945, -4.42]}
         material={m.deskTop}
       />
-      <group position={[-0.55, 1.0, -0.05]}>
+      <mesh
+        geometry={g.box(2.5, 0.02, 0.02, 0.008)}
+        position={[4.8, 0.1, -4.08]}
+        material={m.glow.accent}
+      />
+      {/* Coffee machine (in front of spot pantry:2) */}
+      <group position={[5.3, 0.97, -4.5]}>
         <mesh
-          geometry={g.box(0.36, 0.44, 0.32, 0.05)}
-          position-y={0.22}
+          geometry={g.box(0.38, 0.5, 0.34, 0.06)}
+          position-y={0.25}
           material={m.joint}
           castShadow
         />
         <mesh
-          geometry={g.box(0.2, 0.08, 0.02, 0.01)}
-          position={[0, 0.34, 0.165]}
+          geometry={g.box(0.22, 0.07, 0.02, 0.012)}
+          position={[0, 0.38, 0.175]}
           material={m.glow.accent}
         />
         <mesh
-          geometry={g.cylinder(0.045, 0.04, 0.09, 14)}
-          position={[0, 0.05, 0.2]}
+          geometry={g.box(0.2, 0.03, 0.16, 0.01)}
+          position={[0, 0.05, 0.12]}
+          material={m.metal}
+        />
+        <mesh
+          geometry={g.cylinder(0.04, 0.035, 0.08, 14)}
+          position={[0, 0.1, 0.12]}
           material={m.shell}
         />
       </group>
-      {[0.2, 0.45, 0.7].map((x, i) => (
+      {/* Cups, kettle and a fruit bowl (in front of spot pantry:1) */}
+      {[3.75, 3.92, 4.09].map((x, i) => (
         <mesh
           key={x}
-          geometry={g.cylinder(0.045, 0.04, 0.1, 14)}
-          position={[x, 1.05, 0.1]}
-          material={i === 1 ? m.glow.accent : m.shell}
+          geometry={g.cylinder(0.04, 0.035, 0.09, 14)}
+          position={[x, 1.015, -4.3]}
+          material={i === 1 ? m.glow.secondary : m.shell}
         />
       ))}
-      {[-0.6, 0.6].map((x) => (
-        <group key={x} position={[x, 0, 0.62]}>
+      <mesh
+        geometry={g.cylinder(0.08, 0.1, 0.2, 16)}
+        position={[4.45, 1.07, -4.5]}
+        material={m.metal}
+      />
+      <mesh
+        geometry={g.cylinder(0.16, 0.1, 0.07, 18)}
+        position={[6.0, 1.005, -4.45]}
+        material={m.shell}
+      />
+      {[-0.06, 0.05, 0].map((dx, i) => (
+        <mesh
+          key={i}
+          geometry={g.sphere(0.05, 10, 8)}
+          position={[6.0 + dx, 1.07, -4.45 + (i - 1) * 0.04]}
+          material={i === 2 ? m.plant : m.glow.accent}
+        />
+      ))}
+      {/* Fridge */}
+      <group position={[6.55, 0, -4.38]}>
+        <mesh
+          geometry={g.box(0.72, 1.8, 0.7, 0.07)}
+          position-y={0.9}
+          material={m.shellShade}
+          castShadow
+        />
+        <mesh
+          geometry={g.box(0.7, 0.012, 0.012, 0.004)}
+          position={[0, 1.12, 0.355]}
+          material={m.trim}
+        />
+        <mesh
+          geometry={g.box(0.03, 0.3, 0.03, 0.01)}
+          position={[-0.26, 1.42, 0.37]}
+          material={m.metal}
+        />
+        <mesh
+          geometry={g.box(0.03, 0.4, 0.03, 0.01)}
+          position={[-0.26, 0.75, 0.37]}
+          material={m.metal}
+        />
+        <mesh
+          geometry={g.box(0.16, 0.06, 0.01, 0.01)}
+          position={[0.15, 1.5, 0.36]}
+          material={m.glow.primary}
+        />
+      </group>
+      {/* High table and stools (spot pantry:3 stands at its west side) */}
+      <group position={[6.1, 0, -2.5]}>
+        <mesh
+          geometry={g.cylinder(0.38, 0.38, 0.05, 24)}
+          position-y={1.02}
+          material={m.deskTop}
+          castShadow
+        />
+        <mesh
+          geometry={g.cylinder(0.04, 0.2, 1.0, 12)}
+          position-y={0.5}
+          material={m.metal}
+        />
+        <mesh
+          geometry={g.cylinder(0.04, 0.035, 0.09, 14)}
+          position={[-0.1, 1.09, 0.08]}
+          material={m.shell}
+        />
+        {[-0.32, 0.32].map((dz) => (
+          <group key={dz} position={[0.55, 0, dz]}>
+            <mesh
+              geometry={g.cylinder(0.025, 0.12, 0.72, 10)}
+              position-y={0.36}
+              material={m.metal}
+            />
+            <mesh
+              geometry={g.cylinder(0.17, 0.16, 0.07, 18)}
+              position-y={0.74}
+              material={m.fabric}
+            />
+          </group>
+        ))}
+      </group>
+      {/* Pendant lights hanging from the mezzanine */}
+      {[4.2, 5.4].map((x) => (
+        <group key={x} position={[x, 0, -3.9]}>
           <mesh
-            geometry={g.cylinder(0.025, 0.12, 0.7, 12)}
-            position-y={0.35}
+            geometry={g.cylinder(0.006, 0.006, 0.5, 4)}
+            position-y={3.05}
             material={m.metal}
           />
           <mesh
-            geometry={g.cylinder(0.2, 0.18, 0.08, 20)}
-            position-y={0.72}
-            material={m.fabric}
-            castShadow
+            geometry={g.cylinder(0.08, 0.16, 0.12, 16)}
+            position-y={2.75}
+            material={m.joint}
+          />
+          <mesh
+            geometry={g.circle(0.13, 16)}
+            position-y={2.688}
+            rotation-x={Math.PI / 2}
+            material={m.glow.accent}
           />
         </group>
       ))}
+    </group>
+  )
+}
+
+/** Wall shelves above the pantry counter (mounted on the back wall). */
+export function PantryShelves() {
+  const m = useSceneMaterials()
+  return (
+    <group position={[4.75, 0, -4.86]}>
+      {[1.55, 1.95].map((y, row) => (
+        <group key={y} position-y={y}>
+          <mesh geometry={g.box(2.3, 0.04, 0.24, 0.015)} material={m.wood} />
+          {[-0.9, -0.55, -0.2, 0.25, 0.6, 0.95].map((x, i) => (
+            <mesh
+              key={x}
+              geometry={
+                i % 2
+                  ? g.cylinder(0.05, 0.05, 0.16, 12)
+                  : g.box(0.12, 0.18, 0.1, 0.02)
+              }
+              position={[x, 0.1, 0.02]}
+              material={
+                (i + row) % 3 === 0
+                  ? m.glow.secondary
+                  : (i + row) % 3 === 1
+                    ? m.shell
+                    : m.pot
+              }
+            />
+          ))}
+        </group>
+      ))}
+      <mesh
+        geometry={g.box(2.3, 0.015, 0.015, 0.005)}
+        position={[0, 1.5, 0.12]}
+        material={m.glow.accent}
+      />
+    </group>
+  )
+}
+
+/**
+ * Lounge (Floor 2, east end): sofa with two seats, a lounge chair, coffee
+ * table, rug, floor lamp and plants. Seats lounge:1–3 face the room (-x).
+ */
+export function Lounge() {
+  const m = useSceneMaterials()
+  return (
+    <group>
+      <mesh
+        geometry={g.circle(1.35, 36)}
+        rotation-x={-Math.PI / 2}
+        position={[5.7, 0.007, -2.2]}
+        scale={[0.85, 1.25, 1]}
+        material={m.floorInset}
+        receiveShadow
+      />
+      <Sofa position={[6.4, 0, -1.65]} rotationY={-Math.PI / 2} length={1.4} />
+      <Sofa position={[6.4, 0, -3.3]} rotationY={-Math.PI / 2} length={0.75} />
+      {/* Cushions */}
+      {[-1.95, -1.35].map((z, i) => (
+        <mesh
+          key={z}
+          geometry={g.box(0.1, 0.24, 0.3, 0.05)}
+          position={[6.6, 0.55, z]}
+          rotation-y={i ? 0.1 : -0.1}
+          material={i ? m.glow.secondary : m.pot}
+        />
+      ))}
+      {/* Coffee table */}
+      <group position={[5.15, 0, -1.8]}>
+        <mesh
+          geometry={g.cylinder(0.3, 0.3, 0.05, 24)}
+          position-y={0.38}
+          material={m.wood}
+          castShadow
+        />
+        <mesh
+          geometry={g.cylinder(0.05, 0.12, 0.36, 12)}
+          position-y={0.18}
+          material={m.metal}
+        />
+        <mesh
+          geometry={g.cylinder(0.045, 0.04, 0.09, 14)}
+          position={[0.08, 0.45, 0.04]}
+          material={m.shell}
+        />
+        <mesh
+          geometry={g.box(0.18, 0.03, 0.13, 0.01)}
+          position={[-0.08, 0.42, -0.05]}
+          rotation-y={0.3}
+          material={m.glow.secondary}
+        />
+      </group>
+      {/* Side table between sofa and chair, with a small plant */}
+      <group position={[6.5, 0, -2.68]}>
+        <mesh
+          geometry={g.cylinder(0.16, 0.16, 0.04, 18)}
+          position-y={0.5}
+          material={m.wood}
+        />
+        <mesh
+          geometry={g.cylinder(0.03, 0.06, 0.48, 10)}
+          position-y={0.24}
+          material={m.metal}
+        />
+        <mesh
+          geometry={g.cylinder(0.07, 0.06, 0.1, 12)}
+          position-y={0.57}
+          material={m.pot}
+        />
+        <mesh
+          geometry={g.sphere(0.1, 10, 8)}
+          position-y={0.7}
+          material={m.plant}
+        />
+      </group>
+      {/* Floor lamp (warm, soft) */}
+      <group position={[6.55, 0, -0.78]}>
+        <mesh
+          geometry={g.cylinder(0.12, 0.14, 0.03, 18)}
+          position-y={0.015}
+          material={m.metal}
+        />
+        <mesh
+          geometry={g.cylinder(0.012, 0.012, 1.45, 6)}
+          position-y={0.74}
+          material={m.metal}
+        />
+        <mesh
+          geometry={g.cylinder(0.14, 0.2, 0.22, 18)}
+          position-y={1.5}
+          material={m.glow.accent}
+        />
+      </group>
     </group>
   )
 }

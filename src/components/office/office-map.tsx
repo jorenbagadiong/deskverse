@@ -9,6 +9,7 @@ import {
   type FloorId,
   type OfficeEmployeeId,
 } from "@/config/office"
+import { activityOf, locationLabel, type Movement } from "@/lib/office-movement"
 import { cn } from "@/lib/utils"
 
 /** Floors in plan order: upper floor drawn first, like a building section. */
@@ -20,11 +21,14 @@ export const MAP_FLOORS: FloorId[] = [2, 1]
  */
 export function OfficeMap({
   statuses,
+  movement,
   selectedId,
   onSelect,
   notice,
 }: {
   statuses: Record<OfficeEmployeeId, EmployeeStatus>
+  /** Where people are; the plan lists them by their home desk. */
+  movement?: Record<OfficeEmployeeId, Movement>
   selectedId: OfficeEmployeeId | null
   onSelect: (id: OfficeEmployeeId) => void
   notice?: string
@@ -90,6 +94,12 @@ export function OfficeMap({
                         </span>
                       </span>
                       <StatusBadge status={statuses[employee.id]} />
+                      {movement &&
+                      activityOf(movement[employee.id]) !== "at-desk" ? (
+                        <span className="text-xs text-muted-foreground">
+                          {locationLabel(movement[employee.id])}
+                        </span>
+                      ) : null}
                     </button>
                   </li>
                 )
