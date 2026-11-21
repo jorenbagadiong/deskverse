@@ -125,6 +125,9 @@ move the repo into the Linux home directory.
 | `yarn worker:start`        | Run the orchestrator worker (a separate process)       |
 | `yarn worker:check`        | Read-only worker, database and handler status          |
 | `yarn orchestrator:verify` | 10-product crash verification on a scratch database    |
+| `yarn scout:check`         | Read-only Scout diagnostics (research, model, worker)  |
+| `yarn scout:verify`        | Scout crash verification (scratch DB, fixture sites)   |
+| `yarn scout:smoke`         | Bounded live check of one public reference page        |
 
 ## Project structure
 
@@ -169,12 +172,15 @@ src/
     backup/             Offline backup, verify and restore (format 2: + ticket media)
     tickets/            Ticket repository (transactions + events), media storage and checks
     orchestrator/       Runs, frozen inputs, task graph, claims/leases, worker, handlers (DV-004C)
+    scout/              Scout research (DV-005A): safe retrieval (net/), extraction, claim
+                        analysis, optional local model, handler, report storage
 drizzle/                Versioned SQL migrations (committed)
-scripts/                yarn db:* and tickets:* commands, setup-local.sh, e2e/ database test server
+scripts/                yarn db:*, tickets:*, worker:*, orchestrator:*, scout:* commands, setup-local.sh,
+                        e2e/ database test server, scout/ fixture sites (tests only)
 assets/fonts/inter/     Inter Bold + Medium (SIL OFL 1.1) for video captions
 docs/                   ROADMAP.md, brand-guidelines.md, animation-guidelines.md,
                         3d-office-architecture.md, video-architecture.md, database-architecture.md,
-                        affiliate-tickets.md, orchestrator.md
+                        affiliate-tickets.md, orchestrator.md, scout-research.md
 tests/                  Vitest unit tests (+ integration/: real FFmpeg, db/: real PostgreSQL)
 e2e/                    Playwright browser tests
 ```
@@ -284,6 +290,44 @@ failure by design. Everything else passes. Run the office tests where Chrome
 has a GPU (for example native Windows). Details and the exact list:
 [E2E environment notes](docs/e2e-environment.md).
 
+## DV-005A scope: Scout, evidence-backed product research ✅
+
+The first real AI employee. Scout reads the reference pages you add to
+each product and checks your product facts against them. **Research only:**
+it writes no scripts or videos, and the full campaign stays unavailable.
+
+- **Turn it on** with `DESKVERSE_SCOUT_RETRIEVAL=on` in `.env.local`
+  (off by default), restart the app and run `yarn worker:start`. Then use
+  **Start research** in a Ready ticket's **Scout Research** section.
+- **Only your references, safely:**
+  - manufacturer pages first, at most 5 per product;
+  - never the affiliate link, never links found inside pages;
+  - honours robots.txt, never signs in or bypasses CAPTCHAs, paywalls or
+    blocks, never runs page JavaScript;
+  - SSRF-hardened: public addresses only (IPv4/IPv6, mapped forms), DNS
+    pinned against rebinding, re-validated redirects (≤ 3), default ports,
+    no credentials or cookies, bounded size, time and content types.
+- **Evidence for every claim:** your Specifications and Description are
+  marked _supported_, _conflicting_, _unverified_ or _insufficient
+  evidence_, each citing short passages (with locations) from sources that
+  were actually read and matched to the product. Prices, ratings and stock
+  are time-sensitive; health, warranty, "best" and similar claims are
+  flagged; none become selling points. Nothing is invented.
+- **Honest about problems:** blocked, forbidden, login, paywall, CAPTCHA,
+  JavaScript-only, rate-limited and mismatched pages are recorded; a
+  product with nothing usable asks you for input; others carry on.
+- **Durable and exact:** one immutable, versioned brief per product per
+  run, written in the same transaction that completes the task, guarded by
+  the orchestrator's lease and fence (migration `0003_scout_research`).
+  Crashes, stale workers and retries can't produce a second brief. Edits
+  need a new run (a new snapshot); old briefs stay readable and their
+  checksums are re-verified on every read. Included in backups.
+- **Optional local AI** through Ollama on loopback only, with a model you
+  installed; its proposals must quote real passages or are rejected.
+- **Commands:** `yarn scout:check`, `yarn scout:verify`, `yarn scout:smoke`.
+
+Details: [Scout research](docs/scout-research.md).
+
 ## DV-004C scope: Durable campaign orchestrator ✅
 
 The background engine that will run Affiliate Tickets through Scout →
@@ -307,9 +351,10 @@ Quill → Pixel → Vera, built and proven **without** any real AI work yet.
 - **Inputs are frozen** when a run starts. Edits don't change a running
   run, and a product or file an unfinished run uses can't be removed (409,
   explained in the page).
-- **Workflow** section on each ticket: it says plainly that **automation
-  isn't available yet** (Scout, Quill, Pixel and Vera arrive in
-  DV-005/006), and shows run status and valid controls.
+- **Workflow** section on each ticket: it says plainly that **full
+  campaign automation isn't available yet** (Quill, Pixel and Vera arrive
+  in DV-005B/005C/006A; Scout research runs on its own since DV-005A), and
+  shows run status and valid controls.
 - **Proved with deterministic verification runs:**
   - they run only on isolated test databases and are labelled test-only;
   - the 10-product crash verification (`yarn orchestrator:verify`) checks
@@ -600,8 +645,8 @@ Rendering, uploads and downloads followed in DV-003B (above).
 ## Future milestones
 
 The plan from here is the Affiliate Ticket workflow in
-[docs/ROADMAP.md](docs/ROADMAP.md). Next is **DV-005A: Scout** (research),
-the first real handler for the orchestrator.
+[docs/ROADMAP.md](docs/ROADMAP.md). Next is **DV-005B: Quill**
+(scriptwriting from Scout's verified facts).
 Earlier ideas:
 
 - **Remaining AI team.** Quill, Vera, Relay and Ledger join the office using

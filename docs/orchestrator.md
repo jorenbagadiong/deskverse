@@ -6,8 +6,13 @@ through Scout → Quill → Pixel → Vera.
 **DV-004C builds and proves the infrastructure only.** It contains no
 research, scripts, rendering, review, publishing or analytics.
 
-- **Production runs are refused** ("automation isn't available yet") until
-  real handlers exist (DV-005A, DV-005B, DV-005C, DV-006A).
+**DV-005A adds the first production handler,** Scout's `scout.research`
+([Scout research](scout-research.md)), and the research-only workflow
+`scout-research-v1`. See [§16](#16-dv-005a-additions).
+
+- **The full campaign is refused** ("Full campaign automation isn't
+  available yet") until Quill, Pixel and Vera exist (DV-005B, DV-005C,
+  DV-006A). Research-only runs are allowed when source retrieval is on.
 - **Everything is verified with deterministic verification handlers.**
   Their results are labelled as test results everywhere, and they only run
   in isolated test environments.
@@ -29,6 +34,7 @@ research, scripts, rendering, review, publishing or analytics.
 13. [Commands](#13-commands)
 14. [Tests and evidence](#14-tests-and-evidence)
 15. [Limitations and next steps](#15-limitations-and-next-steps)
+16. [DV-005A additions](#16-dv-005a-additions)
 
 ## 1. Architecture
 
@@ -80,7 +86,7 @@ Migration `drizzle/0002_campaign_orchestrator.sql`:
 | `worker_tasks`          | stage, status, resource class, priority, recovery policy, **idempotency_key** (unique), params, attempts/max_attempts, eligible_at, **lease_owner / lease_expires_at / fence**, failure kind/message | lease present iff running; attempts 1–10; FK (run, ticket) and (snapshot, run)                         |
 | `task_dependencies`     | (task, prerequisite) within one run                                                                                                                                                                  | PK prevents duplicates; composite FKs refuse cross-run edges; **a trigger refuses cycles**; immutable  |
 | `task_attempts`         | every attempt: number, worker, fence, outcome, message, timings                                                                                                                                      | unique (task, number) and (task, fence)                                                                |
-| `task_results`          | **one committed result per task** (the primary key is the task); kind `verification`, versioned, ≤ 16 KB                                                                                             | immutable; only `verification` results exist in DV-004C                                                |
+| `task_results`          | **one committed result per task** (the primary key is the task); kind `verification` or (DV-005A) `scout_research`, versioned, ≤ 16 KB                                                               | immutable; a Scout result is a compact reference to its `scout_reports` row                            |
 | `run_events`            | what happened, in the same transaction as the change                                                                                                                                                 | unique (run, request_id) makes control requests idempotent                                             |
 
 The DV-004B owner tables are never written by workers. `app_metadata` and
@@ -307,25 +313,26 @@ API refuses verification runs there.
 Local-only, strict JSON (unknown keys refused), no-store, ownership checked
 on every nested route (run ∈ ticket, task ∈ run):
 
-| Route                                              | Body                                                | Notes                                                   |
-| -------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------- |
-| `GET /api/tickets/:id/runs`                        |                                                     | `{ availability, runs }`                                |
-| `POST /api/tickets/:id/runs`                       | `{ requestId, ticketVersion, mode, verification? }` | production → **503 capability-unavailable**; idempotent |
-| `GET /api/tickets/:id/runs/:runId`                 |                                                     | run, products with tasks, events                        |
-| `POST …/runs/:runId/pause` · `/resume` · `/cancel` | `{ requestId }`                                     | 409 when not valid in the current state                 |
-| `POST …/runs/:runId/tasks/:taskId/retry`           | `{ requestId }`                                     | failed / needs-input tasks only                         |
+| Route                                              | Body                                                           | Notes                                                                                                                                                    |
+| -------------------------------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/tickets/:id/runs`                        |                                                                | `{ availability, runs }`                                                                                                                                 |
+| `POST /api/tickets/:id/runs`                       | `{ requestId, ticketVersion, mode, workflow?, verification? }` | `workflow: "scout-research-v1"` → research (DV-005A); full campaign (`campaign-v1`, the production default) → **503 capability-unavailable**; idempotent |
+| `GET /api/tickets/:id/runs/:runId`                 |                                                                | run, products with tasks, events                                                                                                                         |
+| `POST …/runs/:runId/pause` · `/resume` · `/cancel` | `{ requestId }`                                                | 409 when not valid in the current state                                                                                                                  |
+| `POST …/runs/:runId/tasks/:taskId/retry`           | `{ requestId }`                                                | failed / needs-input tasks only                                                                                                                          |
 
 The ticket workspace's **Workflow** section shows:
 
-- availability, stating plainly that automation isn't available yet and
-  which milestones add it;
+- availability, stating plainly that the full campaign isn't available yet
+  and which milestones add it (research-only runs start from the Scout
+  Research section and appear here as "Research run (Scout only)");
 - the latest run's persisted status, progress, steps per product, errors
   and task history, plus earlier runs;
 - Pause, Resume, Cancel and Retry, only when valid;
 - a **Start verification run (test only)** button, only in the test
   environment.
 
-It refreshes every 2 s while a run is unfinished. There is no production
+It refreshes every 2 s while a run is unfinished. There is no full-campaign
 start button.
 
 ## 12. Backups
@@ -398,13 +405,49 @@ It checks:
 
 ## 15. Limitations and next steps
 
-- **No production handlers.** Real runs are refused until DV-005A/B/C and
-  DV-006A.
+- **One production handler (Scout).** The full campaign is refused until
+  DV-005B, DV-005C and DV-006A.
 - **The real render gate isn't built.** The shared Pixel Studio + worker
   render gate is needed before DV-005C, as described in §8.
 - **The Workflow section polls** (every 2 s) rather than receiving pushed
   updates.
-- **Worker identities are per process** (`worker-<pid>-<random>`). There is
-  no worker registry or dashboard beyond `yarn worker:check`.
+- **Worker identities are per process** (`worker-<pid>-<random>`). Since
+  DV-005A workers check in to `orchestrator_workers` (informational only,
+  shown by `yarn worker:check`, `yarn scout:check` and the UI); there is no
+  worker dashboard.
 - **Claims are serialised by one advisory lock.** That's ample locally, but
   not designed for hundreds of workers.
+
+## 16. DV-005A additions
+
+- **Explicit workflow selection.** `planRun` takes `workflow` and validates
+  it: it must exist, match the run's mode and be available here
+  (`availableWorkflows`, derived from the registered production handlers).
+  Defaults: verification → `verification-v1`, production → `campaign-v1`
+  (refused). A research run needs at least one product with a usable
+  reference. Idempotency, version checks and one unfinished run per ticket
+  are unchanged.
+- **`scout-research-v1`:** one `scout.research` task per product
+  (`general`, recovery `retry`), no other stages.
+- **Deliverables.** A handler may return a `deliverable` with its
+  completion. `completeTask` runs `deliverable.persist` **inside the
+  completion transaction, after the lease/fence check and before the task
+  becomes completed**, then stores the compact reference it returns in
+  `task_results` (kind `scout_research`). A crash or error rolls back
+  everything; a stale worker is refused before anything is written (and
+  the database refuses research rows from anyone but the current lease
+  holder).
+- **Commit refusals.** The worker retries a commit only for connection
+  errors (lost connection, shutdown, overload, deadlock). A commit the
+  database refuses (constraint, data or SQL error) isn't retried forever:
+  the task is recorded as a permanent failure ("refused by a database
+  check").
+- **Retry-After.** A transient failure may carry `retryAfterMs`; the retry
+  is scheduled no sooner than that (capped at 15 minutes) and no sooner
+  than the normal backoff. Failure details (≤ 3 KB, e.g. each source's
+  problem) are stored in the task's run event.
+- **Handler context:** `maxAttempts` is passed to handlers, so the last
+  attempt can give a final answer instead of another transient failure.
+- **Worker check-ins** (`orchestrator_workers`): every ≤ 5 s, removed on a
+  clean stop, cleared after a restore; "running" means seen in the last
+  15 s. Never used for claiming.

@@ -7,6 +7,8 @@ import path from "node:path"
 
 import pg from "pg"
 
+import { startFixtureSites, type FixtureSites } from "../scout/fixture-sites"
+
 import { parseDatabaseUrl, type DatabaseConfig } from "@/server/db/config"
 import { readEnvFile } from "@/server/db/env-file"
 import { journal } from "@/server/db/journal"
@@ -38,6 +40,11 @@ import {
  *   POST /database/online    accept them again
  *   POST /worker/stop        stop the orchestrator worker (SIGTERM)
  *   POST /worker/start       (re)start it
+ *
+ * Scout (DV-005A): the app and worker run with research switched on, and
+ * the worker reaches only local fixture sites through Scout's test
+ * network (allowed on this scratch test database only). No real website
+ * is contacted by the E2E suite.
  */
 
 const APP_PORT = Number(process.env.E2E_APP_PORT ?? 3211)
@@ -108,6 +115,7 @@ let child: ChildProcess | null = null
 let control: http.Server | null = null
 let offline = false
 let proxy: net.Server | null = null
+let sites: FixtureSites | null = null
 const connections = new Set<net.Socket>()
 
 function startProxy() {
@@ -155,6 +163,8 @@ async function startApp() {
         DESKVERSE_DATA_DIR: dataDir,
         // Deterministic verification runs (DV-004C): this scratch database only.
         DESKVERSE_ORCHESTRATOR_VERIFICATION: "1",
+        // Scout research (DV-005A): offered by the app; the worker does it.
+        DESKVERSE_SCOUT_RETRIEVAL: "on",
       },
     },
   )
@@ -202,6 +212,10 @@ function startWorker() {
         DESKVERSE_ORCHESTRATOR_RETRY_BASE_MS: "200",
         DESKVERSE_ORCHESTRATOR_RETRY_MAX_MS: "1000",
         DESKVERSE_WORKER_SHUTDOWN_GRACE_MS: "1000",
+        DESKVERSE_SCOUT_RETRIEVAL: "on",
+        DESKVERSE_SCOUT_TEST_NETWORK: JSON.stringify({ port: sites!.port }),
+        DESKVERSE_SCOUT_HOST_INTERVAL_MS: "0",
+        DESKVERSE_SCOUT_REQUEST_TIMEOUT_MS: "5000",
         NODE_ENV: "production",
       },
     },
@@ -247,6 +261,7 @@ async function doCleanup() {
   await stopApp()
   setOffline(true)
   proxy?.close()
+  await sites?.close()
   try {
     const c = admin()
     await c.connect()
@@ -304,6 +319,7 @@ async function main() {
     control!.listen(CONTROL_PORT, "127.0.0.1", resolve),
   )
   await startProxy()
+  sites = await startFixtureSites()
   await startApp()
   startWorker()
   console.log(

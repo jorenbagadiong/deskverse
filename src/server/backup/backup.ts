@@ -944,6 +944,15 @@ export async function restoreBackup({
         )
     }
   }
+  // Worker check-ins (DV-005A) describe processes of the old database;
+  // clear them (after verification) so no absent worker looks "running".
+  await withClient(target, "deskverse-restore", async (client) => {
+    const exists = await client.query<{ present: boolean }>(
+      "SELECT to_regclass('public.orchestrator_workers') IS NOT NULL AS present",
+    )
+    if (exists.rows[0].present)
+      await client.query("DELETE FROM orchestrator_workers")
+  })
   return {
     manifest,
     files: allFiles.length,

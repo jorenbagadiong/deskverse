@@ -224,6 +224,7 @@ describe("handlers and configuration", () => {
       runId: "r",
       stage: "verify.collect",
       attempt: 1,
+      maxAttempts: 3,
       idempotencyKey: "k",
       snapshot: { checksum: "c".repeat(64), data: {} },
       params: { durationMs: 0 },

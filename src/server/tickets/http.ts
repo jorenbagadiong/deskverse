@@ -151,7 +151,9 @@ export function errorResponse(error: unknown): Response {
         ? 404
         : error.code === "unavailable"
           ? 503
-          : 409,
+          : error.code === "invalid"
+            ? 400
+            : 409,
       error.code === "unavailable" ? "capability-unavailable" : error.code,
       error.message,
     )

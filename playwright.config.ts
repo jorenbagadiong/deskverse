@@ -49,7 +49,8 @@ const channel =
  *   server with its own scratch database and media folder
  *   (scripts/e2e/database-server.ts). Never reused, never E2E_BASE_URL.
  */
-const TICKET_SPECS = /tickets(-mobile|-keyboard|-workflow)?\.spec\.ts$/
+const TICKET_SPECS =
+  /tickets(-mobile|-keyboard|-workflow|-research)?\.spec\.ts$/
 /** Never matches: a project with nothing to run in this suite. */
 const NOTHING = /^$/
 const only = (ordinary: RegExp, database: RegExp) =>
@@ -104,7 +105,7 @@ export default defineConfig({
       use: { viewport: { width: 1280, height: 900 } },
       ...only(
         /^(?!.*(fallback|mobile)\.spec).*\.spec\.ts$/,
-        /tickets(-keyboard|-workflow)?\.spec\.ts$/,
+        /tickets(-keyboard|-workflow|-research)?\.spec\.ts$/,
       ),
     },
     {

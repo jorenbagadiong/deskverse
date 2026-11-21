@@ -9,7 +9,9 @@ import {
   createRegistry,
   MISSING_PRODUCTION_CAPABILITIES,
   productionAvailable,
+  RESEARCH_WORKFLOW,
 } from "@/server/orchestrator/workflows"
+import { readScoutConfig } from "@/server/scout/config"
 import { invalid, jsonBody, notFound } from "@/server/tickets/http"
 
 /**
@@ -20,10 +22,20 @@ import { invalid, jsonBody, notFound } from "@/server/tickets/http"
 
 export const pool = () => getPool()
 
+/**
+ * Production workflows this installation can run (DV-005A). The app never
+ * executes them; it mirrors the worker's registration rule: Scout is
+ * registered when source retrieval is switched on.
+ */
+export function availableWorkflows(): string[] {
+  return readScoutConfig().retrieval ? [RESEARCH_WORKFLOW.id] : []
+}
+
 export function availability(): WorkflowAvailability {
   const config = readDatabaseConfig()
   return {
     production: productionAvailable(createRegistry({ verification: false })),
+    research: availableWorkflows().includes(RESEARCH_WORKFLOW.id),
     missing: MISSING_PRODUCTION_CAPABILITIES.map((c) => ({
       stage: c.stage,
       milestone: c.milestone,

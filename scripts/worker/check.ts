@@ -12,6 +12,7 @@ import {
   MISSING_PRODUCTION_CAPABILITIES,
   productionAvailable,
 } from "@/server/orchestrator/workflows"
+import { readScoutConfig } from "@/server/scout/config"
 
 /**
  * yarn worker:check — read-only report: configuration, database, schema,
@@ -33,8 +34,12 @@ run(async () => {
   console.log(
     `Leases:       ${settings.leaseMs} ms; retries: ${settings.retry.maxAttempts} attempts, ${settings.retry.baseDelayMs}–${settings.retry.maxDelayMs} ms backoff`,
   )
+  const scout = readScoutConfig()
   console.log(
-    `Production:   ${productionAvailable(registry) ? "available" : `not available yet (${MISSING_PRODUCTION_CAPABILITIES.map((c) => c.milestone).join(", ")})`}`,
+    `Campaign:     ${productionAvailable(registry) ? "available" : `full campaign not available yet (${MISSING_PRODUCTION_CAPABILITIES.map((c) => c.milestone).join(", ")})`}`,
+  )
+  console.log(
+    `Scout:        ${scout.retrieval ? "research on (scout-research-v1)" : "research off (DESKVERSE_SCOUT_RETRIEVAL isn't on)"}; extraction ${scout.extraction}${scout.extraction === "ollama" && !scout.ollama ? ` (unusable: ${scout.ollamaProblem})` : ""}; run yarn scout:check for details`,
   )
   console.log(
     `Verification: ${registry.size > 0 ? "enabled (test database)" : "disabled"}`,
@@ -53,8 +58,27 @@ run(async () => {
     )
     const fmt = (rows: { status: string; n: number }[]) =>
       rows.length ? rows.map((r) => `${r.status} ${r.n}`).join(", ") : "none"
+    const workers = await pool.query<{
+      worker_id: string
+      ago: number
+      stages: string[]
+    }>(
+      "SELECT worker_id, extract(epoch FROM now() - last_seen_at)::int AS ago, stages FROM orchestrator_workers ORDER BY last_seen_at DESC LIMIT 10",
+    )
     console.log(`Runs:         ${fmt(runs.rows)}`)
     console.log(`Tasks:        ${fmt(tasks.rows)}`)
+    console.log(
+      `Workers:      ${
+        workers.rows.length
+          ? workers.rows
+              .map(
+                (w) =>
+                  `${w.worker_id} seen ${w.ago}s ago (${w.stages.join(", ") || "no handlers"})`,
+              )
+              .join("; ")
+          : "none checked in"
+      }`,
+    )
   } finally {
     await pool.end()
   }

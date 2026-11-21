@@ -7,13 +7,25 @@ files live in Deskverse's private data folder on this computer.
 
 DV-004B is **ticket management only**:
 
-- Nothing is researched, written, rendered, reviewed, scheduled or
-  published.
-- Reference links are stored, never opened.
-- A **Ready** ticket is only _eligible_ for future processing. The
-  orchestrator (DV-004C, [orchestrator.md](orchestrator.md)) can run it once
-  real handlers exist; until then its Workflow section says automation
-  isn't available.
+- Nothing is written, rendered, reviewed, scheduled or published.
+- A **Ready** ticket is _eligible_ for processing by the orchestrator
+  (DV-004C, [orchestrator.md](orchestrator.md)). The full campaign isn't
+  available yet; its Workflow section says so.
+
+**Since DV-005A, Scout researches Ready tickets** on request (the ticket's
+**Scout Research** section, [Scout research](scout-research.md)):
+
+- Your **reference links are what Scout reads**, when you switch source
+  retrieval on (`DESKVERSE_SCOUT_RETRIEVAL=on`). Mark manufacturer pages
+  as **Manufacturer**: Scout reads them first and only treats a page as
+  the maker's when you labelled it so.
+- **Affiliate links are never visited** and are never evidence.
+- Your **Specifications** (one `Label: value` per line) and **Description**
+  (one claim per sentence) are the claims Scout checks.
+- Scout never changes your ticket, products or media. Its briefs live in
+  separate, immutable tables; editing a product (which returns the ticket
+  to Draft) needs a **new** research run, and earlier briefs stay
+  available.
 
 ## Contents
 
@@ -302,4 +314,7 @@ a killed run are removed at the next start.
   Finished runs release them. See
   [orchestrator.md §9](orchestrator.md#9-frozen-inputs-and-media-retention).
 
-- **Next: DV-005A, Scout.**
+- **Research (DV-005A)** reads only the references you add; see
+  [Scout research](scout-research.md) for what it can't read (JavaScript-only
+  pages, logins, CAPTCHAs, sites that block automated access).
+- **Next: DV-005B, Quill.**

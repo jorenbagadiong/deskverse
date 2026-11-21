@@ -76,7 +76,7 @@ async function startRun(
 const workflow = (page: Page) => page.getByRole("region", { name: "Workflow" })
 const runStatus = (page: Page) => workflow(page).getByTestId("run-status")
 
-test("says automation isn't available; verification is labelled test-only and needs a Ready ticket", async ({
+test("says the full campaign isn't available; verification is labelled test-only and needs a Ready ticket", async ({
   page,
   request,
 }) => {
@@ -84,10 +84,14 @@ test("says automation isn't available; verification is labelled test-only and ne
   await page.goto(`/tickets/${ticket.id}`)
   const section = workflow(page)
   await expect(section.getByTestId("automation-unavailable")).toContainText(
-    "Automation isn't available yet.",
+    "Full campaign automation isn't available yet.",
   )
+  // Scout exists since DV-005A; the rest of the campaign doesn't.
   await expect(section.getByTestId("automation-unavailable")).toContainText(
-    "Scout (DV-005A), Quill (DV-005B), Pixel (DV-005C), Vera (DV-006A)",
+    "Quill (DV-005B), Pixel (DV-005C), Vera (DV-006A)",
+  )
+  await expect(section.getByTestId("automation-unavailable")).not.toContainText(
+    "Scout (DV-005A)",
   )
   await expect(
     page.getByRole("button", { name: /start (ai )?processing/i }),
@@ -104,7 +108,7 @@ test("says automation isn't available; verification is labelled test-only and ne
   )
   await expect(section.getByText("No runs yet.")).toBeVisible()
 
-  // A production run is refused by the server with an actionable reason.
+  // A full-campaign run is refused by the server with an actionable reason.
   const refused = await request.post(`/api/tickets/${ticket.id}/runs`, {
     data: {
       requestId: rid(),
@@ -114,7 +118,7 @@ test("says automation isn't available; verification is labelled test-only and ne
   })
   expect(refused.status()).toBe(503)
   expect((await refused.json()).message).toMatch(
-    /Automation isn't available yet.*Nothing was started/,
+    /Full campaign automation isn't available yet.*Nothing was started/,
   )
 })
 

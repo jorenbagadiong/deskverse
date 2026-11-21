@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm"
 import {
   bigint,
+  boolean,
   check,
   foreignKey,
   index,
@@ -25,6 +26,8 @@ import type { PublishingPreferences } from "@/lib/tickets/types"
  *
  * DV-004A: app_metadata. DV-004B: Affiliate Tickets. DV-004C: the campaign
  * orchestrator (runs, frozen inputs, tasks, attempts, results, events).
+ * DV-005A: Scout research (reports, sources, evidence, claims) and worker
+ * check-ins.
  *
  * The ticket tables hold the OWNER'S input only. Future workers (Scout,
  * Quill, Pixel…) will write their results to separate deliverable tables
@@ -573,7 +576,10 @@ export const taskResults = pgTable(
       .primaryKey()
       .references(() => workerTasks.id, { onDelete: "restrict" }),
     runId: uuid("run_id").notNull(),
-    /** "verification" in DV-004C: a deterministic test result, never real content. */
+    /**
+     * "verification": a deterministic test result, never real content.
+     * "scout_research" (DV-005A): a compact reference to a scout_reports row.
+     */
     kind: text("kind").notNull(),
     schemaVersion: integer("schema_version").notNull(),
     payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
@@ -581,7 +587,10 @@ export const taskResults = pgTable(
     createdAt: timestamps.createdAt,
   },
   (t) => [
-    check("task_results_kind_check", sql`${t.kind} IN ('verification')`),
+    check(
+      "task_results_kind_check",
+      sql`${t.kind} IN ('verification', 'scout_research')`,
+    ),
     check(
       "task_results_size_check",
       sql`pg_column_size(${t.payload}) <= 16384`,
@@ -624,6 +633,326 @@ export const runEvents = pgTable(
   ],
 )
 
+/**
+ * Worker processes that checked in recently (DV-005A), so the UI can say
+ * whether one is running. Informational only: never used for claiming.
+ */
+export const orchestratorWorkers = pgTable(
+  "orchestrator_workers",
+  {
+    workerId: text("worker_id").primaryKey(),
+    pid: integer("pid").notNull(),
+    stages: text("stages").array().notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    check(
+      "orchestrator_workers_id_check",
+      sql`char_length(${t.workerId}) <= 200`,
+    ),
+    check(
+      "orchestrator_workers_stages_check",
+      sql`cardinality(${t.stages}) <= 20`,
+    ),
+  ],
+)
+
+// ---------------------------------------------------------------------------
+// Scout research (DV-005A). Immutable once written (triggers in 0003).
+// ---------------------------------------------------------------------------
+
+const SOURCE_OUTCOME_SQL = `'ok', 'invalid_url', 'blocked_address', 'dns_failed', 'robots_disallowed', 'robots_unavailable', 'redirect_refused', 'too_many_redirects', 'login_required', 'paywall', 'captcha', 'forbidden', 'not_found', 'rate_limited', 'server_error', 'http_error', 'timeout', 'network_error', 'unsupported_type', 'too_large', 'javascript_required', 'product_mismatch', 'no_content', 'affiliate_link_skipped', 'not_attempted'`
+
+/**
+ * One research brief for one product snapshot, written by exactly one
+ * Scout task (in the transaction that completes it). `report_version`
+ * counts the briefs for that product across runs: 1, 2, 3…
+ */
+export const scoutReports = pgTable(
+  "scout_reports",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    runId: uuid("run_id").notNull(),
+    ticketId: uuid("ticket_id").notNull(),
+    taskId: uuid("task_id").notNull().unique(),
+    snapshotId: uuid("snapshot_id").notNull(),
+    /** The source product (no foreign key: reports outlive edits and removals). */
+    productId: uuid("product_id").notNull(),
+    reportVersion: integer("report_version").notNull(),
+    /** Brief format version (1 = "scout-brief/1"). */
+    schemaVersion: integer("schema_version").notNull(),
+    status: text("status").notNull(),
+    extractionMode: text("extraction_mode").notNull(),
+    /** The task fence that wrote it (the lease holder at commit time). */
+    fence: bigint("fence", { mode: "number" }).notNull(),
+    snapshotChecksum: text("snapshot_checksum").notNull(),
+    /** SHA-256 of the canonical report document (brief, sources, evidence, claims, linkage). */
+    checksum: text("checksum").notNull(),
+    brief: jsonb("brief").$type<Record<string, unknown>>().notNull(),
+    createdAt: timestamps.createdAt,
+  },
+  (t) => [
+    foreignKey({
+      name: "scout_reports_task_fk",
+      columns: [t.taskId, t.runId],
+      foreignColumns: [workerTasks.id, workerTasks.runId],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "scout_reports_snapshot_fk",
+      columns: [t.snapshotId, t.runId],
+      foreignColumns: [runProductSnapshots.id, runProductSnapshots.runId],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "scout_reports_run_fk",
+      columns: [t.runId, t.ticketId],
+      foreignColumns: [campaignRuns.id, campaignRuns.ticketId],
+    }).onDelete("restrict"),
+    unique("scout_reports_product_version_unique").on(
+      t.productId,
+      t.reportVersion,
+    ),
+    check("scout_reports_version_check", sql`${t.reportVersion} >= 1`),
+    check("scout_reports_schema_check", sql`${t.schemaVersion} = 1`),
+    check(
+      "scout_reports_status_check",
+      sql`${t.status} IN ('complete', 'insufficient_evidence')`,
+    ),
+    check(
+      "scout_reports_extraction_check",
+      sql`${t.extractionMode} IN ('deterministic', 'deterministic+ollama')`,
+    ),
+    check(
+      "scout_reports_checksum_check",
+      sql`${t.checksum} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      "scout_reports_snapshot_checksum_check",
+      sql`${t.snapshotChecksum} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      "scout_reports_brief_check",
+      sql`pg_column_size(${t.brief}) <= 131072`,
+    ),
+    index("scout_reports_ticket_idx").on(t.ticketId, t.createdAt),
+    index("scout_reports_run_idx").on(t.runId),
+  ],
+)
+
+/** What happened when Scout tried each reference (no page bodies are stored). */
+export const scoutSources = pgTable(
+  "scout_sources",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    reportId: uuid("report_id")
+      .notNull()
+      .references(() => scoutReports.id, { onDelete: "restrict" }),
+    key: text("key").notNull(),
+    position: integer("position").notNull(),
+    referenceKind: text("reference_kind").notNull(),
+    label: text("label").notNull().default(""),
+    requestedUrl: text("requested_url").notNull(),
+    finalUrl: text("final_url"),
+    title: text("title"),
+    outcome: text("outcome").notNull(),
+    httpStatus: integer("http_status"),
+    contentType: text("content_type"),
+    byteCount: integer("byte_count").notNull().default(0),
+    /** SHA-256 of the bytes received (the page itself isn't kept). */
+    contentSha256: text("content_sha256"),
+    retrievedAt: timestamp("retrieved_at", { withTimezone: true }),
+    trust: text("trust").notNull(),
+    identified: boolean("identified").notNull(),
+    transport: text("transport"),
+    detail: text("detail"),
+  },
+  (t) => [
+    unique("scout_sources_id_report_unique").on(t.id, t.reportId),
+    unique("scout_sources_report_key_unique").on(t.reportId, t.key),
+    check("scout_sources_key_check", sql`${t.key} ~ '^S[0-9]{1,2}$'`),
+    check("scout_sources_position_check", sql`${t.position} BETWEEN 0 AND 99`),
+    check(
+      "scout_sources_kind_check",
+      sql`${t.referenceKind} IN ('listing', 'manufacturer', 'review', 'demo_video', 'other')`,
+    ),
+    check("scout_sources_label_check", maxLength("label", 200)),
+    check(
+      "scout_sources_url_check",
+      sql`char_length(${t.requestedUrl}) <= 2048 AND (${t.finalUrl} IS NULL OR char_length(${t.finalUrl}) <= 2048)`,
+    ),
+    check(
+      "scout_sources_title_check",
+      sql`${t.title} IS NULL OR char_length(${t.title}) <= 300`,
+    ),
+    check(
+      "scout_sources_outcome_check",
+      sql.raw(`"outcome" IN (${SOURCE_OUTCOME_SQL})`),
+    ),
+    check(
+      "scout_sources_status_check",
+      sql`${t.httpStatus} IS NULL OR ${t.httpStatus} BETWEEN 100 AND 599`,
+    ),
+    check(
+      "scout_sources_type_check",
+      sql`${t.contentType} IS NULL OR char_length(${t.contentType}) <= 100`,
+    ),
+    check(
+      "scout_sources_bytes_check",
+      sql`${t.byteCount} BETWEEN 0 AND 20971520`,
+    ),
+    check(
+      "scout_sources_sha_check",
+      sql`${t.contentSha256} IS NULL OR ${t.contentSha256} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      "scout_sources_trust_check",
+      sql`${t.trust} IN ('manufacturer', 'seller_listing', 'independent_review', 'unknown')`,
+    ),
+    check(
+      "scout_sources_transport_check",
+      sql`${t.transport} IS NULL OR ${t.transport} IN ('https', 'http')`,
+    ),
+    check(
+      "scout_sources_detail_check",
+      sql`${t.detail} IS NULL OR char_length(${t.detail}) <= 300`,
+    ),
+    // Only a page that was read can be matched to the product or carry a checksum.
+    check(
+      "scout_sources_read_check",
+      sql`(${t.outcome} = 'ok') = ${t.identified} AND (${t.contentSha256} IS NULL OR ${t.retrievedAt} IS NOT NULL)`,
+    ),
+  ],
+)
+
+/** A short passage (or structured-data fragment) from one source, as cited by claims. */
+export const scoutEvidence = pgTable(
+  "scout_evidence",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    reportId: uuid("report_id").notNull(),
+    sourceId: uuid("source_id").notNull(),
+    key: text("key").notNull(),
+    method: text("method").notNull(),
+    location: text("location").notNull(),
+    passage: text("passage").notNull(),
+    statement: text("statement").notNull(),
+    attribute: text("attribute"),
+    value: text("value"),
+    /** The local model that proposed it (validated against the passage), if any. */
+    model: text("model"),
+  },
+  (t) => [
+    foreignKey({
+      name: "scout_evidence_source_fk",
+      columns: [t.sourceId, t.reportId],
+      foreignColumns: [scoutSources.id, scoutSources.reportId],
+    }).onDelete("restrict"),
+    unique("scout_evidence_id_report_unique").on(t.id, t.reportId),
+    unique("scout_evidence_report_key_unique").on(t.reportId, t.key),
+    check("scout_evidence_key_check", sql`${t.key} ~ '^E[0-9]{1,3}$'`),
+    check(
+      "scout_evidence_method_check",
+      sql`${t.method} IN ('json-ld', 'html-meta', 'html-table', 'html-list', 'html-text', 'text-plain', 'ollama')`,
+    ),
+    check("scout_evidence_location_check", maxLength("location", 200)),
+    check(
+      "scout_evidence_passage_check",
+      sql`char_length(${t.passage}) BETWEEN 1 AND 600`,
+    ),
+    check("scout_evidence_statement_check", maxLength("statement", 300)),
+    check(
+      "scout_evidence_fields_check",
+      sql`(${t.attribute} IS NULL OR char_length(${t.attribute}) <= 80) AND (${t.value} IS NULL OR char_length(${t.value}) <= 200) AND (${t.model} IS NULL OR char_length(${t.model}) <= 120)`,
+    ),
+    check(
+      "scout_evidence_model_check",
+      sql`(${t.method} = 'ollama') = (${t.model} IS NOT NULL)`,
+    ),
+    index("scout_evidence_report_idx").on(t.reportId),
+  ],
+)
+
+/** One assessed claim (the owner's, or a fact stated by the sources). */
+export const scoutClaims = pgTable(
+  "scout_claims",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    reportId: uuid("report_id")
+      .notNull()
+      .references(() => scoutReports.id, { onDelete: "restrict" }),
+    key: text("key").notNull(),
+    origin: text("origin").notNull(),
+    kind: text("kind").notNull(),
+    attribute: text("attribute"),
+    value: text("value"),
+    statement: text("statement").notNull(),
+    status: text("status").notNull(),
+    reason: text("reason").notNull(),
+    topic: text("topic"),
+    timeSensitive: boolean("time_sensitive").notNull(),
+  },
+  (t) => [
+    unique("scout_claims_id_report_unique").on(t.id, t.reportId),
+    unique("scout_claims_report_key_unique").on(t.reportId, t.key),
+    check("scout_claims_key_check", sql`${t.key} ~ '^C[0-9]{1,3}$'`),
+    check("scout_claims_origin_check", sql`${t.origin} IN ('owner', 'source')`),
+    check(
+      "scout_claims_kind_check",
+      sql`${t.kind} IN ('attribute', 'statement', 'identity')`,
+    ),
+    check(
+      "scout_claims_status_check",
+      sql`${t.status} IN ('supported', 'conflicting', 'unverified', 'insufficient_evidence')`,
+    ),
+    check(
+      "scout_claims_text_check",
+      sql`char_length(${t.statement}) BETWEEN 1 AND 500 AND char_length(${t.reason}) <= 300 AND (${t.attribute} IS NULL OR char_length(${t.attribute}) <= 80) AND (${t.value} IS NULL OR char_length(${t.value}) <= 200)`,
+    ),
+    check(
+      "scout_claims_topic_check",
+      sql`${t.topic} IS NULL OR ${t.topic} IN ('price', 'discount', 'commission', 'rating', 'performance', 'health', 'certification', 'warranty', 'delivery', 'stock', 'superiority')`,
+    ),
+    // A source fact exists only because a source stated it.
+    check(
+      "scout_claims_source_status_check",
+      sql`${t.origin} = 'owner' OR ${t.status} IN ('supported', 'conflicting')`,
+    ),
+    index("scout_claims_report_idx").on(t.reportId),
+  ],
+)
+
+/** Which evidence a claim rests on, and how. Same report only (composite keys). */
+export const scoutClaimEvidence = pgTable(
+  "scout_claim_evidence",
+  {
+    reportId: uuid("report_id").notNull(),
+    claimId: uuid("claim_id").notNull(),
+    evidenceId: uuid("evidence_id").notNull(),
+    relationship: text("relationship").notNull(),
+  },
+  (t) => [
+    primaryKey({
+      name: "scout_claim_evidence_pk",
+      columns: [t.claimId, t.evidenceId],
+    }),
+    foreignKey({
+      name: "scout_claim_evidence_claim_fk",
+      columns: [t.claimId, t.reportId],
+      foreignColumns: [scoutClaims.id, scoutClaims.reportId],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "scout_claim_evidence_evidence_fk",
+      columns: [t.evidenceId, t.reportId],
+      foreignColumns: [scoutEvidence.id, scoutEvidence.reportId],
+    }).onDelete("restrict"),
+    check(
+      "scout_claim_evidence_relationship_check",
+      sql`${t.relationship} IN ('supports', 'contradicts', 'context')`,
+    ),
+    index("scout_claim_evidence_evidence_idx").on(t.evidenceId),
+  ],
+)
+
 export const schema = {
   appMetadata,
   affiliateTickets,
@@ -638,4 +967,10 @@ export const schema = {
   taskAttempts,
   taskResults,
   runEvents,
+  orchestratorWorkers,
+  scoutReports,
+  scoutSources,
+  scoutEvidence,
+  scoutClaims,
+  scoutClaimEvidence,
 }

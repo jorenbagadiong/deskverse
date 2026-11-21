@@ -1,12 +1,12 @@
 # E2E environment notes: 3D office tests in GPU-less WSL
 
-_Recorded at the DV-003A checkpoint and re-confirmed at DV-003B, DV-003C, DV-003D1, DV-003D2, DV-003D3, DV-004A, DV-004B and DV-004C (2026-11-22)._
+_Recorded at the DV-003A checkpoint and re-confirmed at DV-003B, DV-003C, DV-003D1, DV-003D2, DV-003D3, DV-004A, DV-004B, DV-004C and DV-005A (2026-11-22)._
 
 ## Summary
 
 In WSL2 without a desktop Chrome, `E2E_CHANNEL=chromium yarn test:e2e` runs
 the suite in Playwright's headless Chromium. Every test that renders the 3D
-office then fails, **before and after DV-003A, DV-003B, DV-003C, DV-003D1, DV-003D2, DV-003D3, DV-004A, DV-004B and DV-004C**. The cause is the test
+office then fails, **before and after DV-003A, DV-003B, DV-003C, DV-003D1, DV-003D2, DV-003D3, DV-004A, DV-004B, DV-004C and DV-005A**. The cause is the test
 environment, not application code. All other tests pass, including every
 Pixel Studio test.
 
@@ -22,6 +22,7 @@ Pixel Studio test.
 | DV-004A on `main` (base `3a9e917`), full suite     |     65 |     24 |                                24 / 24 |
 | DV-004B on `main` (base `81fca88`), ordinary suite |     69 |     24 |                                24 / 24 |
 | DV-004C on `main` (base `8a69223`), ordinary suite |     69 |     24 |                                24 / 24 |
+| DV-005A on `main` (base `f0f6690`), ordinary suite |     69 |     24 |                                24 / 24 |
 
 All runs fail the same 24 office tests. At DV-003A, the 22 passing tests
 were the 17 Pixel Studio tests, the 4 page smoke tests and the no-WebGL
@@ -61,7 +62,11 @@ none of them render the 3D office. At DV-004C the database suite has 18
 tests (adding 7 Workflow tests in `e2e/tickets-workflow.spec.ts`, run with a
 real orchestrator worker process): 18 passed. The ordinary suite is
 unchanged: 69 passed. No new failures
-appeared.
+appeared. At DV-005A the database suite has 24 tests (adding 6 Scout
+Research tests in `e2e/tickets-research.spec.ts`; a real worker reads local
+fixture sites through Scout's test network, never the internet): 24 passed.
+The ordinary suite is unchanged: 69 passed, 24 failed (the same office
+tests). Both suites need `E2E_CHANNEL=chromium` in this WSL setup.
 
 ## Environment
 

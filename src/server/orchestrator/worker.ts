@@ -9,6 +9,8 @@ import {
 } from "@/lib/orchestrator/model"
 import {
   acknowledgeCancel,
+  checkInWorker,
+  checkOutWorker,
   claimTask,
   completeTask,
   DEFAULT_LIMITS,
@@ -76,6 +78,7 @@ export class Worker {
   private readonly log: (line: string) => void
   private readonly active = new Map<string, Active>()
   private stopping = false
+  private lastCheckIn = 0
   private loop: Promise<void> | null = null
   private wake: (() => void) | null = null
 
@@ -103,6 +106,16 @@ export class Worker {
   private async run() {
     const stages = [...this.registry.keys()]
     while (!this.stopping) {
+      // Check in at most every 5 s so the UI can tell whether a worker runs.
+      if (Date.now() - this.lastCheckIn >= 5_000)
+        await checkInWorker(this.pool, {
+          workerId: this.id,
+          pid: process.pid,
+          stages,
+        }).then(
+          () => (this.lastCheckIn = Date.now()),
+          () => {},
+        )
       try {
         await recoverExpiredLeases(this.pool, this.retry)
         while (!this.stopping && this.active.size < this.slots) {
@@ -180,6 +193,7 @@ export class Worker {
         runId: claim.runId,
         stage: claim.stage,
         attempt: claim.attempt,
+        maxAttempts: claim.maxAttempts,
         idempotencyKey: claim.idempotencyKey,
         snapshot: claim.snapshot,
         params: claim.params,
@@ -188,14 +202,37 @@ export class Worker {
       if (entry.reason) throw new HandlerAborted(entry.reason)
       const commit = () =>
         outcome.status === "completed"
-          ? completeTask(this.pool, claim, outcome.result)
+          ? completeTask(this.pool, claim, outcome.result, outcome.deliverable)
           : failTask(
               this.pool,
               claim,
-              { kind: outcome.status, message: outcome.message },
+              {
+                kind: outcome.status,
+                message: outcome.message,
+                retryAfterMs:
+                  outcome.status === "transient" ? outcome.retryAfterMs : null,
+                details: outcome.details,
+              },
               this.retry,
             )
-      const result = await this.persist(commit, () => leaseDeadline)
+      let result = await this.persist(commit, () => leaseDeadline)
+      if (result === "rejected")
+        // Deterministic refusal (e.g. a deliverable failed a database check):
+        // retrying the same commit can't help, so record a permanent failure.
+        result = await this.persist(
+          () =>
+            failTask(
+              this.pool,
+              claim,
+              {
+                kind: "permanent",
+                message:
+                  "The result was refused by a database check and wasn't saved.",
+              },
+              this.retry,
+            ),
+          () => leaseDeadline,
+        )
       this.log(
         `[worker ${this.id}] ${claim.stage} ${claim.taskId.slice(0, 8)} attempt ${claim.attempt}: ${outcome.status} (${result})`,
       )
@@ -234,7 +271,11 @@ export class Worker {
     }
   }
 
-  /** Retries a commit while this worker still holds the lease; then gives up (fenced). */
+  /**
+   * Retries a commit while this worker still holds the lease; then gives up
+   * (fenced). Only connection-type errors are retried: a commit the
+   * database refuses (constraint, data or SQL error) returns "rejected".
+   */
   private async persist(
     commit: () => Promise<unknown>,
     deadline: () => number,
@@ -242,7 +283,13 @@ export class Worker {
     for (;;) {
       try {
         return await commit()
-      } catch {
+      } catch (error) {
+        if (!retryableDatabaseError(error)) {
+          this.log(
+            `[worker ${this.id}] the database refused a commit (${String((error as { code?: unknown }).code ?? "error")}); not retrying it`,
+          )
+          return "rejected"
+        }
         if (Date.now() >= deadline()) {
           this.log(
             `[worker ${this.id}] couldn't record the outcome before the lease ran out; the task will be recovered`,
@@ -276,5 +323,17 @@ export class Worker {
       }
       await all()
     }
+    await checkOutWorker(this.pool, this.id).catch(() => {})
   }
+}
+
+/** Connection loss, shutdown, overload, deadlock: worth retrying. Anything else isn't. */
+export function retryableDatabaseError(error: unknown) {
+  const e = error as { code?: unknown; message?: unknown } | null
+  const code = typeof e?.code === "string" ? e.code : null
+  if (code === null)
+    return /connect|terminat|timeout|closed|ECONN|socket/i.test(
+      String(e?.message ?? ""),
+    )
+  return /^(08|53|57|40)/.test(code) || /^E[A-Z]+$/.test(code)
 }

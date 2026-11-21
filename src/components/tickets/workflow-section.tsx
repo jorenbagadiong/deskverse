@@ -36,6 +36,8 @@ import {
 import {
   runEndpoint,
   runsEndpoint,
+  RUNS_CHANGED_EVENT,
+  runTitle,
   type RunDetail,
   type RunSummary,
   type WorkflowAvailability,
@@ -46,9 +48,11 @@ import { cn } from "@/lib/utils"
 
 /**
  * The ticket's Workflow section (DV-004C). Shows only persisted state from
- * PostgreSQL; the browser never runs or simulates work. Production
- * automation isn't available yet, and verification runs (deterministic
- * test steps, test environment only) are labelled as such everywhere.
+ * PostgreSQL; the browser never runs or simulates work. The full campaign
+ * isn't available yet; research-only runs (DV-005A) are started from the
+ * Scout Research section and shown here with their controls. Verification
+ * runs (deterministic test steps, test environment only) are labelled as
+ * such everywhere.
  */
 
 const TASK_TONE: Record<TaskStatus, string> = {
@@ -121,6 +125,12 @@ export function WorkflowSection({ ticket }: { ticket: TicketDetail }) {
 
   const refresh = () => setTick((n) => n + 1)
 
+  useEffect(() => {
+    const onChange = () => setTick((n) => n + 1)
+    window.addEventListener(RUNS_CHANGED_EVENT, onChange)
+    return () => window.removeEventListener(RUNS_CHANGED_EVENT, onChange)
+  }, [])
+
   async function act(key: string, url: string, body: unknown) {
     setBusy(key)
     setActionError(null)
@@ -128,6 +138,7 @@ export function WorkflowSection({ ticket }: { ticket: TicketDetail }) {
     setBusy(null)
     if (!result.ok) setActionError(result.error)
     refresh()
+    window.dispatchEvent(new Event(RUNS_CHANGED_EVENT))
     return result.ok
   }
 
@@ -202,19 +213,21 @@ export function WorkflowSection({ ticket }: { ticket: TicketDetail }) {
               className="rounded-xl bg-surface-sunken p-4 text-sm ring-1 ring-border"
             >
               <p className="font-semibold">
-                Automation isn&apos;t available yet.
+                Full campaign automation isn&apos;t available yet.
               </p>
               <p className="mt-1 text-muted-foreground">
-                Processing a ticket needs the AI team&apos;s real steps, which
-                aren&apos;t built yet:{" "}
+                A full campaign needs the rest of the AI team, which isn&apos;t
+                built yet:{" "}
                 {state.availability.missing
                   .map(
                     (m) =>
                       `${m.stage.split(".")[0][0].toUpperCase()}${m.stage.split(".")[0].slice(1)} (${m.milestone.split(" ")[0]})`,
                   )
                   .join(", ")}
-                . Nothing runs from this page, and marking a ticket Ready only
-                makes it eligible for later.
+                .{" "}
+                {state.availability.research
+                  ? "Scout research runs on its own: use Scout Research below."
+                  : "Scout research is switched off (see Scout Research below)."}
               </p>
             </div>
           ) : null}
@@ -276,9 +289,7 @@ export function WorkflowSection({ ticket }: { ticket: TicketDetail }) {
             >
               <header className="flex flex-wrap items-center gap-2">
                 <h3 id="latest-run-title" className="font-semibold">
-                  {run.mode === "verification"
-                    ? "Verification run (test only)"
-                    : "Workflow run"}
+                  {runTitle(run)}
                 </h3>
                 <span
                   data-testid="run-status"
@@ -538,10 +549,7 @@ export function WorkflowSection({ ticket }: { ticket: TicketDetail }) {
                     className="flex justify-between gap-4 text-muted-foreground"
                   >
                     <span>
-                      {r.mode === "verification"
-                        ? "Verification run (test only)"
-                        : "Run"}{" "}
-                      · {RUN_STATUS_LABEL[r.status]}
+                      {runTitle(r)} · {RUN_STATUS_LABEL[r.status]}
                     </span>
                     <time dateTime={r.createdAt}>
                       {formatDate(r.createdAt)}

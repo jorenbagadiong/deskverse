@@ -7,8 +7,10 @@ export type ResourceClass = "general" | "cpu" | "render"
 export type RecoveryPolicy = "retry" | "inspect"
 
 export interface WorkflowAvailability {
-  /** Real Scout → Quill → Pixel → Vera processing. False until DV-005/006. */
+  /** The full Scout → Quill → Pixel → Vera campaign. False until DV-005C/006A. */
   production: boolean
+  /** Research-only runs (DV-005A, workflow "scout-research-v1"). */
+  research: boolean
   /** What's missing, for the explanation shown to the owner. */
   missing: { stage: string; milestone: string }[]
   /**
@@ -45,7 +47,7 @@ export interface RunTask {
   eligibleAt: string
   startedAt: string | null
   finishedAt: string | null
-  /** Whether a committed (verification) result exists. */
+  /** Whether a committed result exists (verification result or Scout report). */
   hasResult: boolean
 }
 
@@ -76,3 +78,13 @@ export const runsEndpoint = (ticketId: string) =>
   `/api/tickets/${encodeURIComponent(ticketId)}/runs`
 export const runEndpoint = (ticketId: string, runId: string) =>
   `${runsEndpoint(ticketId)}/${encodeURIComponent(runId)}`
+
+/** Fired in the browser after a run is started or controlled, so every section refreshes. */
+export const RUNS_CHANGED_EVENT = "deskverse:runs-changed"
+
+/** How a run is described to the owner. */
+export function runTitle(run: { mode: RunMode; workflow: string }) {
+  if (run.mode === "verification") return "Verification run (test only)"
+  if (run.workflow === "scout-research-v1") return "Research run (Scout only)"
+  return "Workflow run"
+}

@@ -22,11 +22,18 @@ import type {
   RunSummary,
 } from "@/lib/orchestrator/types"
 import {
+  MISSING_PRODUCTION_CAPABILITIES,
   PRODUCTION_WORKFLOW,
+  RESEARCH_WORKFLOW,
   stageLabel,
   VERIFICATION_WORKFLOW,
+  WORKFLOWS,
+  workflowById,
+  type CommitContext,
+  type ResultKind,
   type WorkflowDefinition,
 } from "@/server/orchestrator/workflows"
+import { sameDestination } from "@/server/scout/net/url"
 
 /**
  * Durable orchestration state in PostgreSQL (DV-004C).
@@ -54,6 +61,7 @@ export class OrchestratorError extends Error {
       | "active-run"
       | "invalid-transition"
       | "unavailable"
+      | "invalid"
       | "limit",
     message: string,
   ) {
@@ -149,10 +157,17 @@ export interface PlanInput {
   ticketVersion: number
   requestId: string
   mode: RunMode
-  /** Production runs need real handlers (none exist in DV-004C). */
+  /**
+   * The task graph to use (DV-005A). Defaults: verification →
+   * "verification-v1"; production → "campaign-v1" (the full campaign).
+   */
+  workflow?: string
+  /** The full campaign needs every stage's production handler. */
   productionAvailable: boolean
   /** Verification runs are only allowed in an isolated test environment. */
   verificationAllowed: boolean
+  /** Other production workflows that can run here (e.g. "scout-research-v1"). */
+  availableWorkflows?: readonly string[]
   verification?: VerificationOptions
   retry?: Partial<RetryPolicy>
 }
@@ -163,21 +178,61 @@ export interface PlanInput {
  * lock DV-004B's edits take), so the snapshot matches `ticketVersion`
  * exactly. A repeated requestId returns the original run.
  */
-export async function planRun(
-  pool: pg.Pool,
-  input: PlanInput,
-): Promise<{ runId: string; created: boolean }> {
-  if (input.mode === "production" && !input.productionAvailable)
+const NAMES: Record<string, string> = {
+  "quill.script": "Quill",
+  "pixel.render": "Pixel",
+  "vera.review": "Vera",
+}
+
+export const CAMPAIGN_UNAVAILABLE = `Full campaign automation isn't available yet: ${MISSING_PRODUCTION_CAPABILITIES.map(
+  (c, i, all) =>
+    `${i === all.length - 1 ? "and " : ""}${NAMES[c.stage] ?? c.stage} (${c.milestone.split(" ")[0]})`,
+).join(
+  ", ",
+)} aren't built. Nothing was started. Research-only runs (Scout) are available separately.`
+
+export const RESEARCH_UNAVAILABLE =
+  "Scout research isn't switched on: source retrieval is off. Set DESKVERSE_SCOUT_RETRIEVAL=on in .env.local, restart the app and the worker, then try again. Nothing was started."
+
+/** Picks and validates the run's workflow (explicit, never implied by the handlers present). */
+function selectWorkflow(input: PlanInput): WorkflowDefinition {
+  const id =
+    input.workflow ??
+    (input.mode === "verification"
+      ? VERIFICATION_WORKFLOW.id
+      : PRODUCTION_WORKFLOW.id)
+  const workflow = workflowById(id)
+  if (!workflow || workflow.mode !== input.mode)
     throw new OrchestratorError(
-      "unavailable",
-      "Automation isn't available yet: Scout (DV-005A), Quill (DV-005B), Pixel (DV-005C) and Vera (DV-006A) aren't built. Nothing was started.",
+      "invalid",
+      `There's no ${input.mode} workflow called “${id.slice(0, 40)}”.`,
     )
-  if (input.mode === "verification" && !input.verificationAllowed)
+  if (workflow.mode === "verification" && !input.verificationAllowed)
     throw new OrchestratorError(
       "unavailable",
       "Verification runs only run in the isolated test environment (yarn orchestrator:verify, yarn test:e2e:db).",
     )
-  const workflow: WorkflowDefinition = VERIFICATION_WORKFLOW
+  if (workflow.id === PRODUCTION_WORKFLOW.id && !input.productionAvailable)
+    throw new OrchestratorError("unavailable", CAMPAIGN_UNAVAILABLE)
+  if (
+    workflow.mode === "production" &&
+    workflow.id !== PRODUCTION_WORKFLOW.id &&
+    !(input.availableWorkflows ?? []).includes(workflow.id)
+  )
+    throw new OrchestratorError(
+      "unavailable",
+      workflow.id === RESEARCH_WORKFLOW.id
+        ? RESEARCH_UNAVAILABLE
+        : `${workflow.title} isn't available here. Nothing was started.`,
+    )
+  return workflow
+}
+
+export async function planRun(
+  pool: pg.Pool,
+  input: PlanInput,
+): Promise<{ runId: string; created: boolean }> {
+  const workflow = selectWorkflow(input)
   const maxAttempts = Math.min(
     Math.max(input.retry?.maxAttempts ?? DEFAULT_RETRY_POLICY.maxAttempts, 1),
     MAX_ATTEMPTS_LIMIT,
@@ -259,6 +314,22 @@ export async function planRun(
         [input.ticketId],
       )
     ).rows
+    if (workflow.id === RESEARCH_WORKFLOW.id) {
+      const researchable = products.filter(
+        (p) =>
+          String(p.name ?? "").trim() !== "" &&
+          references.some(
+            (r) =>
+              r.product_id === p.id &&
+              !sameDestination(r.url, String(p.affiliate_url ?? "")),
+          ),
+      )
+      if (researchable.length === 0)
+        throw new OrchestratorError(
+          "not-ready",
+          "None of the products has a research reference besides its affiliate link. Add a public product page (the manufacturer's is best) to at least one product, mark the ticket Ready, then start research.",
+        )
+    }
 
     const run = (
       await c.query<{ id: string }>(
@@ -335,10 +406,12 @@ export async function planRun(
         const fault = input.verification?.faults?.find(
           (f) => f.product === product.position && f.stage === stage.stage,
         )
-        const params: Record<string, unknown> = {
-          durationMs: input.verification?.durationMs ?? 200,
-        }
-        if (fault) params.fail = { kind: fault.kind, times: fault.times ?? 1 }
+        const params: Record<string, unknown> =
+          workflow.mode === "verification"
+            ? { durationMs: input.verification?.durationMs ?? 200 }
+            : {}
+        if (fault && workflow.mode === "verification")
+          params.fail = { kind: fault.kind, times: fault.times ?? 1 }
         const task = (
           await c.query<{ id: string }>(
             `INSERT INTO worker_tasks (run_id, ticket_id, snapshot_id, stage, status, resource_class, recovery_policy, idempotency_key, params, max_attempts)
@@ -373,6 +446,7 @@ export async function planRun(
       "run_created",
       {
         mode: input.mode,
+        workflow: workflow.id,
         products: products.length,
         tasks: taskCount,
         ticketVersion: ticket.version,
@@ -520,6 +594,7 @@ export interface Claim {
   stage: string
   resourceClass: ResourceClass
   attempt: number
+  maxAttempts: number
   fence: number
   workerId: string
   leaseMs: number
@@ -584,7 +659,7 @@ export async function claimTask(
                 lease_owner = $2, lease_expires_at = clock_timestamp() + ($3::int * interval '1 millisecond'),
                 started_at = coalesce(started_at, now()), failure_kind = NULL, failure_message = NULL, updated_at = now()
           WHERE id = $1 AND status IN ('queued', 'retry_wait') AND eligible_at <= now()
-          RETURNING id, run_id, ticket_id, stage, resource_class, attempts, fence, idempotency_key, params, snapshot_id`,
+          RETURNING id, run_id, ticket_id, stage, resource_class, attempts, max_attempts, fence, idempotency_key, params, snapshot_id`,
         [candidate.id, opts.workerId, opts.leaseMs],
       )
     ).rows[0]
@@ -629,6 +704,7 @@ export async function claimTask(
       stage: claimed.stage,
       resourceClass: claimed.resource_class,
       attempt: claimed.attempts,
+      maxAttempts: claimed.max_attempts,
       fence: Number(claimed.fence),
       workerId: opts.workerId,
       leaseMs: opts.leaseMs,
@@ -717,22 +793,46 @@ async function markCancelled(c: Client, claim: Claim) {
   await refreshRun(c, claim.runId)
 }
 
-/** Commits a result. A result for the same task can never be committed twice. */
+/**
+ * Commits a result. A result for the same task can never be committed
+ * twice. A real deliverable (DV-005A) is written by `deliverable.persist`
+ * inside this same transaction, after the lease/fence check and while the
+ * task is still "running", so a stale worker can't publish anything and a
+ * crash at any point leaves either everything or nothing.
+ */
 export async function completeTask(
   pool: pg.Pool,
   claim: Claim,
   result: Record<string, unknown>,
+  deliverable?: {
+    kind: ResultKind
+    persist(c: Client, commit: CommitContext): Promise<Record<string, unknown>>
+  },
 ): Promise<CommitOutcome> {
   return transaction(pool, (c) =>
     withOwnLease(c, claim, async () => {
+      const payload = deliverable
+        ? await deliverable.persist(c, {
+            taskId: claim.taskId,
+            runId: claim.runId,
+            ticketId: claim.ticketId,
+            fence: claim.fence,
+          })
+        : result
       await c.query(
         `UPDATE worker_tasks SET status = 'completed', lease_owner = NULL, lease_expires_at = NULL,
                 finished_at = now(), updated_at = now() WHERE ${OWN_LEASE}`,
         [claim.taskId, claim.fence, claim.workerId],
       )
       await c.query(
-        "INSERT INTO task_results (task_id, run_id, kind, schema_version, payload, fence) VALUES ($1, $2, 'verification', 1, $3, $4)",
-        [claim.taskId, claim.runId, result, claim.fence],
+        "INSERT INTO task_results (task_id, run_id, kind, schema_version, payload, fence) VALUES ($1, $2, $5, 1, $3, $4)",
+        [
+          claim.taskId,
+          claim.runId,
+          payload,
+          claim.fence,
+          deliverable?.kind ?? "verification",
+        ],
       )
       await finishAttempt(c, claim, "succeeded")
       await event(
@@ -748,10 +848,28 @@ export async function completeTask(
 }
 
 /** Records a failed attempt; the next state follows the retry policy. */
+/** A source's Retry-After is honoured up to this long (longer waits aren't scheduled). */
+export const MAX_RETRY_AFTER_MS = 15 * 60_000
+
+/** Small, JSON-safe event details (≤ 3 KB), or nothing. */
+function boundedDetails(details: Record<string, unknown> | undefined) {
+  if (!details) return {}
+  try {
+    return JSON.stringify(details).length <= 3_000 ? details : {}
+  } catch {
+    return {}
+  }
+}
+
 export async function failTask(
   pool: pg.Pool,
   claim: Claim,
-  failure: { kind: Exclude<FailureKind, "lease_expired">; message: string },
+  failure: {
+    kind: Exclude<FailureKind, "lease_expired">
+    message: string
+    retryAfterMs?: number | null
+    details?: Record<string, unknown>
+  },
   policy: RetryPolicy = DEFAULT_RETRY_POLICY,
 ): Promise<CommitOutcome> {
   const message = failure.message.slice(0, 500)
@@ -784,7 +902,15 @@ export async function failTask(
                 500,
               )
             : message,
-          next === "retry_wait" ? backoffMs(task.attempts, policy) : 0,
+          next === "retry_wait"
+            ? Math.max(
+                backoffMs(task.attempts, policy),
+                Math.min(
+                  Math.max(failure.retryAfterMs ?? 0, 0),
+                  MAX_RETRY_AFTER_MS,
+                ),
+              )
+            : 0,
         ],
       )
       await finishAttempt(
@@ -805,7 +931,11 @@ export async function failTask(
           : next === "failed"
             ? "task_failed"
             : "task_needs_input",
-        { attempt: task.attempts, exhausted },
+        {
+          ...boundedDetails(failure.details),
+          attempt: task.attempts,
+          exhausted,
+        },
         claim.taskId,
       )
       if (next !== "retry_wait")
@@ -1171,9 +1301,8 @@ export async function retryTask(
 // ---------------------------------------------------------------------------
 
 const STAGE_ORDER = [
-  ...VERIFICATION_WORKFLOW.stages,
-  ...PRODUCTION_WORKFLOW.stages,
-].map((s) => s.stage)
+  ...new Set(WORKFLOWS.flatMap((w) => w.stages).map((s) => s.stage)),
+]
 const stageOrder = (stage: string) => {
   const i = STAGE_ORDER.indexOf(stage)
   return i === -1 ? STAGE_ORDER.length : i
@@ -1280,3 +1409,38 @@ export async function getRun(
 
 /** Whether a product or asset is part of an unfinished run's frozen inputs. */
 export const ACTIVE_RUN_SQL = `'${ACTIVE_RUN_STATUSES.join("', '")}'`
+
+// ---------------------------------------------------------------------------
+// Worker check-ins (DV-005A): lets the UI say whether a worker is running
+// ---------------------------------------------------------------------------
+
+/** Records that a worker process is alive and which stages it can run. */
+export async function checkInWorker(
+  pool: pg.Pool,
+  worker: { workerId: string; pid: number; stages: readonly string[] },
+) {
+  await pool.query(
+    `INSERT INTO orchestrator_workers (worker_id, pid, stages, started_at, last_seen_at)
+       VALUES ($1, $2, $3, now(), now())
+     ON CONFLICT (worker_id) DO UPDATE SET last_seen_at = now(), stages = EXCLUDED.stages`,
+    [worker.workerId, worker.pid, worker.stages.slice(0, 20)],
+  )
+  await pool.query(
+    "DELETE FROM orchestrator_workers WHERE last_seen_at < now() - interval '1 day'",
+  )
+}
+
+export async function checkOutWorker(pool: pg.Pool, workerId: string) {
+  await pool.query("DELETE FROM orchestrator_workers WHERE worker_id = $1", [
+    workerId,
+  ])
+}
+
+/** Seconds since a worker that can run `stage` last checked in (null: never). */
+export async function workerLastSeen(pool: pg.Pool, stage: string) {
+  const { rows } = await pool.query<{ ago: number | null }>(
+    "SELECT extract(epoch FROM now() - max(last_seen_at))::int AS ago FROM orchestrator_workers WHERE $1 = ANY(stages)",
+    [stage],
+  )
+  return rows[0]?.ago ?? null
+}

@@ -25,7 +25,10 @@
     "test:e2e:db": "E2E_DATABASE=1 playwright test",
     "worker:start": "tsx --import ./scripts/server-only-hook.mjs scripts/worker/start.ts",
     "worker:check": "tsx --import ./scripts/server-only-hook.mjs scripts/worker/check.ts",
-    "orchestrator:verify": "tsx --import ./scripts/server-only-hook.mjs scripts/orchestrator/verify.ts"
+    "orchestrator:verify": "tsx --import ./scripts/server-only-hook.mjs scripts/orchestrator/verify.ts",
+    "scout:check": "tsx --import ./scripts/server-only-hook.mjs scripts/scout/check.ts",
+    "scout:verify": "tsx --import ./scripts/server-only-hook.mjs scripts/scout/verify.ts",
+    "scout:smoke": "tsx --import ./scripts/server-only-hook.mjs scripts/scout/smoke.ts"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.3.0",
@@ -39,6 +42,7 @@
     "lucide-react": "^1.75.0",
     "next": "16.4.6",
     "next-themes": "^0.4.6",
+    "parse5": "^8.1.1",
     "pg": "^8.23.1",
     "radix-ui": "^1.8.1",
     "react": "19.3.0",

@@ -1,4 +1,9 @@
-import { availability, ids, pool } from "@/server/orchestrator/http"
+import {
+  availability,
+  availableWorkflows,
+  ids,
+  pool,
+} from "@/server/orchestrator/http"
 import { listRuns, planRun } from "@/server/orchestrator/store"
 import {
   handle,
@@ -66,10 +71,12 @@ function parseVerification(raw: unknown, mode: unknown): VerificationOptions {
 
 /**
  * GET  /api/tickets/:ticketId/runs  → { availability, runs }
- * POST /api/tickets/:ticketId/runs  { requestId, ticketVersion, mode }
- *   mode "production": refused (503 capability-unavailable) until the real
- *   Scout/Quill/Pixel/Vera handlers exist. mode "verification": only in an
- *   isolated test environment (see availability.verification).
+ * POST /api/tickets/:ticketId/runs  { requestId, ticketVersion, mode, workflow?, verification? }
+ *   mode "production" + workflow "scout-research-v1" (DV-005A): Scout
+ *   research only, when source retrieval is switched on.
+ *   mode "production" + workflow "campaign-v1" (the default): refused
+ *   (503 capability-unavailable) until Quill, Pixel and Vera exist.
+ *   mode "verification": only in an isolated test environment.
  *   201 { runId } (200 if the requestId was already used).
  */
 export async function GET(
@@ -99,7 +106,13 @@ export async function POST(
     const body = await jsonBody(request)
     const extra = Object.keys(body).filter(
       (k) =>
-        !["requestId", "ticketVersion", "mode", "verification"].includes(k),
+        ![
+          "requestId",
+          "ticketVersion",
+          "mode",
+          "workflow",
+          "verification",
+        ].includes(k),
     )
     if (
       extra.length > 0 ||
@@ -107,11 +120,14 @@ export async function POST(
       !/^[A-Za-z0-9-]{16,64}$/.test(body.requestId) ||
       typeof body.ticketVersion !== "number" ||
       !Number.isSafeInteger(body.ticketVersion) ||
-      (body.mode !== "production" && body.mode !== "verification")
+      (body.mode !== "production" && body.mode !== "verification") ||
+      (body.workflow !== undefined &&
+        (typeof body.workflow !== "string" ||
+          !/^[a-z0-9.-]{1,40}$/.test(body.workflow)))
     )
       throw invalid(
         [],
-        "Send { requestId, ticketVersion, mode, verification? }.",
+        "Send { requestId, ticketVersion, mode, workflow?, verification? }.",
       )
     const verification = parseVerification(body.verification, body.mode)
     const available = availability()
@@ -120,7 +136,9 @@ export async function POST(
       ticketVersion: body.ticketVersion,
       requestId: body.requestId,
       mode: body.mode,
+      workflow: body.workflow as string | undefined,
       productionAvailable: available.production,
+      availableWorkflows: availableWorkflows(),
       verificationAllowed: available.verification,
       verification,
     })

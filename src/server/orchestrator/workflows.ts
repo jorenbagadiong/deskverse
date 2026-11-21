@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto"
 import { setTimeout as sleep } from "node:timers/promises"
 
+import type pg from "pg"
+
 import { graphProblems } from "@/lib/orchestrator/model"
 import type {
   RecoveryPolicy,
@@ -14,12 +16,12 @@ import type {
  * A workflow is a per-product chain (a DAG) of stages; each stage has a
  * resource class and a recovery policy. A handler implements one stage.
  *
- * DV-004C ships NO production handlers. The production workflow below is
- * declared so its shape is fixed and validated, but every stage is marked
- * unavailable, so production runs are refused ("capability not available
- * yet"). Only the deterministic verification handlers exist; they prove the
- * orchestration infrastructure and produce results explicitly labelled as
- * verification results, never research, scripts, videos or reviews.
+ * DV-004C added the deterministic verification handlers (test databases
+ * only). DV-005A adds the first production handler, Scout's
+ * `scout.research`, and the research-only workflow `scout-research-v1`
+ * that contains nothing else. The full campaign (`campaign-v1`) stays
+ * unavailable until every one of its stages has a production handler:
+ * having Scout is not permission to start a campaign.
  */
 
 export interface StageDefinition {
@@ -75,8 +77,29 @@ export const VERIFICATION_WORKFLOW: WorkflowDefinition = {
 }
 
 /**
- * The future production chain. Not runnable in DV-004C: no handler exists
- * for any stage. Publishing (Relay) will use recovery "inspect": a crashed
+ * Research only (DV-005A): Scout reads the owner's reference pages and
+ * writes an evidence-backed brief per product. No Quill, Pixel or Vera
+ * tasks are created. Retrieval is read-only (GET), so a crashed attempt is
+ * safe to repeat: recovery "retry".
+ */
+export const RESEARCH_WORKFLOW: WorkflowDefinition = {
+  id: "scout-research-v1",
+  mode: "production",
+  title: "Research only (Scout)",
+  stages: [
+    {
+      stage: "scout.research",
+      label: "Scout: research",
+      dependsOn: [],
+      resourceClass: "general",
+      recovery: "retry",
+    },
+  ],
+}
+
+/**
+ * The full production chain. Not runnable until Quill, Pixel and Vera
+ * have production handlers. Publishing (Relay) will use recovery "inspect": a crashed
  * attempt might already have published, so it is never retried blindly.
  */
 export const PRODUCTION_WORKFLOW: WorkflowDefinition = {
@@ -115,9 +138,8 @@ export const PRODUCTION_WORKFLOW: WorkflowDefinition = {
   ],
 }
 
-/** Milestones that will provide the production handlers. */
+/** Milestones that will provide the remaining production handlers (Scout: DV-005A, built). */
 export const MISSING_PRODUCTION_CAPABILITIES = [
-  { stage: "scout.research", milestone: "DV-005A" },
   { stage: "quill.script", milestone: "DV-005B" },
   {
     stage: "pixel.render",
@@ -126,7 +148,15 @@ export const MISSING_PRODUCTION_CAPABILITIES = [
   { stage: "vera.review", milestone: "DV-006A" },
 ] as const
 
-for (const workflow of [VERIFICATION_WORKFLOW, PRODUCTION_WORKFLOW]) {
+export const WORKFLOWS: readonly WorkflowDefinition[] = [
+  VERIFICATION_WORKFLOW,
+  RESEARCH_WORKFLOW,
+  PRODUCTION_WORKFLOW,
+]
+
+export const workflowById = (id: string) => WORKFLOWS.find((w) => w.id === id)
+
+for (const workflow of WORKFLOWS) {
   const problems = graphProblems(
     workflow.stages.map((s) => ({ key: s.stage, dependsOn: s.dependsOn })),
   )
@@ -137,9 +167,8 @@ for (const workflow of [VERIFICATION_WORKFLOW, PRODUCTION_WORKFLOW]) {
 }
 
 export const stageLabel = (stage: string) =>
-  [...VERIFICATION_WORKFLOW.stages, ...PRODUCTION_WORKFLOW.stages].find(
-    (s) => s.stage === stage,
-  )?.label ?? stage
+  WORKFLOWS.flatMap((w) => w.stages).find((s) => s.stage === stage)?.label ??
+  stage
 
 // ---------------------------------------------------------------------------
 // Handlers
@@ -151,6 +180,8 @@ export interface HandlerContext {
   stage: string
   /** Counted attempt number (1-based). */
   attempt: number
+  /** Counted attempts allowed; on the last one, prefer a final outcome. */
+  maxAttempts: number
   /** Stable per logical task: use it to make side effects idempotent. */
   idempotencyKey: string
   snapshot: { checksum: string; data: Record<string, unknown> } | null
@@ -159,11 +190,48 @@ export interface HandlerContext {
   signal: AbortSignal
 }
 
+/** What a lease-holding commit needs to write a real deliverable atomically. */
+export interface CommitContext {
+  taskId: string
+  runId: string
+  ticketId: string
+  fence: number
+}
+
+export type ResultKind = "verification" | "scout_research"
+
 export type HandlerOutcome =
-  | { status: "completed"; result: Record<string, unknown> }
-  | { status: "transient"; message: string }
-  | { status: "permanent"; message: string }
-  | { status: "needs_input"; message: string }
+  | {
+      status: "completed"
+      result: Record<string, unknown>
+      /**
+       * A real deliverable (DV-005A). `persist` runs inside the completion
+       * transaction, after the lease and fence are verified and before the
+       * task is marked completed; it writes the deliverable's own rows and
+       * returns the compact reference stored in task_results. If anything
+       * fails, nothing at all is committed.
+       */
+      deliverable?: {
+        kind: ResultKind
+        persist(
+          client: pg.PoolClient,
+          commit: CommitContext,
+        ): Promise<Record<string, unknown>>
+      }
+    }
+  | {
+      status: "transient"
+      message: string
+      /** The source asked for a pause (Retry-After); never shorter than the backoff. */
+      retryAfterMs?: number | null
+      details?: Record<string, unknown>
+    }
+  | { status: "permanent"; message: string; details?: Record<string, unknown> }
+  | {
+      status: "needs_input"
+      message: string
+      details?: Record<string, unknown>
+    }
 
 export interface TaskHandler {
   stage: string
@@ -236,24 +304,38 @@ export function verificationHandler(stage: string): TaskHandler {
 export type HandlerRegistry = ReadonlyMap<string, TaskHandler>
 
 /**
- * The handlers this process can run. Production: none in DV-004C.
- * Verification handlers are included only when explicitly enabled.
+ * The handlers this process can run. Verification handlers only when
+ * explicitly enabled (test databases); production handlers (Scout) only
+ * when given.
  */
 export function createRegistry({
   verification,
+  production = [],
 }: {
   verification: boolean
+  production?: readonly TaskHandler[]
 }): HandlerRegistry {
   const handlers = new Map<string, TaskHandler>()
   if (verification)
     for (const s of VERIFICATION_WORKFLOW.stages)
       handlers.set(s.stage, verificationHandler(s.stage))
+  for (const handler of production)
+    if (handler.kind === "production") handlers.set(handler.stage, handler)
   return handlers
 }
 
-/** Production runs need a handler for every production stage. */
-export function productionAvailable(registry: HandlerRegistry) {
-  return PRODUCTION_WORKFLOW.stages.every(
-    (s) => registry.get(s.stage)?.kind === "production",
+/** A production workflow is runnable when every stage has a production handler. */
+export function workflowAvailable(
+  registry: HandlerRegistry,
+  workflow: WorkflowDefinition,
+) {
+  return (
+    workflow.mode === "production" &&
+    workflow.stages.every((s) => registry.get(s.stage)?.kind === "production")
   )
+}
+
+/** The full campaign needs a production handler for every one of its stages. */
+export function productionAvailable(registry: HandlerRegistry) {
+  return workflowAvailable(registry, PRODUCTION_WORKFLOW)
 }

@@ -195,7 +195,7 @@ describe("backup and restore with orchestrator state", () => {
 
 describe("DV-004B-era backups migrate forward", () => {
   it(
-    "restores a database at schema 0001 and applies 0002 on top, keeping tickets",
+    "restores a database at schema 0001 and applies every later migration on top, keeping tickets",
     { timeout: 120_000 },
     async () => {
       const { cp, readFile, writeFile } = await import("node:fs/promises")
@@ -250,7 +250,15 @@ describe("DV-004B-era backups migrate forward", () => {
       try {
         expect(await runMigrations(pool, journal, migrationsFolder())).toEqual([
           "0002_campaign_orchestrator",
+          "0003_scout_research",
         ])
+        expect(
+          (
+            await pool.query(
+              "SELECT to_regclass('public.scout_reports') IS NOT NULL AS ok",
+            )
+          ).rows[0].ok,
+        ).toBe(true)
         const kept = await pool.query(
           "SELECT t.title, p.name FROM affiliate_tickets t JOIN ticket_products p ON p.ticket_id = t.id",
         )

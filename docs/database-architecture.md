@@ -9,6 +9,8 @@ your own computer:
   format 2.
 - **DV-004C** added the orchestrator tables ([orchestrator.md](orchestrator.md)). The tickets themselves are documented in
   [affiliate-tickets.md](affiliate-tickets.md).
+- **DV-005A** added Scout's research tables and worker check-ins
+  ([scout-research.md](scout-research.md)).
 
 **PostgreSQL isn't needed for Pixel Studio or the office.** They work exactly
 as before with the database stopped, missing or misconfigured. Pixel Studio's
@@ -207,17 +209,21 @@ How it works:
 
 Schema:
 
-| Migration                              | Adds                                                                                                                                                                                                                                                                                      |
-| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `0000_init` (DV-004A)                  | `app_metadata (key text PK, value jsonb, created_at, updated_at)` + the `database.initialized` row                                                                                                                                                                                        |
-| `0001_affiliate_tickets` (DV-004B)     | `affiliate_tickets`, `ticket_products`, `ticket_references`, `ticket_assets`, `ticket_events` (see [affiliate-tickets.md §3](affiliate-tickets.md#3-data-model))                                                                                                                          |
-| `0002_campaign_orchestrator` (DV-004C) | `campaign_runs`, `run_product_snapshots`, `worker_tasks`, `task_dependencies`, `task_attempts`, `task_results`, `run_events`, plus triggers keeping snapshots, results and dependencies immutable and refusing dependency cycles (see [orchestrator.md §2](orchestrator.md#2-data-model)) |
+| Migration                              | Adds                                                                                                                                                                                                                                                                                                                                                                         |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0000_init` (DV-004A)                  | `app_metadata (key text PK, value jsonb, created_at, updated_at)` + the `database.initialized` row                                                                                                                                                                                                                                                                           |
+| `0001_affiliate_tickets` (DV-004B)     | `affiliate_tickets`, `ticket_products`, `ticket_references`, `ticket_assets`, `ticket_events` (see [affiliate-tickets.md §3](affiliate-tickets.md#3-data-model))                                                                                                                                                                                                             |
+| `0002_campaign_orchestrator` (DV-004C) | `campaign_runs`, `run_product_snapshots`, `worker_tasks`, `task_dependencies`, `task_attempts`, `task_results`, `run_events`, plus triggers keeping snapshots, results and dependencies immutable and refusing dependency cycles (see [orchestrator.md §2](orchestrator.md#2-data-model))                                                                                    |
+| `0003_scout_research` (DV-005A)        | `scout_reports`, `scout_sources`, `scout_evidence`, `scout_claims`, `scout_claim_evidence`, `orchestrator_workers`; widens `task_results.kind` to `verification`/`scout_research`; triggers keeping research immutable and accepting it only from the task's current lease holder (see [scout-research.md §11](scout-research.md#11-storage-versions-integrity-and-backups)) |
 
 `0001` was applied to a fresh scratch database by `yarn test:db` before it
 was applied to the development database. It creates tables only; nothing
 existing is changed. `0002` was likewise tested on scratch databases (fresh, and on top of
-restored DV-004A/DV-004B backups) before the development database. There
-are no deliverable, approval or scheduling tables yet.
+restored DV-004A/DV-004B backups) before the development database. `0003`
+was tested the same way (fresh, and on top of restored DV-004B- and
+DV-004C-era backups); it only adds tables and widens one check constraint.
+Scout's research tables are the first deliverable tables; there are no
+approval or scheduling tables yet.
 
 ## 6. Health check
 
@@ -400,6 +406,11 @@ workers recover those tasks under the normal rules. Runs, snapshots, tasks
 and results are restored like any other table; the backup format is
 unchanged.
 
+**Scout research (DV-005A):** reports, sources, evidence and claims are
+restored like any other table (their checksums are re-verified on every
+read). Worker check-ins (`orchestrator_workers`) are cleared after the
+restore is verified, since they describe the old machine's processes.
+
 Compatibility:
 
 - `pg_restore` must be the same major version as the dump or newer; the
@@ -493,6 +504,6 @@ another connection is open.
   it only through WSL's localhost forwarding, which isn't needed or
   documented here.
 
-**DV-004B (Affiliate Tickets) and DV-004C (the orchestrator) are built on
-this foundation.** The next milestone is **DV-005A, Scout**. See
-[ROADMAP.md](ROADMAP.md).
+**DV-004B (Affiliate Tickets), DV-004C (the orchestrator) and DV-005A
+(Scout research) are built on this foundation.** The next milestone is
+**DV-005B, Quill**. See [ROADMAP.md](ROADMAP.md).
