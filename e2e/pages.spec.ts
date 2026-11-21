@@ -1,8 +1,8 @@
 import { expect, noHorizontalOverflow, test } from "./fixtures"
 
-/** DV-001 regression smoke tests: existing pages still work and don't load three.js. */
+/** Smoke tests: non-office pages (DV-001 and the DV-003A studio) render cleanly without three.js. */
 test.describe("existing pages", () => {
-  for (const path of ["/", "/brand"]) {
+  for (const path of ["/", "/brand", "/studio/pixel"]) {
     test(`${path} renders without errors or three.js`, async ({ page }) => {
       const scripts: string[] = []
       page.on("response", (response) => {

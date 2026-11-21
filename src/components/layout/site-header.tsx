@@ -3,10 +3,13 @@ import Link from "next/link"
 import { Logo } from "@/components/brand/logo"
 import { ThemeSwitcher } from "@/components/theme/theme-switcher"
 import { brand } from "@/config/brand"
+import { cn } from "@/lib/utils"
 
 const nav = [
-  { href: "/", label: "Overview" },
+  // Hidden on the narrowest phones, where the logo (also a home link) suffices.
+  { href: "/", label: "Overview", className: "max-[399px]:hidden" },
   { href: "/office", label: "Office" },
+  { href: "/studio/pixel", label: "Studio" },
   { href: "/brand", label: "Brand" },
 ]
 
@@ -25,7 +28,10 @@ export function SiteHeader() {
             <Link
               key={item.href}
               href={item.href}
-              className="rounded-md px-2 py-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              className={cn(
+                "rounded-md px-2 py-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
+                "className" in item && item.className,
+              )}
             >
               {item.label}
             </Link>

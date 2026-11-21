@@ -22,6 +22,7 @@ database, auth provider, cloud hosting, paid AI API or hosted workflow engine.
 | Components | shadcn/ui (Radix primitives)                                  |
 | Motion     | Anime.js v4 (DOM), React Three Fiber loop (3D)                |
 | 3D         | three.js, @react-three/fiber, @react-three/drei               |
+| Video      | Native FFmpeg + FFprobe on your machine (optional, DV-003)    |
 | Theming    | next-themes (dark default, light, system)                     |
 | Icons      | lucide-react                                                  |
 | Font       | Inter (self-hosted via `@fontsource-variable/inter`)          |
@@ -37,7 +38,7 @@ git clone https://github.com/jorenbagadiong/deskverse.git
 cd deskverse
 corepack enable        # activates the Yarn version pinned in package.json
 yarn install
-yarn dev               # http://localhost:3000  ·  /office (3D) · /brand (design system)
+yarn dev               # http://localhost:3000  ·  /office (3D) · /studio/pixel (video) · /brand
 ```
 
 Everything runs offline after `yarn install`, including the font and the 3D
@@ -47,6 +48,11 @@ The 3D office needs a browser with WebGL (any current Chrome, Edge, Firefox or
 Safari). Without it, `/office` shows a 2D floor plan with the same controls.
 In WSL, run the browser on Windows as usual; the scene renders on your
 Windows GPU.
+
+**Pixel Studio** (`/studio/pixel`) uses FFmpeg installed on your computer.
+It's optional: everything else works without it, and the studio explains
+how to install it. In WSL: `sudo apt install -y ffmpeg` (see
+[video architecture §2](docs/video-architecture.md#2-installing-ffmpeg-windows-11--wsl2-ubuntu)).
 
 ### Windows (WSL 2)
 
@@ -67,24 +73,33 @@ Working inside WSL is recommended over native Windows for file-watching speed.
    browser (WSL forwards localhost automatically).
 5. With VS Code, install the **WSL** extension and run `code .` from the Ubuntu
    shell.
+6. For Pixel Studio, install FFmpeg **inside Ubuntu** (not on Windows), then
+   verify it:
+   ```bash
+   sudo apt update && sudo apt install -y ffmpeg
+   ffmpeg -hide_banner -version | head -1
+   ffprobe -hide_banner -version | head -1
+   ```
+   Open http://localhost:3000/studio/pixel; the _Local FFmpeg_ card should say
+   **Ready** (select **Check again** if the page was already open).
 
 If hot reload doesn't pick up changes (usually because the repo is under `/mnt/c`),
 move the repo into the Linux home directory.
 
 ## Development commands
 
-| Command             | What it does                                        |
-| ------------------- | --------------------------------------------------- |
-| `yarn dev`          | Start the dev server (Turbopack)                    |
-| `yarn build`        | Production build                                    |
-| `yarn start`        | Serve the production build locally                  |
-| `yarn lint`         | ESLint (Next.js core-web-vitals + TypeScript)       |
-| `yarn typecheck`    | Generate route types, then `tsc --noEmit`           |
-| `yarn format`       | Prettier write (sorts Tailwind classes too)         |
-| `yarn format:check` | Prettier check                                      |
-| `yarn test`         | Vitest unit tests (tokens, registry, poses, camera) |
-| `yarn test:e2e`     | Playwright browser tests (builds + serves locally)  |
-| `yarn check`        | lint + typecheck + format check + tests             |
+| Command             | What it does                                       |
+| ------------------- | -------------------------------------------------- |
+| `yarn dev`          | Start the dev server (Turbopack)                   |
+| `yarn build`        | Production build                                   |
+| `yarn start`        | Serve the production build locally                 |
+| `yarn lint`         | ESLint (Next.js core-web-vitals + TypeScript)      |
+| `yarn typecheck`    | Generate route types, then `tsc --noEmit`          |
+| `yarn format`       | Prettier write (sorts Tailwind classes too)        |
+| `yarn format:check` | Prettier check                                     |
+| `yarn test`         | Vitest unit tests (office, design, video engine)   |
+| `yarn test:e2e`     | Playwright browser tests (builds + serves locally) |
+| `yarn check`        | lint + typecheck + format check + tests            |
 
 ## Project structure
 
@@ -95,6 +110,8 @@ src/
     page.tsx            Overview
     brand/page.tsx      Design-system showcase (/brand)
     office/page.tsx     Interactive 3D office (/office)
+    studio/pixel/       Pixel Studio, the video storyboard tool (/studio/pixel)
+    api/studio/pixel/   Localhost-only FFmpeg capability endpoint
     globals.css         Design tokens (light/dark) + Tailwind theme mapping
     icon.svg            Favicon
   components/
@@ -108,12 +125,16 @@ src/
         character/      Shared robot rig, heads, bodies, faces, poses (pure + tested)
         workstation/    Shared desk + seven job-specific prop sets
         shared/         Batching, geometry cache, procedural shapes, ambient scheduler
+    studio/pixel/       Pixel Studio form, image picker, storyboard, FFmpeg status
     theme/              Theme provider + switcher
     ui/                 shadcn/ui components
   config/               brand.ts, design-tokens.ts, employees.ts, employee-status.ts, office.ts
   hooks/                WebGL support + reduced-motion hooks
   lib/                  motion.ts (Anime.js conventions), office-simulation.ts, utils.ts
-docs/                   brand-guidelines.md, animation-guidelines.md, 3d-office-architecture.md
+    video/              Video format, types, IDs, validation, storyboard (client-safe)
+  server/               Server-only: safe process runner, FFmpeg detection, job storage
+docs/                   brand-guidelines.md, animation-guidelines.md, 3d-office-architecture.md,
+                        video-architecture.md
 tests/                  Vitest unit tests
 e2e/                    Playwright browser tests
 ```
@@ -199,13 +220,53 @@ navigation, room views, simulated states, walking to the pantry, on to the
 meeting room and back, stopping mid-walk, the "busy at work" rule, instant
 room-to-room moves under reduced motion, a full 360° turn back to the identical view, fullscreen
 (enter, leave, rejected request), the full-width layout, the 2D fallback,
-themes, reduced motion and DV-001 regressions.
+themes, reduced motion and DV-001 regressions. Pixel Studio tests cover
+navigation, form validation, image checks, the storyboard, accessible
+controls, FFmpeg missing/ready feedback (mocked, so FFmpeg isn't needed), the
+unavailable Render action, the endpoint's localhost guard and mobile layouts.
 
 - Reuse a running server: `E2E_BASE_URL=http://localhost:3000 yarn test:e2e`
 - Use Playwright's Chromium instead of Chrome: `yarn playwright install chromium`,
   then `E2E_CHANNEL=chromium yarn test:e2e`
 - In WSL without a desktop Chrome, use the Chromium option. WebGL tests need
   GPU or software rendering, which headless Chromium provides.
+
+**Known limitation (GPU-less WSL):** with headless Chromium in WSL, the 24
+tests that render the 3D office fail, on `main` too. Chromium falls back to
+software WebGL and logs a deprecation warning, which the suite treats as a
+failure by design. Everything else passes. Run the office tests where Chrome
+has a GPU (for example native Windows). Details and the exact list:
+[E2E environment notes](docs/e2e-environment.md).
+
+## DV-003A scope: Pixel video engine foundation 🚧
+
+Open http://localhost:3000/studio/pixel.
+
+Pixel Studio plans **9:16 affiliate product videos** (TikTok, Reels, Shorts)
+from your own product images and captions. When rendering arrives, native
+**FFmpeg assembles the media you supply**: it doesn't generate AI footage.
+
+- **FFmpeg detection:** a server-only check of FFmpeg and FFprobe versions,
+  required filters, available H.264 encoders (libx264 is never assumed) and
+  AAC. A localhost-only endpoint returns it without paths or environment
+  details. The studio explains clearly when FFmpeg is missing or unsupported
+  and how to install it.
+- **Fixed format:** 1080×1920, 9:16, 30 fps, H.264 MP4, 15–30 seconds, no
+  audio until DV-003C. Clients can't change settings or pass FFmpeg arguments.
+- **Strict types and validation** for products, images, scenes, captions,
+  settings and render jobs, rejecting unknown fields, invisible characters,
+  unsafe file types and oversized images.
+- **Studio UI:** product name, images, headline, 1–5 benefit captions, call
+  to action and affiliate disclosure, with a live storyboard preview, format
+  summary and FFmpeg status. **Render is disabled** with an explanation until
+  DV-003B.
+- **Private storage foundation** in your user data folder (outside the repo
+  and `public/`): isolated job folders, generated IDs, byte-level image
+  checks, path-traversal and symlink protection, and cleanup.
+
+**Not in this phase:** rendering, uploads to the server, audio, publishing
+and affiliate APIs. Details, licensing notes and the DV-003B plan:
+[video architecture](docs/video-architecture.md).
 
 ## Future milestones
 
