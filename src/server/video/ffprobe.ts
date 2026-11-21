@@ -160,6 +160,9 @@ const AUDIO_CODECS: Record<AudioContainer, readonly string[]> = {
   m4a: ["aac", "alac"],
 }
 
+/** Picture codecs accepted as MP3 cover art (ID3 attached pictures). */
+const COVER_ART_CODECS: readonly string[] = ["mjpeg", "png"]
+
 export function audioProbeArgs(filePath: string, container: AudioContainer) {
   return [
     ...QUIET,
@@ -204,8 +207,9 @@ export interface ProbedAudio {
 
 /**
  * Checks an uploaded audio file's probe: the right container, exactly one
- * audio stream with an accepted codec, and nothing else (no video, cover
- * art, subtitles, data or attachments).
+ * audio stream with an accepted codec, and nothing else (no video,
+ * subtitles, data or attachments) apart from one ordinary cover picture in
+ * an MP3.
  */
 export function parseAudioProbe(
   stdout: string,
@@ -230,18 +234,37 @@ export function parseAudioProbe(
       reason: "its contents don't match an MP3, WAV or M4A file.",
     }
   const pictures = streams.filter((s) => s.codec_type === "video")
-  if (pictures.some((s) => s.disposition?.attached_pic === 1))
-    return {
-      ok: false,
-      reason:
-        "it contains embedded cover art. Export the audio without artwork and try again.",
-    }
-  if (pictures.length > 0)
+  const coverArt = pictures.filter((s) => s.disposition?.attached_pic === 1)
+  if (pictures.length > coverArt.length)
     return {
       ok: false,
       reason: "it contains video. Upload an audio-only file.",
     }
-  const others = streams.filter((s) => s.codec_type !== "audio")
+  // DV-003D3: an MP3 may carry one ordinary cover picture (ID3 APIC, JPEG
+  // or PNG). It's ignored: only the audio stream is ever decoded or mixed,
+  // and the finished MP4 must have exactly one video and one audio stream.
+  if (coverArt.length > 0) {
+    if (container !== "mp3")
+      return {
+        ok: false,
+        reason:
+          "it contains embedded cover art. Export the audio without artwork and try again.",
+      }
+    if (coverArt.length > 1)
+      return {
+        ok: false,
+        reason:
+          "it contains more than one embedded picture. Keep at most one cover image.",
+      }
+    if (!COVER_ART_CODECS.includes(String(coverArt[0].codec_name)))
+      return {
+        ok: false,
+        reason: `its cover art (${String(coverArt[0].codec_name)}) isn't an ordinary JPEG or PNG picture.`,
+      }
+  }
+  const others = streams.filter(
+    (s) => s.codec_type !== "audio" && s.codec_type !== "video",
+  )
   if (others.length > 0)
     return {
       ok: false,

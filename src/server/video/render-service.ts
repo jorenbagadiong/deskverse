@@ -400,6 +400,10 @@ export async function renderVideo(
             path,
             plan.totalFrames,
             loudnessTarget(asset.role, audioConfig),
+            // The same trimmed selection the mix will use (DV-003D3).
+            asset.role === "voiceover"
+              ? audioConfig.voiceoverTiming
+              : undefined,
           ),
           { cwd: work, signal, timeoutMs: audioMs },
         )

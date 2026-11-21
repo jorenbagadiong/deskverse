@@ -1,12 +1,16 @@
 import "server-only"
 
+import { narrationWindow, samplesToSeconds } from "@/lib/video/audio-timing"
 import { STATIC_EFFECTS } from "@/lib/video/effects"
+import { VIDEO_FORMAT } from "@/lib/video/format"
 import {
   videoEndpoint,
   type JobSummary,
+  type NarrationSummary,
   type StorageSummary,
 } from "@/lib/video/render-api"
 import type { RenderProgress } from "@/lib/video/render-job"
+import type { VideoProject } from "@/lib/video/types"
 import type { JobRecord, StorageUsage } from "@/server/video/storage"
 
 /**
@@ -27,6 +31,7 @@ export function jobSummary(
     productName: project?.product.name ?? null,
     audioMode: project ? (project.audio?.mode ?? "none") : null,
     effects: project ? (project.effects ?? STATIC_EFFECTS) : null,
+    narration: project ? narrationSummary(project) : null,
     imageCount: project?.assets.length ?? job.assets.length,
     durationSeconds: done ? job.output!.durationSeconds : null,
     sizeBytes: done ? job.output!.sizeBytes : null,
@@ -40,6 +45,34 @@ export function jobSummary(
       delete: !active,
       preview: done,
     },
+  }
+}
+
+/**
+ * Where the voiceover plays in a server-built project (DV-003D3): the saved
+ * timing resolved against the recording's FFprobe duration, exactly as the
+ * renderer will use it. Null without a voiceover.
+ */
+export function narrationSummary(
+  project: VideoProject,
+): NarrationSummary | null {
+  const id = project.audio?.voiceoverAssetId
+  const recording = id
+    ? project.audioAssets?.find((a) => a.id === id)
+    : undefined
+  if (!project.audio || !recording) return null
+  const frames = project.scenes.reduce((n, s) => n + s.durationFrames, 0)
+  const w = narrationWindow(
+    project.audio.voiceoverTiming,
+    recording.durationSeconds,
+    frames,
+  )
+  return {
+    startSeconds: samplesToSeconds(w.startSample),
+    endSeconds: samplesToSeconds(w.endSample),
+    trimStartSeconds: samplesToSeconds(w.trimStartSample),
+    trimEndSeconds: samplesToSeconds(w.trimEndSample),
+    videoSeconds: frames / VIDEO_FORMAT.fps,
   }
 }
 

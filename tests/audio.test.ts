@@ -273,9 +273,13 @@ describe("audio file limits", () => {
     expect(
       checkAudioFacts({ ...ok, durationSeconds: 0.2 }, "music", "a"),
     ).toMatch(/too short/)
+    // DV-003D3: longer recordings are fine (a trimmed part is used), up to 5 min.
     expect(
       checkAudioFacts({ ...ok, durationSeconds: 31 }, "voiceover", "a"),
-    ).toMatch(/at most 30 s/)
+    ).toBeNull()
+    expect(
+      checkAudioFacts({ ...ok, durationSeconds: 301 }, "voiceover", "a"),
+    ).toMatch(/at most 5 minutes/)
     expect(
       checkAudioFacts({ ...ok, durationSeconds: 31 }, "music", "a"),
     ).toBeNull()
@@ -284,12 +288,13 @@ describe("audio file limits", () => {
     ).toMatch(/10 minutes/)
   })
 
-  it("rejects narration longer than the video beyond the tolerance", () => {
-    expect(validateVoiceoverFits(15, 450).ok).toBe(true)
+  it("rejects untimed (older) narration longer than the video beyond the tolerance", () => {
+    expect(validateVoiceoverFits(15, undefined, 450).ok).toBe(true)
     expect(
-      validateVoiceoverFits(15 + VOICEOVER_TOLERANCE_SECONDS, 450).ok,
+      validateVoiceoverFits(15 + VOICEOVER_TOLERANCE_SECONDS, undefined, 450)
+        .ok,
     ).toBe(true)
-    const long = validateVoiceoverFits(15.5, 450)
+    const long = validateVoiceoverFits(15.5, undefined, 450)
     expect(long.ok ? "" : long.issues[0].message).toMatch(
       /voiceover is 15.5 s but the video is 15.0 s/,
     )
@@ -615,7 +620,9 @@ describe("loudness measurement", () => {
     const voice = audioAsset()
     const args = loudnessMeasureArgs(voice, "/data/v.wav", 450, LOUDNESS.speech)
     const filter = args[args.indexOf("-af") + 1]
-    expect(filter).toContain("atrim=end_sample=720000")
+    // No timing (older projects): the whole recording, up to the video's end.
+    const used = Math.min(voice.durationSeconds * 48000, 720000)
+    expect(filter).toContain(`atrim=start_sample=0:end_sample=${used}`)
     expect(filter).toContain("loudnorm=I=-16:TP=-1.5:LRA=11:print_format=json")
     const music = audioAsset({ role: "music", durationSeconds: 3 })
     expect(
@@ -761,9 +768,12 @@ describe("audio command generation (safe arguments)", () => {
         music(3),
       ).args,
     )
-    // 3 s = 144 000 samples; ceil(720 000 / 144 000) = 5 repeats, then trimmed.
+    // 3 s = 144 000 samples with a 0.6 s (28 800-sample) crossfade: the
+    // music repeats every 115 200 samples, 7 times at most, then is trimmed.
     expect(graph).toContain("atrim=end_sample=144000")
-    expect(graph).toContain("aloop=loop=5:size=144000")
+    expect(graph).toContain("aloop=loop=7:size=115200")
+    expect(graph).toContain("afade=t=out:ss=0:ns=28800:curve=qsin")
+    expect(graph).toContain("afade=t=in:ss=0:ns=28800:curve=qsin")
     expect(graph).toContain("afade=t=out:st=13.500:d=1.500")
     expect(graph).toContain("afade=t=in:d=0.050")
     expect(graph).toMatch(/loudnorm=I=-16:/)
@@ -778,7 +788,9 @@ describe("audio command generation (safe arguments)", () => {
         music(180),
       ).args,
     )
-    expect(graph).toContain("aloop=loop=1:size=720000")
+    // Long enough for the whole video: played once, no seams at all.
+    expect(graph).toContain("atrim=end_sample=720000")
+    expect(graph).not.toContain("aloop")
     expect(graph).not.toContain("loop=-1")
   })
 

@@ -11,15 +11,17 @@ import {
   readJsonBody,
   requireJson,
 } from "@/server/http/local-api"
+import type { RenderStartResponse } from "@/lib/video/render-api"
 import { renderErrorResponse } from "@/server/http/render-errors"
 import { getFfmpegCapabilities } from "@/server/video/ffmpeg-capabilities"
 import { loadVideoFont } from "@/server/video/font-metrics"
+import { narrationSummary } from "@/server/video/job-summary"
 import { buildTrustedProject } from "@/server/video/project"
 import { getRenderService } from "@/server/video/render-queue"
 import { jobStatus } from "@/server/video/upload-verify"
 
 /**
- * POST /api/studio/pixel/jobs/:jobId/render with `{ product, assetIds, audio? }`.
+ * POST /api/studio/pixel/jobs/:jobId/render with `{ product, assetIds, audio?, effects? }`.
  *
  * Rebuilds the storyboard on the server from validated text and this job's
  * own uploads, stores it, and queues the render. Answers immediately with the
@@ -95,7 +97,12 @@ export async function POST(
       )
     await storage.writeProject(jobId, project.value)
     const queued = await queue.enqueue(jobId)
-    return jsonResponse(jobStatus(queued, queue.progressOf(jobId)), 202)
+    const response: RenderStartResponse = {
+      ...jobStatus(queued, queue.progressOf(jobId)),
+      // The timing the renderer will use, so the studio can show it.
+      narration: narrationSummary(project.value),
+    }
+    return jsonResponse(response, 202)
   } catch (error) {
     return renderErrorResponse(error)
   }

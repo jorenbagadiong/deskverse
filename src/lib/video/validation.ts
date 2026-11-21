@@ -13,6 +13,15 @@ import {
   MIN_TOTAL_FRAMES,
   VIDEO_FORMAT,
 } from "@/lib/video/format"
+import {
+  formatTime,
+  MIN_NARRATION_MS,
+  narrationWindow,
+  recordingMs,
+  samplesToSeconds,
+  videoSamples,
+  type NarrationWindow,
+} from "@/lib/video/audio-timing"
 import { isMotionStyle, isTransitionStyle } from "@/lib/video/effects"
 import { isAssetId, type AssetId } from "@/lib/video/ids"
 import {
@@ -40,6 +49,7 @@ import {
   type VideoScene,
   type VideoSettings,
   type VisualEffects,
+  type VoiceoverTiming,
 } from "@/lib/video/types"
 
 export interface ValidationIssue {
@@ -597,9 +607,12 @@ export const AUDIO_LIMITS = {
   /** A few minutes of WAV, or a long MP3. */
   maxBytes: 30 * 1024 * 1024,
   minSeconds: 0.5,
-  /** The longest possible video plus the tolerance. */
-  maxVoiceoverSeconds:
-    VIDEO_FORMAT.maxDurationSeconds + VOICEOVER_TOLERANCE_SECONDS,
+  /**
+   * Recordings may be longer than the video (DV-003D3): a trimmed selection
+   * of at most one video length is used. Bounded at 5 minutes so analysing
+   * and decoding a recording stays quick; the 30 MB limit also applies.
+   */
+  maxVoiceoverSeconds: 5 * 60,
   /** Music loops or is trimmed; only up to one video length is used. */
   maxMusicSeconds: 10 * 60,
   channels: [1, 2] as readonly number[],
@@ -685,7 +698,7 @@ export function checkAudioFacts(
       : AUDIO_LIMITS.maxMusicSeconds
   if (facts.durationSeconds > max)
     return role === "voiceover"
-      ? `“${name}” is ${facts.durationSeconds.toFixed(1)} s long. A voiceover can be at most ${VIDEO_FORMAT.maxDurationSeconds} s (the longest video).`
+      ? `“${name}” is ${facts.durationSeconds.toFixed(1)} s long. A voiceover recording can be at most ${AUDIO_LIMITS.maxVoiceoverSeconds / 60} minutes; choose the part you need with Trim start and Trim end.`
       : `“${name}” is longer than ${AUDIO_LIMITS.maxMusicSeconds / 60} minutes. Trim it first.`
   return null
 }
@@ -773,6 +786,8 @@ const AUDIO_CONFIG_KEYS = [
   "voiceoverAssetId",
   "musicAssetId",
   "musicLevel",
+  // Optional (DV-003D3); absent in older projects and without a voiceover.
+  "voiceoverTiming",
 ] as const
 
 /**
@@ -834,6 +849,26 @@ export function validateAudioConfig(
   check("voiceover", voiceoverAssetId, needs.voiceover, "voiceoverAssetId")
   check("music", musicAssetId, needs.music, "musicAssetId")
   if (issues.length > 0) return { ok: false, issues }
+
+  // Voiceover timing (DV-003D3): checked against the recording's FFprobe
+  // duration. Whether it fits the video is checked with the storyboard.
+  let voiceoverTiming: VoiceoverTiming | undefined
+  const rawTiming = object.value.voiceoverTiming
+  if (rawTiming !== undefined) {
+    if (!needs.voiceover)
+      return fail(
+        at("voiceoverTiming"),
+        "Voiceover timing isn't used with this audio option.",
+      )
+    const recording = audioAssets.find((a) => a.id === voiceoverAssetId)!
+    const timing = validateVoiceoverTiming(
+      rawTiming,
+      recording.durationSeconds,
+      at("voiceoverTiming"),
+    )
+    if (!timing.ok) return timing
+    voiceoverTiming = timing.value
+  }
   return {
     ok: true,
     value: {
@@ -841,23 +876,164 @@ export function validateAudioConfig(
       voiceoverAssetId: needs.voiceover ? (voiceoverAssetId as AssetId) : null,
       musicAssetId: needs.music ? (musicAssetId as AssetId) : null,
       musicLevel: musicLevel as MusicLevel,
+      ...(voiceoverTiming ? { voiceoverTiming } : {}),
     },
   }
 }
 
-/** Rejects narration longer than the video (plus the small tolerance). */
+const TIMING_KEYS = ["trimStartMs", "trimEndMs", "offsetMs"] as const
+
+/** What the studio's three timing inputs hold (seconds, as typed). */
+export interface TimingFields {
+  trimStart: string
+  /** Empty = the end of the recording. */
+  trimEnd: string
+  offset: string
+}
+
+export const DEFAULT_TIMING_FIELDS: TimingFields = {
+  trimStart: "0",
+  trimEnd: "",
+  offset: "0",
+}
+
+/**
+ * Converts the studio's inputs (seconds) to whole milliseconds, rounding to
+ * the nearest millisecond. Only checks they're times; the ranges are
+ * checked by validateVoiceoverTiming and validateVoiceoverFits.
+ */
+export function timingFromFields(
+  fields: TimingFields,
+): Validation<VoiceoverTiming> {
+  const issues: ValidationIssue[] = []
+  const read = (
+    text: string,
+    key: (typeof TIMING_KEYS)[number],
+    label: string,
+    emptyValue: number | null,
+  ) => {
+    const trimmed = text.trim()
+    if (trimmed === "") return emptyValue
+    const value = Number(trimmed)
+    if (!/^\d+(\.\d+)?$/.test(trimmed) || !Number.isFinite(value)) {
+      issues.push({
+        path: `audio.voiceoverTiming.${key}`,
+        message: `${label} must be a time in seconds, like 3 or 2.5.`,
+      })
+      return 0
+    }
+    return Math.round(value * 1000)
+  }
+  const trimStartMs = read(fields.trimStart, "trimStartMs", "Trim start", 0)
+  const trimEndMs = read(fields.trimEnd, "trimEndMs", "Trim end", null)
+  const offsetMs = read(fields.offset, "offsetMs", "Narration start", 0)
+  if (issues.length > 0) return { ok: false, issues }
+  return {
+    ok: true,
+    value: { trimStartMs: trimStartMs!, trimEndMs, offsetMs: offsetMs! },
+  }
+}
+
+const isWholeMs = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+
+/**
+ * Exactly `{ trimStartMs, trimEndMs, offsetMs }` in whole milliseconds
+ * (trimEndMs may be null: the end of the recording). Rejects negative,
+ * fractional, NaN and infinite values, strings, extra keys, a selection
+ * outside the recording (by its real duration) and one shorter than 0.5 s.
+ */
+export function validateVoiceoverTiming(
+  input: unknown,
+  recordingSeconds: number,
+  basePath = "audio.voiceoverTiming",
+): Validation<VoiceoverTiming> {
+  const object = readStrictObject(
+    input,
+    TIMING_KEYS,
+    basePath,
+    "Voiceover timing",
+  )
+  if (!object.ok) return object
+  const { trimStartMs, trimEndMs, offsetMs } = object.value
+  const at = (key: string) => join(basePath, key)
+  const issues: ValidationIssue[] = []
+  if (!isWholeMs(trimStartMs))
+    issues.push({
+      path: at("trimStartMs"),
+      message: "Trim start must be zero or more whole milliseconds.",
+    })
+  if (trimEndMs !== null && !isWholeMs(trimEndMs))
+    issues.push({
+      path: at("trimEndMs"),
+      message:
+        "Trim end must be whole milliseconds, or empty for the end of the recording.",
+    })
+  if (!isWholeMs(offsetMs))
+    issues.push({
+      path: at("offsetMs"),
+      message: "The narration start must be zero or more whole milliseconds.",
+    })
+  if (issues.length > 0) return { ok: false, issues }
+  const lengthMs = recordingMs(recordingSeconds)
+  const start = trimStartMs as number
+  const end = trimEndMs === null ? lengthMs : (trimEndMs as number)
+  if (end > lengthMs)
+    return fail(
+      at("trimEndMs"),
+      `Trim end (${formatTime(end / 1000)}) is past the end of the recording (${formatTime(lengthMs / 1000)}).`,
+    )
+  if (start >= end)
+    return fail(
+      at("trimStartMs"),
+      `Trim start (${formatTime(start / 1000)}) must be before trim end (${formatTime(end / 1000)}).`,
+    )
+  if (end - start < MIN_NARRATION_MS)
+    return fail(
+      at("trimEndMs"),
+      `The selected narration is ${formatTime((end - start) / 1000)}. Select at least ${MIN_NARRATION_MS / 1000} s.`,
+    )
+  return {
+    ok: true,
+    value: {
+      trimStartMs: start,
+      trimEndMs: trimEndMs === null ? null : end,
+      offsetMs: offsetMs as number,
+    },
+  }
+}
+
+/**
+ * Checks that the narration fits the video and returns where it sits.
+ *
+ * - With timing (DV-003D3): the selection, starting at the offset, must end
+ *   by the end of the video. Nothing is ever cut off.
+ * - Without timing (older projects): the whole recording from 0:00, which
+ *   may run at most VOICEOVER_TOLERANCE_SECONDS past the end (trailing
+ *   silence or a breath, trimmed exactly there), as before.
+ */
 export function validateVoiceoverFits(
-  voiceoverSeconds: number,
+  recordingSeconds: number,
+  timing: VoiceoverTiming | undefined,
   videoFrames: number,
   path = "audio.voiceoverAssetId",
-): Validation<number> {
+): Validation<NarrationWindow> {
   const videoSeconds = videoFrames / VIDEO_FORMAT.fps
-  if (voiceoverSeconds > videoSeconds + VOICEOVER_TOLERANCE_SECONDS)
+  const window = narrationWindow(timing, recordingSeconds, videoFrames)
+  if (!timing) {
+    if (recordingSeconds > videoSeconds + VOICEOVER_TOLERANCE_SECONDS)
+      return fail(
+        path,
+        `The voiceover is ${recordingSeconds.toFixed(1)} s but the video is ${videoSeconds.toFixed(1)} s. Trim the narration, or add benefit scenes to lengthen the video (each adds about 4 s).`,
+      )
+    return { ok: true, value: window }
+  }
+  if (window.endSample > videoSamples(videoFrames))
     return fail(
-      path,
-      `The voiceover is ${voiceoverSeconds.toFixed(1)} s but the video is ${videoSeconds.toFixed(1)} s. Shorten the narration, or add benefit scenes to lengthen the video (each adds about 4 s).`,
+      "audio.voiceoverTiming.offsetMs",
+      `The narration would play from ${formatTime(samplesToSeconds(window.startSample))} to ${formatTime(samplesToSeconds(window.endSample))}, but the video is ${formatTime(videoSeconds)}. Trim it shorter, start it earlier, or add benefit scenes (each adds about 4 s).`,
     )
-  return { ok: true, value: voiceoverSeconds }
+  return { ok: true, value: window }
 }
 
 // ---------------------------------------------------------------------------
@@ -1064,6 +1240,7 @@ export function validateVideoProject(input: unknown): Validation<VideoProject> {
       if (voiceover && scenes.ok) {
         const fits = validateVoiceoverFits(
           voiceover.durationSeconds,
+          audio.voiceoverTiming,
           scenes.value.reduce((n, scene) => n + scene.durationFrames, 0),
         )
         if (!fits.ok) issues.push(...fits.issues)

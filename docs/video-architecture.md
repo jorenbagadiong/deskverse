@@ -18,7 +18,8 @@ team's video creator.
 | **DV-003C**   | Optional voiceover and background music, mixed and encoded as AAC                         | ✅ Done |
 | **DV-003D1**  | Reliable job management: cancel, retry, history, delete, storage, restart recovery        | ✅ Done |
 | **DV-003D2**  | EXIF orientation, gentle zoom and crossfades, scene-by-scene encoding                     | ✅ Done |
-| **DV-003D3+** | Templates, audio editing and more                                                         | Planned |
+| **DV-003D3**  | Voiceover trim and start offset, crossfaded music loops, MP3 cover art, sample video QA   | ✅ Done |
+| **DV-003D4+** | Templates, more effects and audio editing                                                 | Planned |
 
 ## 1. FFmpeg and FFprobe
 
@@ -251,7 +252,7 @@ problems.
   killed with `SIGKILL` at the deadline. FFmpeg never waits for input (stdin
   is closed and `-nostdin` is set).
 
-## 5. Audio: voiceover and background music (DV-003C)
+## 5. Audio: voiceover and background music (DV-003C, DV-003D3)
 
 Four choices, picked in the studio's **Audio** card: **No audio** (the
 default and exactly the DV-003B pipeline), **Voiceover**, **Background
@@ -267,11 +268,18 @@ music**, or **Voiceover + music**.
 
 - At most 30 MB per file, one voiceover and one music file per video.
 - Mono or stereo only; sample rates 8–96 kHz (common rates only).
-- Duration: at least 0.5 s; a voiceover at most 30.25 s (the longest video
-  plus the tolerance); music at most 10 minutes.
+- Duration: at least 0.5 s; a voiceover recording at most 5 minutes
+  (DV-003D3: a trimmed selection of at most one video length is used);
+  music at most 10 minutes.
+- **MP3 cover art (DV-003D3):** an MP3 may carry **one** ordinary attached
+  picture (ID3 APIC, JPEG or PNG). It's ignored: only the audio stream is
+  decoded, measured and mixed, and the finished MP4 must have exactly one
+  video and one audio stream, so artwork can never reach it. Two or more
+  pictures, other picture formats (e.g. GIF), cover art in WAV/M4A and any
+  real video stream are still rejected.
 - Rejected: corrupt files (a full decode must finish without errors), files
-  with video, embedded cover art, subtitles, data or attachment streams,
-  more than one audio track, unknown codecs, and anything whose bytes aren't
+  with video, subtitles, data or attachment streams, more than one audio
+  track, unknown codecs, and anything whose bytes aren't
   MP3/WAV/M4A, whatever its name or browser-reported type. Each file is
   opened with the demuxer its bytes identified (`-f mp3|wav|mov`), never by
   guessing.
@@ -284,14 +292,62 @@ The video is N frames at 30 fps, so the audio is made **exactly N × 1600
 samples at 48 kHz**: `apad` pads and `atrim` cuts at that boundary. No audio
 file can lengthen or shorten the video.
 
-- **Voiceover** starts at 0:00 with the first scene. Shorter narration is
-  followed by silence to the end. Narration may run at most **0.25 s** past
-  the end (it's trimmed exactly there); anything longer is **rejected**
-  before rendering, with the actual lengths, instead of being cut off.
-- **Music** starts at 0:00. A track shorter than the video loops (a finite
-  number of repeats: `ceil(video / track)`, then trimmed); a longer one is
-  trimmed. It fades in over 50 ms and out over the last 1.5 s. Loop seams
-  are plain cuts, so loops sound best with tracks made to loop.
+**Voiceover timing (DV-003D3).** Three settings in the Audio card, saved in
+the project as whole milliseconds (`voiceoverTiming: { trimStartMs,
+trimEndMs, offsetMs }`):
+
+| Setting             | Meaning                                                   | Default          |
+| ------------------- | --------------------------------------------------------- | ---------------- |
+| Trim start          | Where the selection starts in the recording               | 0                |
+| Trim end            | Where it ends; empty = the end of the recording           | end of recording |
+| Narration starts at | When the selection starts playing, from 0:00 of the video | 0                |
+
+- **Rounding:** the studio rounds what you type to the nearest millisecond;
+  the server accepts integers only. At 48 kHz 1 ms is exactly 48 samples,
+  so every boundary is an exact sample. A recording's usable length is its
+  **FFprobe** duration rounded _down_ to a whole millisecond, so a
+  selection never reaches past the real audio. Video length is counted in
+  samples (1 frame = 1600 samples = 33⅓ ms), never rounded.
+- **Validation (server-side, authoritative):** exactly those three keys;
+  non-negative safe integers (negative, fractional, NaN, infinite, strings
+  and extra keys are rejected); trim start before trim end, inside the
+  recording, at least 0.5 s selected; and the narration must **end by the
+  end of the video**: offset + selection ≤ video. Nothing is ever cut off;
+  a selection that can't fit is refused with the times involved.
+- **Rendering:** the selection is cut with `atrim=start_sample/end_sample`
+  and padded/cut to its exact length, delayed by the offset with real
+  silence (`adelay=…S`, in samples), and padded with silence to the end.
+  The **loudness measurement uses the identical selection filter** as the
+  mix (`voiceoverSelection()` in `audio-command.ts`), so the audio that is
+  measured is exactly the audio that is normalized and heard. Trimming
+  never changes the uploaded file; it happens inside those two FFmpeg runs.
+- **Older projects** have no `voiceoverTiming`: the whole recording plays
+  from 0:00 and may run at most **0.25 s** past the end (trimmed there),
+  exactly as in DV-003C. Retries reuse whatever timing was saved.
+- The server returns the approved timing with the render request, and the
+  history lists it ("Narration 1 s–12.3 s"); the studio shows it under its
+  timeline.
+
+**Music looping (DV-003D3).** A track shorter than the video repeats with a
+short **equal-power crossfade** at every seam instead of a hard cut:
+
+- the first pass plays the track's start untouched up to its last _X_
+  samples; every repeat starts with the track's last _X_ samples fading
+  out (`afade curve=qsin`) over its first _X_ samples fading in, summed
+  (`amix normalize=0`), then continues — so the music repeats every
+  _track − X_ samples exactly, with no cumulative drift;
+- _X_ adapts to the track: 20 % of it, at most 1 s (a 0.5 s track gets
+  0.1 s, a 2.4 s track 0.48 s);
+- the graph has a **fixed size** however many repeats are needed (one
+  seam, looped by a finite `aloop`, then cut to length), and only the
+  track (shorter than the video) is buffered;
+- a track at least as long as the video plays once, with no seams.
+
+Music still starts at 0:00, fades in over 50 ms and out over the last
+1.5 s, and is ducked under narration as before. The crossfade removes clicks
+and level jumps at the seam; it **can't line up unrelated musical phrases or
+beats** — a track whose length isn't a whole number of bars will still shift
+its rhythm at each repeat. Tracks made to loop sound best.
 
 ### Levels and mixing
 
@@ -330,7 +386,34 @@ If measuring, mixing or verification fails, the job is marked failed with a
 plain message and nothing is published. A missing AAC encoder fails an audio
 job before any encoding starts.
 
-### Measured results (FFmpeg 6.1.1, native `aac`)
+### Measured results (DV-003D3)
+
+From `tests/integration/audio-timing.integration.test.ts` (generated test
+signals) and the sample video below:
+
+- **Sample accuracy:** a 25 s recording trimmed to 3.0–18.0 s and started at
+  2.0 s: in the lossless output of the same filter graph, the first sample
+  is exactly 96 000 and the last 815 999; in the published AAC track the
+  same (≤ 5 samples allowed for the codec's smearing; measured 0).
+- **Loudness after trimming:** the trimmed-away parts of the test recording
+  are 9.5 dB louder than the selection; the output still lands within
+  ±1.5 LU of −16 LUFS, so only the selection was measured.
+- **Seams:** a 2.3 s band-limited noise track with a 12 dB level ramp,
+  looped 9 times in 19 s: the largest sample-to-sample jump at every
+  crossfaded seam is 1.38× the steady-state value (hard cuts: 7.3×), and
+  the level changes by at most 4.6 dB per 50 ms across a seam (hard cuts:
+  11.7 dB at once). All seams measure identically: no drift.
+
+**Sample video** (production server and job system, four synthetic images,
+gentle zoom + crossfades, a Windows SAPI test narration trimmed 4.3–15.6 s
+and started at 1.0 s, an original 2.4 s synthesized music loop; 19 s):
+render 16.2 s, FFmpeg peak 498 MiB (summed over processes); 570 frames,
+AAC-LC 48 kHz stereo, 19.000 s; full decode clean; −16.8 LUFS integrated,
+−2.2 dBTP; narration found by cross-correlation at exactly 1.000–12.300 s;
+music ~11–13 dB under the speech; crossfaded seams indistinguishable from
+ordinary passages of the same music (hard cuts: about 9× the typical jump).
+
+### Measured results (DV-003C, FFmpeg 6.1.1, native `aac`)
 
 From the real integration tests (generated sine-tone speech and music, so no
 rights issues) and the four-mode benchmark:
@@ -828,11 +911,12 @@ track); Firefox reports 19.02 s because of AAC encoder padding, within the
 - One fixed template. Effects are one zoom (in, 5 %) and one transition
   (0.3 s dissolve); no pans, per-scene choices or other transitions. The
   storyboard preview stays still; effects appear only in the MP4.
-- Audio: no trimming, offsets, crossfaded loops or per-scene sync points;
-  narration always starts at 0:00. Music loop seams are hard cuts. MP3s with
-  embedded cover art must be exported without artwork first. Loudness
-  targets are met by two-pass normalization and measured in tests, but they
-  aren't a broadcast-compliance certification.
+- Audio: one continuous voiceover selection with a start offset; no
+  multiple clips, per-scene sync points, fades on the narration or music
+  trimming/offsets. Music loops crossfade at fixed, adaptive lengths and
+  can't align beats. Cover art is accepted in MP3 only. Loudness targets are
+  met by two-pass normalization and measured in tests, but they aren't a
+  broadcast-compliance certification.
 - Captions support the characters in Inter (Latin, Greek, Cyrillic and common
   symbols). Emoji and CJK are rejected rather than drawn.
 - EXIF orientation is applied to JPEGs only; orientation metadata in PNG or
@@ -849,11 +933,10 @@ track); Firefox reports 19.02 s because of AAC encoder padding, within the
 
 ## 14. Remaining work
 
-**DV-003D3 and later:** more templates and effect styles (pans, per-scene
-choices, other transitions), a moving storyboard preview, and audio
-follow-ups: trimming and offsets for narration, crossfaded music loops,
-per-scene timing cues, and accepting MP3s with cover art by ignoring the
-picture.
+**After DV-003D3:** more templates and effect styles (pans, per-scene
+choices, other transitions), a moving storyboard preview, multiple narration
+clips or per-scene timing cues, music start offsets and trimming, beat-aware
+loop points, and draft editing/resuming (out of scope so far).
 
 ## 15. Code map
 
@@ -868,6 +951,7 @@ src/lib/video/                 shared, client-safe
   validation.ts                all input validation
   storyboard.ts                storyboard template + duration fitting
   effects.ts                   visual effects: names, defaults, crossfade frame math, availability
+  audio-timing.ts              voiceover trim/offset sample math shared by studio and server
   capabilities.ts              capability report types, required filters
 src/server/                    server-only (import "server-only")
   process/run-executable.ts    execFile runner + streaming spawn (no shell), AbortSignal cancellation
@@ -881,7 +965,8 @@ src/server/                    server-only (import "server-only")
                                photo normalization, zoom, crossfade segments
   video/exif.ts                JPEG EXIF orientation parser + FFmpeg transforms
   video/ffprobe.ts             probe arguments, image/audio/output verification, progress parser
-  video/audio-command.ts       loudness measurement, audio mix/mux arguments, AAC options
+  video/audio-command.ts       loudness measurement, voiceover selection/offset, crossfaded music
+                               loops, audio mix/mux arguments, AAC options
   video/audio-sniff.ts         byte-level MP3/WAV/M4A identification
   video/font-metrics.ts        TrueType cmap/hmtx parsing, glyph coverage, widths
   video/project.ts             trusted project reconstruction

@@ -249,6 +249,40 @@ failure by design. Everything else passes. Run the office tests where Chrome
 has a GPU (for example native Windows). Details and the exact list:
 [E2E environment notes](docs/e2e-environment.md).
 
+## DV-003D3 scope: Voiceover timing & music loops ✅
+
+Pixel Studio's **Audio** card now has practical timing controls for real
+affiliate videos. Your files are never changed: everything happens while
+rendering, on this computer.
+
+- **Trim the voiceover:** choose **Trim start** and **Trim end** (in
+  seconds; leave the end empty for the end of the recording). A 25 s take
+  trimmed from 3.0 to 18.0 s gives 15.0 s of narration. Recordings may now
+  be up to 5 minutes (30 MB), as long as the selection fits the video.
+- **Start the narration later:** **Narration starts at** adds real silence
+  before it, e.g. from 2.0 to 14.0 s of a 19 s video. Timing is
+  sample-accurate (whole milliseconds = exact 48 kHz samples), and
+  narration that wouldn't end by the end of the video is refused, never cut
+  off.
+- **See it:** the card shows the selected length, when the narration
+  finishes and a timeline of the video; after you render, it also shows the
+  timing the server approved (from FFprobe's real duration). Render History
+  lists it too.
+- **Loudness stays right:** the loudness measurement uses exactly the
+  trimmed selection the mix uses.
+- **Smoother music loops:** short tracks repeat with a short equal-power
+  crossfade (20 % of the track, at most 1 s) instead of a hard cut, with no
+  timing drift; the fade-out, ducking and peak limiting are unchanged. A
+  crossfade removes clicks and level jumps, but it can't make unrelated
+  beats line up.
+- **MP3s with cover art:** one ordinary JPEG/PNG cover picture is fine; it's
+  ignored and never reaches the video.
+- **Older projects** keep working: without timing settings the whole
+  narration plays from 0:00, as before.
+
+Details and measurements:
+[video architecture §5](docs/video-architecture.md#5-audio-voiceover-and-background-music-dv-003c-dv-003d3).
+
 ## DV-003D2 scope: Cinematic effects & EXIF orientation ✅
 
 Pixel Studio's new **Visual effects** card adds gentle movement to the
@@ -352,7 +386,7 @@ whenever audio is chosen.
 Measured on the development machine: adding audio costs 1.0–2.5 s per video
 (silent 8.8 s, voiceover 9.8 s, music 10.4 s, both 11.3 s) with no change in
 peak memory, and the mixes land at −16.1 to −16.3 LUFS. Details:
-[video architecture §5](docs/video-architecture.md#5-audio-voiceover-and-background-music-dv-003c).
+[video architecture §5](docs/video-architecture.md#5-audio-voiceover-and-background-music-dv-003c-dv-003d3).
 
 **Not in this phase:** cancellation, retries and history (added in DV-003D1,
 above), transitions and audio editing (trimming, offsets, crossfaded loops).

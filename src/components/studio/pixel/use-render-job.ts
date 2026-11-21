@@ -16,13 +16,25 @@ import {
   JOBS_ENDPOINT,
   renderEndpoint,
   type ApiError,
+  type NarrationSummary,
   type RenderJobStatus,
+  type RenderStartResponse,
   type RenderRequest,
   type UploadedAsset,
   type UploadedAudio,
 } from "@/lib/video/render-api"
 import type { AudioRole, ProductInfo, VisualEffects } from "@/lib/video/types"
-import { MODE_NEEDS } from "@/lib/video/validation"
+import { MODE_NEEDS, timingFromFields } from "@/lib/video/validation"
+
+/**
+ * The voiceover timing to send (DV-003D3). The studio only enables Render
+ * once the fields parse, so a parse failure here can't happen; the server
+ * validates everything again either way.
+ */
+function voiceoverTimingFor(audio: StudioAudio) {
+  const timing = timingFromFields(audio.timing)
+  return timing.ok ? { voiceoverTiming: timing.value } : {}
+}
 
 export type RenderView =
   | { kind: "idle" }
@@ -81,6 +93,7 @@ async function call<T>(url: string, init?: RequestInit): Promise<T> {
  */
 export function useRenderJob() {
   const [view, setView] = useState<RenderView>({ kind: "idle" })
+  const [approved, setApproved] = useState<NarrationSummary | null>(null)
   // Bumped on unmount or a new start, which stops any older polling loop.
   const generation = useRef(0)
 
@@ -101,6 +114,7 @@ export function useRenderJob() {
       const run = ++generation.current
       const live = () => generation.current === run
       let stage: FailureStage = "start"
+      setApproved(null)
       try {
         setView({
           kind: "uploading",
@@ -181,16 +195,22 @@ export function useRenderJob() {
                   voiceoverAssetId: audioIds.voiceover ?? null,
                   musicAssetId: audioIds.music ?? null,
                   musicLevel: audio.musicLevel,
+                  ...(needs?.voiceover ? voiceoverTimingFor(audio) : {}),
                 },
               }
             : {}),
           ...(effects ? { effects } : {}),
         }
-        let status = await call<RenderJobStatus>(renderEndpoint(jobId), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(request),
-        })
+        const { narration, ...started } = await call<RenderStartResponse>(
+          renderEndpoint(jobId),
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(request),
+          },
+        )
+        let status: RenderJobStatus = started
+        setApproved(narration ?? null)
 
         stage = "render"
         let failures = 0
@@ -251,5 +271,13 @@ export function useRenderJob() {
     }
   }, [activeJobId])
 
-  return { view, start, busy, cancel, canCancel: activeJobId !== null }
+  return {
+    view,
+    start,
+    busy,
+    cancel,
+    canCancel: activeJobId !== null,
+    /** Narration timing the server approved for the latest render. */
+    approvedNarration: approved,
+  }
 }

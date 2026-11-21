@@ -80,10 +80,15 @@ test.describe("Pixel Studio audio (FFmpeg mocked)", () => {
       page.getByRole("alert").filter({ hasText: "song.ogg" }),
     ).toContainText("isn't a supported audio file")
 
-    // Narration longer than the 15 s video: refused, not cut off.
+    // Narration longer than the 15 s video: refused, not cut off (trim it
+    // to fit; see e2e/pixel-audio-timing.spec.ts).
     await chooseAudio(page, "Voiceover file", "long.wav", makeWavNode(20))
     await expect(
-      page.getByText(/voiceover is 20\.0 s but the video is 15\.0 s/).first(),
+      page
+        .getByText(
+          /narration would play from 0 s to 20 s, but the video is 15 s/,
+        )
+        .first(),
     ).toBeVisible()
     await expect(render).toBeDisabled()
 
@@ -256,6 +261,8 @@ test.describe("Pixel Studio audio (FFmpeg mocked)", () => {
       voiceoverAssetId: `asset_${"c".repeat(32)}`,
       musicAssetId: `asset_${"d".repeat(32)}`,
       musicLevel: "high",
+      // DV-003D3: the whole recording from 0:00 unless trimmed or offset.
+      voiceoverTiming: { trimStartMs: 0, trimEndMs: null, offsetMs: 0 },
     })
   })
 })
@@ -400,8 +407,13 @@ test.describe("real audio rendering", () => {
     const surround = await audio("music", makeWavNode(2, { channels: 6 }))
     expect(surround.status()).toBe(422)
     expect((await surround.json()).message).toMatch(/6 channels/)
-    const tooLong = await audio("voiceover", makeWavNode(31))
+    // Recordings may exceed the video (a trimmed part is used) up to 5 min.
+    const tooLong = await audio(
+      "voiceover",
+      makeWavNode(301, { sampleRate: 8000 }),
+    )
     expect(tooLong.status()).toBe(422)
+    expect((await tooLong.json()).message).toMatch(/at most 5 minutes/)
     const damaged = makeWavNode(2)
     damaged.writeUInt16LE(0x7777, 20) // unknown WAV codec tag
     expect((await audio("music", damaged)).status()).toBe(422)

@@ -562,9 +562,11 @@ describe("real FFmpeg audio rendering", () => {
         /decode cleanly|couldn't be used/,
       ],
       [
-        "cover.mp3",
+        // One ordinary cover is accepted since DV-003D3
+        // (audio-timing.integration.test.ts); two pictures still aren't.
+        "two-covers.mp3",
         async () => {
-          const file = path.join(media, "cover.mp3")
+          const file = path.join(media, "two-covers.mp3")
           const art = path.join(media, "art.png")
           ffmpeg([
             "-f",
@@ -580,10 +582,14 @@ describe("real FFmpeg audio rendering", () => {
             path.join(media, "music.mp3"),
             "-i",
             art,
+            "-i",
+            art,
             "-map",
             "0:a",
             "-map",
             "1:v",
+            "-map",
+            "2:v",
             "-c",
             "copy",
             "-id3v2_version",
@@ -595,7 +601,7 @@ describe("real FFmpeg audio rendering", () => {
           return file
         },
         "audio/mpeg",
-        /cover art/,
+        /more than one embedded picture/,
       ],
       [
         "video.m4a",

@@ -6,6 +6,7 @@ import {
   Music,
   Mic,
   Scale,
+  Scissors,
   Trash2,
   TriangleAlert,
 } from "lucide-react"
@@ -22,13 +23,21 @@ import {
   type MusicLevel,
 } from "@/lib/video/types"
 import {
+  formatTime,
+  narrationWindow,
+  samplesToSeconds,
+} from "@/lib/video/audio-timing"
+import type { NarrationSummary } from "@/lib/video/render-api"
+import {
   AUDIO_EXTENSIONS,
   AUDIO_LIMITS,
+  DEFAULT_TIMING_FIELDS,
   formatBytes,
   MODE_NEEDS,
   sanitizeDisplayName,
+  timingFromFields,
   validateAudioFile,
-  VOICEOVER_TOLERANCE_SECONDS,
+  type TimingFields,
 } from "@/lib/video/validation"
 
 /** An audio file chosen in the browser; uploaded (real bytes) when rendering. */
@@ -48,6 +57,8 @@ export interface StudioAudio {
   voiceover: StudioAudioFile | null
   music: StudioAudioFile | null
   musicLevel: MusicLevel
+  /** Voiceover trim and start (DV-003D3), in seconds as typed. */
+  timing: TimingFields
 }
 
 export const NO_AUDIO: StudioAudio = {
@@ -55,11 +66,15 @@ export const NO_AUDIO: StudioAudio = {
   voiceover: null,
   music: null,
   musicLevel: "low",
+  timing: DEFAULT_TIMING_FIELDS,
 }
 
 const MODE_LABEL: Record<AudioMode, { label: string; hint: string }> = {
   none: { label: "No audio", hint: "A silent video, as before." },
-  voiceover: { label: "Voiceover", hint: "Your narration from the start." },
+  voiceover: {
+    label: "Voiceover",
+    hint: "Your narration, trimmed and started when you choose.",
+  },
   music: {
     label: "Background music",
     hint: "A track that loops and fades out.",
@@ -177,8 +192,8 @@ function AudioFilePicker({
       </div>
       <p id={`${id}-hint`} className="text-xs text-muted-foreground">
         {role === "voiceover"
-          ? `MP3, WAV or M4A, up to ${formatBytes(AUDIO_LIMITS.maxBytes)}. Starts with the first scene and can't be longer than the video.`
-          : `MP3, WAV or M4A, up to ${formatBytes(AUDIO_LIMITS.maxBytes)}. Loops if shorter than the video and fades out at the end.`}
+          ? `MP3, WAV or M4A, up to ${formatBytes(AUDIO_LIMITS.maxBytes)} and ${AUDIO_LIMITS.maxVoiceoverSeconds / 60} minutes. Choose the part to use and when it starts below; the file itself is never changed.`
+          : `MP3 (cover art is fine), WAV or M4A, up to ${formatBytes(AUDIO_LIMITS.maxBytes)}. Loops with a short crossfade if shorter than the video, and fades out at the end.`}
       </p>
 
       {value ? (
@@ -268,13 +283,208 @@ function AudioFilePicker({
   )
 }
 
+const TIMING_INPUTS = [
+  {
+    key: "trimStart",
+    path: "audio.voiceoverTiming.trimStartMs",
+    id: "voiceover-trim-start",
+    label: "Trim start",
+    hint: "Where the selection starts in your recording.",
+    placeholder: "0",
+  },
+  {
+    key: "trimEnd",
+    path: "audio.voiceoverTiming.trimEndMs",
+    id: "voiceover-trim-end",
+    label: "Trim end",
+    hint: "Leave empty for the end of the recording.",
+    placeholder: "end",
+  },
+  {
+    key: "offset",
+    path: "audio.voiceoverTiming.offsetMs",
+    id: "voiceover-offset",
+    label: "Narration starts at",
+    hint: "Seconds into the video; silence before it.",
+    placeholder: "0",
+  },
+] as const
+
+/**
+ * Trim start/end and start offset for the voiceover (DV-003D3), with the
+ * resulting selection length, finish time and a timeline. The numbers use
+ * the same rules as the server; the server re-checks them against FFprobe's
+ * duration when you render, and its approved timing is shown afterwards.
+ */
+function VoiceoverTimingControls({
+  audio,
+  onChange,
+  videoSeconds,
+  errorFor,
+  approved,
+}: {
+  audio: StudioAudio
+  onChange: (audio: StudioAudio) => void
+  videoSeconds: number
+  errorFor: (path: string) => string | undefined
+  approved: NarrationSummary | null
+}) {
+  const parsed = timingFromFields(audio.timing)
+  const duration = audio.voiceover?.durationSeconds ?? null
+  const window =
+    parsed.ok && duration !== null
+      ? narrationWindow(parsed.value, duration, Math.round(videoSeconds * 30))
+      : null
+  const valid =
+    window !== null && window.lengthSamples > 0 && window.trimStartSample >= 0
+  const start = window ? samplesToSeconds(window.startSample) : 0
+  const end = window ? samplesToSeconds(window.endSample) : 0
+  const pct = (seconds: number) =>
+    `${Math.min(Math.max((seconds / videoSeconds) * 100, 0), 100)}%`
+  return (
+    <fieldset className="flex flex-col gap-3 rounded-lg bg-surface-sunken p-3 ring-1 ring-border">
+      <legend className="sr-only">Voiceover timing</legend>
+      <p
+        className="flex items-center gap-2 text-sm font-medium"
+        aria-hidden="true"
+      >
+        <Scissors className="size-4 text-primary" />
+        Voiceover timing
+      </p>
+      <div className="grid gap-3 sm:grid-cols-3">
+        {TIMING_INPUTS.map((input) => {
+          const error = errorFor(input.path)
+          return (
+            <div key={input.key} className="flex min-w-0 flex-col gap-1">
+              <label htmlFor={input.id} className="text-xs font-medium">
+                {input.label} (s)
+              </label>
+              <input
+                id={input.id}
+                type="text"
+                inputMode="decimal"
+                autoComplete="off"
+                placeholder={input.placeholder}
+                value={audio.timing[input.key]}
+                aria-describedby={`${input.id}-hint${error ? ` ${input.id}-error` : ""}`}
+                aria-invalid={error ? true : undefined}
+                onChange={(event) =>
+                  onChange({
+                    ...audio,
+                    timing: {
+                      ...audio.timing,
+                      [input.key]: event.target.value,
+                    },
+                  })
+                }
+                className={cn(
+                  "h-8 w-full min-w-0 rounded-lg border border-border bg-background px-2.5 text-sm tabular-nums outline-none focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30",
+                  error && "border-destructive",
+                )}
+              />
+              <span
+                id={`${input.id}-hint`}
+                className="text-[0.6875rem] text-muted-foreground"
+              >
+                {input.hint}
+              </span>
+              {error ? (
+                <span
+                  id={`${input.id}-error`}
+                  className="text-xs font-medium text-destructive"
+                >
+                  {error}
+                </span>
+              ) : null}
+            </div>
+          )
+        })}
+      </div>
+
+      <p className="text-xs" data-testid="narration-summary" aria-live="polite">
+        {duration === null ? (
+          <>The recording&apos;s length is checked when you render.</>
+        ) : valid ? (
+          <>
+            <span className="font-medium">
+              Selected {formatTime(samplesToSeconds(window!.lengthSamples))}
+            </span>{" "}
+            (from {formatTime(samplesToSeconds(window!.trimStartSample))} to{" "}
+            {formatTime(samplesToSeconds(window!.trimEndSample))} of the{" "}
+            {formatTime(duration)} recording). Narration plays from{" "}
+            {formatTime(start)} and finishes at{" "}
+            <span className="font-medium">{formatTime(end)}</span> of the{" "}
+            {formatTime(videoSeconds)} video.
+          </>
+        ) : (
+          <>Fix the timing above to see where the narration plays.</>
+        )}
+      </p>
+
+      <div className="flex flex-col gap-1" data-testid="narration-timeline">
+        <div
+          role="img"
+          aria-label={
+            valid
+              ? `Timeline: narration from ${formatTime(start)} to ${formatTime(end)} of a ${formatTime(videoSeconds)} video${audio.mode === "voiceover-and-music" ? ", music throughout" : ""}.`
+              : "Timeline: narration timing not set yet."
+          }
+          className="relative h-7 overflow-hidden rounded-md bg-muted ring-1 ring-border"
+        >
+          {audio.mode === "voiceover-and-music" ? (
+            <span className="absolute inset-x-0 bottom-0 h-2 bg-secondary/50" />
+          ) : null}
+          {valid ? (
+            <span
+              className={cn(
+                "absolute top-0 bottom-2 rounded-sm bg-primary/80",
+                end > videoSeconds + 1e-9 && "bg-destructive/80",
+              )}
+              style={{
+                left: pct(start),
+                width: `calc(${pct(Math.min(end, videoSeconds))} - ${pct(start)})`,
+              }}
+            />
+          ) : null}
+        </div>
+        <div className="flex justify-between text-[0.6875rem] text-muted-foreground tabular-nums">
+          <span>0 s</span>
+          <span>
+            {audio.mode === "voiceover-and-music"
+              ? "Narration (top) · music (bottom)"
+              : "Narration"}
+          </span>
+          <span>{formatTime(videoSeconds)}</span>
+        </div>
+      </div>
+
+      {approved ? (
+        <p
+          className="text-xs text-muted-foreground"
+          data-testid="narration-approved"
+        >
+          <span className="font-medium text-foreground">
+            Approved by the server for the latest render:
+          </span>{" "}
+          narration {formatTime(approved.startSeconds)} –{" "}
+          {formatTime(approved.endSeconds)} of{" "}
+          {formatTime(approved.videoSeconds)} (recording{" "}
+          {formatTime(approved.trimStartSeconds)} –{" "}
+          {formatTime(approved.trimEndSeconds)}).
+        </p>
+      ) : null}
+    </fieldset>
+  )
+}
+
 export function audioSummary(audio: StudioAudio) {
   if (audio.mode === "none") return "No audio (silent video)."
   const format = `AAC-LC, ${AUDIO_OUTPUT.sampleRate / 1000} kHz stereo, ${AUDIO_OUTPUT.bitrate / 1000} kb/s target`
   const parts = {
     voiceover:
-      "Voiceover from the start, loudness-normalized, silence after it ends",
-    music: "Background music, looped to fit, fading out at the end",
+      "Voiceover (your selection, at your start time), loudness-normalized, silence around it",
+    music:
+      "Background music, looped with short crossfades to fit, fading out at the end",
     "voiceover-and-music": `Voiceover over background music (music ${audio.musicLevel}, lowered further while you speak)`,
   }
   return `${parts[audio.mode]}. ${format}.`
@@ -287,6 +497,7 @@ export function AudioSection({
   unavailableReason,
   videoSeconds,
   errorFor,
+  approved = null,
 }: {
   audio: StudioAudio
   onChange: (audio: StudioAudio) => void
@@ -295,6 +506,8 @@ export function AudioSection({
   unavailableReason: string | null
   videoSeconds: number
   errorFor: (path: string) => string | undefined
+  /** Narration timing the server approved for the latest render, if any. */
+  approved?: NarrationSummary | null
 }) {
   const needs = MODE_NEEDS[audio.mode]
 
@@ -368,6 +581,15 @@ export function AudioSection({
           onChange={(voiceover) => onChange({ ...audio, voiceover })}
         />
       ) : null}
+      {needs.voiceover ? (
+        <VoiceoverTimingControls
+          audio={audio}
+          onChange={onChange}
+          videoSeconds={videoSeconds}
+          errorFor={errorFor}
+          approved={approved}
+        />
+      ) : null}
       {needs.music ? (
         <AudioFilePicker
           id="audio-music"
@@ -413,10 +635,10 @@ export function AudioSection({
       {audio.mode !== "none" ? (
         <>
           <p className="text-xs text-muted-foreground">
-            The video is {formatSeconds(videoSeconds)} long. Narration may run
-            at most {VOICEOVER_TOLERANCE_SECONDS} s past the end (it&apos;s
-            trimmed exactly there); longer narration is refused rather than cut
-            off.
+            The video is {formatSeconds(videoSeconds)} long. Narration must end
+            by then: it&apos;s refused rather than cut off. Music that&apos;s
+            shorter than the video repeats with short crossfades; that smooths
+            the seams but can&apos;t line up unrelated beats.
           </p>
           <p className="flex items-start gap-2 rounded-lg bg-accent/10 p-3 text-xs ring-1 ring-accent/40 ring-inset">
             <TriangleAlert

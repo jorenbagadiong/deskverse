@@ -43,7 +43,9 @@ import {
   normalizeText,
   TEXT_LIMITS,
   validateProduct,
+  timingFromFields,
   validateVoiceoverFits,
+  validateVoiceoverTiming,
   type ValidationIssue,
 } from "@/lib/video/validation"
 
@@ -65,6 +67,9 @@ const FIELD_IDS: Record<string, string> = {
   "effects.transition": "effects-transition",
   "audio.voiceover": "audio-voiceover",
   "audio.music": "audio-music",
+  "audio.voiceoverTiming.trimStartMs": "voiceover-trim-start",
+  "audio.voiceoverTiming.trimEndMs": "voiceover-trim-end",
+  "audio.voiceoverTiming.offsetMs": "voiceover-offset",
 }
 
 const benefitFieldId = (row: BenefitRow) => `benefit-${row.key}`
@@ -149,13 +154,24 @@ export function PixelStudio() {
         message:
           "Add a background music file, or choose a different audio option.",
       })
-    if (needs.voiceover && audio.voiceover?.durationSeconds != null) {
-      const fits = validateVoiceoverFits(
-        audio.voiceover.durationSeconds,
-        storyboardFrames(scenes),
-        "audio.voiceover",
-      )
-      if (!fits.ok) list.push(...fits.issues)
+    // Voiceover timing (DV-003D3): the same rules as the server, using the
+    // browser's duration hint; the server re-checks with FFprobe.
+    if (needs.voiceover) {
+      const timing = timingFromFields(audio.timing)
+      const recording = audio.voiceover?.durationSeconds
+      if (!timing.ok) list.push(...timing.issues)
+      else if (recording != null) {
+        const range = validateVoiceoverTiming(timing.value, recording)
+        const fits = range.ok
+          ? validateVoiceoverFits(
+              recording,
+              timing.value,
+              storyboardFrames(scenes),
+              "audio.voiceover",
+            )
+          : range
+        if (!fits.ok) list.push(...fits.issues)
+      }
     }
     if (effectsAvailable) {
       if (effects.motion === "gentle-zoom" && !effectsAvailable.gentleZoom)
@@ -425,7 +441,15 @@ export function PixelStudio() {
                 setAudio(next)
                 touch("audio.voiceover")
                 touch("audio.music")
+                // A new recording or new timing changes whether it fits.
+                if (
+                  next.timing !== audio.timing ||
+                  next.voiceover !== audio.voiceover
+                )
+                  for (const key of ["trimStartMs", "trimEndMs", "offsetMs"])
+                    touch(`audio.voiceoverTiming.${key}`)
               }}
+              approved={render.approvedNarration}
               available={audioAvailability.ready}
               unavailableReason={audioAvailability.reason}
               videoSeconds={storyboardFrames(scenes) / 30}

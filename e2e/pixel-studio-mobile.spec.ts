@@ -90,6 +90,13 @@ test.describe("Pixel Studio (mobile)", () => {
                     "A rather long product name for a small phone screen",
                   audioMode: "voiceover-and-music",
                   effects: { motion: "gentle-zoom", transition: "crossfade" },
+                  narration: {
+                    startSeconds: 2,
+                    endSeconds: 14,
+                    trimStartSeconds: 3,
+                    trimEndSeconds: 15,
+                    videoSeconds: 23,
+                  },
                   imageCount: 6,
                   durationSeconds: null,
                   sizeBytes: null,

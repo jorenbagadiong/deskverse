@@ -119,6 +119,23 @@ export interface JobActions {
   preview: boolean
 }
 
+/**
+ * Where the narration plays, as resolved by the server from the saved timing
+ * and the recording's FFprobe duration (DV-003D3).
+ */
+export interface NarrationSummary {
+  startSeconds: number
+  endSeconds: number
+  trimStartSeconds: number
+  trimEndSeconds: number
+  videoSeconds: number
+}
+
+/** POST /render's answer: the job status plus the approved narration timing. */
+export type RenderStartResponse = RenderJobStatus & {
+  narration: NarrationSummary | null
+}
+
 /** One row of the render history: no paths, no private asset metadata. */
 export interface JobSummary {
   jobId: RenderJobId
@@ -130,6 +147,8 @@ export interface JobSummary {
   audioMode: AudioMode | null
   /** The project's effects (static with cuts for pre-DV-003D2 projects); null for drafts. */
   effects: VisualEffects | null
+  /** Narration timing when the project has a voiceover; null otherwise. */
+  narration: NarrationSummary | null
   imageCount: number
   /** Verified facts, only for completed videos. */
   durationSeconds: number | null

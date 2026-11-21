@@ -127,6 +127,20 @@ export interface AudioAsset {
   displayName: string
 }
 
+/**
+ * Which part of the voiceover recording plays, and when (DV-003D3). Whole
+ * milliseconds: at 48 kHz one millisecond is exactly 48 samples, so every
+ * boundary lands on an exact sample. The recording itself is never changed.
+ */
+export interface VoiceoverTiming {
+  /** Where the selection starts in the recording. */
+  trimStartMs: number
+  /** Where it ends in the recording; null = the end of the recording (FFprobe duration). */
+  trimEndMs: number | null
+  /** When the selection starts playing, from the start of the video. */
+  offsetMs: number
+}
+
 /** The only audio choices a project carries; all processing is server-side. */
 export interface AudioConfig {
   mode: AudioMode
@@ -134,6 +148,11 @@ export interface AudioConfig {
   musicAssetId: AssetId | null
   /** Used when narration and music play together. */
   musicLevel: MusicLevel
+  /**
+   * Absent in projects saved before DV-003D3, and whenever there's no
+   * voiceover: the whole recording plays from 0:00.
+   */
+  voiceoverTiming?: VoiceoverTiming
 }
 
 // ---------------------------------------------------------------------------

@@ -134,7 +134,7 @@ export const REQUIRED_FILTERS = [
   "transpose",
 ] as const
 
-/** Filters the DV-003C audio stage uses (see src/server/video/audio-command.ts). */
+/** Filters the audio stage uses (see src/server/video/audio-command.ts). */
 export const AUDIO_FILTERS = [
   "aresample",
   "aformat",
@@ -148,6 +148,8 @@ export const AUDIO_FILTERS = [
   "sidechaincompress",
   "amix",
   "alimiter",
+  // DV-003D3: narration offset (crossfaded loops use afade + amix).
+  "adelay",
 ] as const
 
 /**

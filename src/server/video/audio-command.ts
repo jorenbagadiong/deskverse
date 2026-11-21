@@ -5,10 +5,21 @@ import {
   SAMPLES_PER_FRAME,
   VIDEO_FORMAT,
 } from "@/lib/video/format"
-import type { AudioAsset, AudioConfig, MusicLevel } from "@/lib/video/types"
+import {
+  narrationWindow,
+  videoSamples,
+  type NarrationWindow,
+} from "@/lib/video/audio-timing"
+import type {
+  AudioAsset,
+  AudioConfig,
+  MusicLevel,
+  VoiceoverTiming,
+} from "@/lib/video/types"
 
 /**
- * Builds the DV-003C audio stage as plain argument arrays (pure, no I/O).
+ * Builds the audio stage (DV-003C; trim, offset and crossfaded loops since
+ * DV-003D3) as plain argument arrays (pure, no I/O).
  *
  * The verified silent video's H.264 stream is copied unchanged (`-c:v copy`);
  * only the new audio is encoded. User files are never part of a filter graph:
@@ -121,31 +132,109 @@ export interface LoudnessMeasurement {
 
 /** Samples of a music file used per loop: the whole file, or one video length. */
 export function musicLoopSamples(music: AudioAsset, totalFrames: number) {
-  const videoSamples = totalFrames * SAMPLES_PER_FRAME
   return Math.max(
     1,
     Math.min(
-      Math.floor(music.durationSeconds * AUDIO_OUTPUT.sampleRate),
-      videoSamples,
+      // Whole samples, ignoring float noise (2.3 s × 48 000 = 110 399.99…).
+      Math.floor(music.durationSeconds * AUDIO_OUTPUT.sampleRate + 1e-6),
+      videoSamples(totalFrames),
     ),
   )
 }
 
+/** Exactly `samples` long: pads with silence or cuts (after any resampling). */
+const exactly = (samples: number) =>
+  `apad=whole_len=${samples},atrim=end_sample=${samples}`
+
+/**
+ * The part of the voiceover recording that plays (DV-003D3), as 48 kHz
+ * float stereo of exactly the selection's length. Used verbatim by both the
+ * loudness measurement and the mix, so the measured audio is exactly the
+ * audio that is normalized and heard.
+ */
+export function voiceoverSelection(window: NarrationWindow) {
+  return `${TO_STEREO_48K},atrim=start_sample=${window.trimStartSample}:end_sample=${window.trimEndSample},asetpts=PTS-STARTPTS,${exactly(window.lengthSamples)}`
+}
+
+/** The part of the music file that loops (or plays once), likewise shared. */
+export function musicSelection(loopSamples: number) {
+  return `${TO_STEREO_48K},atrim=end_sample=${loopSamples},asetpts=PTS-STARTPTS,${exactly(loopSamples)}`
+}
+
+/**
+ * Music looping (DV-003D3). A track shorter than the video repeats with a
+ * short crossfade at every seam instead of a hard cut:
+ *
+ * - the first pass plays the track's start untouched, up to its last
+ *   `crossfadeSamples`;
+ * - every repeat starts with the track's last `crossfadeSamples` fading out
+ *   (equal-power) over its first ones fading in, then continues from there.
+ *
+ * So the music repeats every `periodSamples` (= track − crossfade) exactly,
+ * with no drift. The crossfade adapts to the track: 20 % of it, at most
+ * 1 s. It smooths the level and removes clicks at the seam; it can't make
+ * unrelated musical phrases line up.
+ */
+export interface MusicLoopPlan {
+  sourceSamples: number
+  /** False when the track covers the whole video (no seams). */
+  loops: boolean
+  crossfadeSamples: number
+  periodSamples: number
+  /** Output samples where each crossfade starts. */
+  seams: number[]
+}
+
+export const MUSIC_CROSSFADE = { maxSeconds: 1, fraction: 0.2 } as const
+
+export function musicLoopPlan(
+  music: AudioAsset,
+  totalFrames: number,
+): MusicLoopPlan {
+  const total = videoSamples(totalFrames)
+  const sourceSamples = musicLoopSamples(music, totalFrames)
+  if (sourceSamples >= total)
+    return {
+      sourceSamples,
+      loops: false,
+      crossfadeSamples: 0,
+      periodSamples: sourceSamples,
+      seams: [],
+    }
+  const crossfadeSamples = Math.max(
+    1,
+    Math.round(
+      Math.min(
+        MUSIC_CROSSFADE.maxSeconds * AUDIO_OUTPUT.sampleRate,
+        sourceSamples * MUSIC_CROSSFADE.fraction,
+      ),
+    ),
+  )
+  const periodSamples = sourceSamples - crossfadeSamples
+  const seams: number[] = []
+  for (let at = periodSamples; at < total; at += periodSamples) seams.push(at)
+  return { sourceSamples, loops: true, crossfadeSamples, periodSamples, seams }
+}
+
 /**
  * First loudnorm pass (measurement only, discarded output). It analyses
- * exactly the audio the second pass will process, and the JSON statistics
- * it prints are parsed by `parseLoudnormJson`.
+ * exactly the audio the second pass will process (the same selection
+ * filters), and the JSON statistics it prints are parsed by
+ * `parseLoudnormJson`.
  */
 export function loudnessMeasureArgs(
   asset: AudioAsset,
   path: string,
   totalFrames: number,
   target: { I: number; TP: number; LRA: number },
+  voiceoverTiming?: VoiceoverTiming,
 ) {
-  const samples =
+  const selection =
     asset.role === "music"
-      ? musicLoopSamples(asset, totalFrames)
-      : totalFrames * SAMPLES_PER_FRAME
+      ? musicSelection(musicLoopSamples(asset, totalFrames))
+      : voiceoverSelection(
+          narrationWindow(voiceoverTiming, asset.durationSeconds, totalFrames),
+        )
   return [
     "-nostdin",
     "-hide_banner",
@@ -156,7 +245,7 @@ export function loudnessMeasureArgs(
     "-map",
     "0:a:0",
     "-af",
-    `${TO_STEREO_48K},atrim=end_sample=${samples},loudnorm=I=${target.I}:TP=${target.TP}:LRA=${target.LRA}:print_format=json`,
+    `${selection},loudnorm=I=${target.I}:TP=${target.TP}:LRA=${target.LRA}:print_format=json`,
     "-f",
     "null",
     "-",
@@ -280,7 +369,7 @@ export function buildAudioPlan({
   const samples = totalFrames * SAMPLES_PER_FRAME
   const totalSeconds = totalFrames / VIDEO_FORMAT.fps
   const seconds = (value: number) => Math.max(value, 0).toFixed(3)
-  const exactLength = `apad=whole_len=${samples},atrim=end_sample=${samples}`
+  const exactLength = exactly(samples)
 
   const inputs = ["-protocol_whitelist", "file", "-i", `file:${videoFile}`]
   const chains: string[] = []
@@ -289,24 +378,60 @@ export function buildAudioPlan({
   if (voiceover) {
     inputs.push(...audioInput(voiceover.asset, voiceover.path))
     const index = next++
-    // Starts at 0 with the first scene; trimmed at the video boundary (the
-    // project already rejected narration longer than the tolerance), padded
-    // with silence to the end.
+    const window = narrationWindow(
+      config.voiceoverTiming,
+      voiceover.asset.durationSeconds,
+      totalFrames,
+    )
+    if (window.endSample > samples && !window.legacy)
+      throw new Error("The narration doesn't fit the video.")
+    // The selection (trimmed exactly as it was measured), normalized, then
+    // delayed by the offset with real silence (sample-exact: adelay in
+    // samples) and padded with silence to the end of the video. Older
+    // projects play from 0:00, cut at the video boundary as before.
+    const delay =
+      window.startSample > 0
+        ? `,adelay=delays=${window.startSample}S:all=1`
+        : ""
     chains.push(
-      `[${index}:a]${TO_STEREO_48K},atrim=end_sample=${samples},asetpts=PTS-STARTPTS,${loudnormLinear(loudnessTarget("voiceover", config), voiceover.measurement)},aresample=${AUDIO_OUTPUT.sampleRate},${exactLength}[voice]`,
+      `[${index}:a]${voiceoverSelection(window)},${loudnormLinear(loudnessTarget("voiceover", config), voiceover.measurement)},aresample=${AUDIO_OUTPUT.sampleRate},${exactly(window.lengthSamples)}${delay},${exactLength}[voice]`,
     )
   }
 
   if (music) {
     inputs.push(...audioInput(music.asset, music.path))
     const index = next++
-    const loopSamples = musicLoopSamples(music.asset, totalFrames)
-    // Enough repeats to cover the video plus one spare; aloop is finite and
-    // the final atrim ends the stream, so this can't run forever.
-    const loops = Math.ceil(samples / loopSamples)
-    chains.push(
-      `[${index}:a]${TO_STEREO_48K},atrim=end_sample=${loopSamples},asetpts=PTS-STARTPTS,${loudnormLinear(loudnessTarget("music", config), music.measurement)},aresample=${AUDIO_OUTPUT.sampleRate},aloop=loop=${loops}:size=${loopSamples},asetpts=N/SR/TB,${exactLength},afade=t=in:d=${seconds(MUSIC_FADE_IN_SECONDS)},afade=t=out:st=${seconds(totalSeconds - MUSIC_FADE_OUT_SECONDS)}:d=${seconds(MUSIC_FADE_OUT_SECONDS)}[music]`,
-    )
+    const plan = musicLoopPlan(music.asset, totalFrames)
+    const L = plan.sourceSamples
+    const fades = `afade=t=in:d=${seconds(MUSIC_FADE_IN_SECONDS)},afade=t=out:st=${seconds(totalSeconds - MUSIC_FADE_OUT_SECONDS)}:d=${seconds(MUSIC_FADE_OUT_SECONDS)}`
+    const normalized = `[${index}:a]${musicSelection(L)},${loudnormLinear(loudnessTarget("music", config), music.measurement)},aresample=${AUDIO_OUTPUT.sampleRate},${exactly(L)}`
+    if (!plan.loops) chains.push(`${normalized},${exactLength},${fades}[music]`)
+    else {
+      // A fixed-size graph however many times the track repeats: one
+      // crossfaded seam, looped by aloop (finite; the final atrim ends it).
+      const X = plan.crossfadeSamples
+      const P = plan.periodSamples
+      const repeats = Math.ceil((samples - P) / P) + 1
+      const part = (label: string, trim: string, then = "") =>
+        `[m${label}]atrim=${trim},asetpts=PTS-STARTPTS${then}[${label}]`
+      chains.push(
+        `${normalized},asplit=4[mfirst][mtail][mhead][mmiddle]`,
+        part("first", `end_sample=${P}`),
+        part(
+          "tail",
+          `start_sample=${P}`,
+          `,afade=t=out:ss=0:ns=${X}:curve=qsin`,
+        ),
+        part("head", `end_sample=${X}`, `,afade=t=in:ss=0:ns=${X}:curve=qsin`),
+        part("middle", `start_sample=${X}:end_sample=${P}`),
+        // Equal-power crossfade, built from two fades and a plain sum so it
+        // is exactly X samples. (acrossfade returns nothing when both of
+        // its inputs are exactly as long as the fade, as here.)
+        `[tail][head]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[seam]`,
+        `[seam][middle]concat=n=2:v=0:a=1,aloop=loop=${repeats}:size=${P},asetpts=N/SR/TB[repeat]`,
+        `[first][repeat]concat=n=2:v=0:a=1,asetpts=N/SR/TB,${exactLength},${fades}[music]`,
+      )
+    }
   }
 
   const finish = `${LIMITER},aresample=${AUDIO_OUTPUT.sampleRate},${exactLength},afade=t=out:st=${seconds(totalSeconds - END_FADE_SECONDS)}:d=${seconds(END_FADE_SECONDS)},aformat=sample_fmts=fltp:sample_rates=${AUDIO_OUTPUT.sampleRate}:channel_layouts=stereo[aout]`
