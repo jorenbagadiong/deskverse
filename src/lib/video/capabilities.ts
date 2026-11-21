@@ -107,7 +107,11 @@ export interface FfmpegCapabilityReport {
   issues: CapabilityIssue[]
 }
 
-/** Filters the DV-003B renderer uses (see src/server/video/ffmpeg-command.ts). */
+/**
+ * Filters every render uses (see src/server/video/ffmpeg-command.ts): the
+ * DV-003B scene and encode filters, plus (DV-003D2) the EXIF orientation
+ * transforms applied while normalizing photos.
+ */
 export const REQUIRED_FILTERS = [
   "color",
   "split",
@@ -124,6 +128,10 @@ export const REQUIRED_FILTERS = [
   "setsar",
   "concat",
   "fade",
+  "null",
+  "hflip",
+  "vflip",
+  "transpose",
 ] as const
 
 /** Filters the DV-003C audio stage uses (see src/server/video/audio-command.ts). */
@@ -142,7 +150,15 @@ export const AUDIO_FILTERS = [
   "alimiter",
 ] as const
 
-/** Not used yet: crossfades between scenes are planned for DV-003D. */
-export const OPTIONAL_FILTERS = ["xfade"] as const
+/**
+ * Visual-effect filters (DV-003D2): gentle zoom needs perspective + pad,
+ * crossfades need xfade. Not required: without them a build still renders
+ * static videos with cuts, and a render asking for a missing effect fails
+ * before any work with a clear message.
+ */
+export const EFFECT_FILTERS = ["perspective", "pad", "xfade"] as const
+
+export const MOTION_FILTERS = ["perspective", "pad"] as const
+export const TRANSITION_FILTERS = ["xfade"] as const
 
 export const CAPABILITIES_ENDPOINT = "/api/studio/pixel/capabilities"

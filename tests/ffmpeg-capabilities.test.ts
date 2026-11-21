@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest"
 
-import { AUDIO_FILTERS, REQUIRED_FILTERS } from "@/lib/video/capabilities"
+import {
+  AUDIO_FILTERS,
+  EFFECT_FILTERS,
+  REQUIRED_FILTERS,
+} from "@/lib/video/capabilities"
 import { checkLocalRequest, isLoopbackHost } from "@/server/http/local-request"
 import {
   classifyRunError,
@@ -71,8 +75,9 @@ const FILTERS = [
     filterLine(f, f === "concat" ? "N->N" : "V->V"),
   ),
   ...AUDIO_FILTERS.map((f) => filterLine(f, "A->A")),
+  filterLine("perspective"),
+  filterLine("pad"),
   filterLine("xfade", "VV->V"),
-  filterLine("color", "|->V"),
 ].join("\n")
 
 // --- A fake machine ---------------------------------------------------------
@@ -215,11 +220,12 @@ describe("FFmpeg output parsing", () => {
     const filters = parseFilters(FILTERS)
     for (const name of REQUIRED_FILTERS)
       expect(filters.has(name), name).toBe(true)
-    expect(filters.has("xfade")).toBe(true)
+    for (const name of EFFECT_FILTERS)
+      expect(filters.has(name), name).toBe(true)
     expect(filters.has("color")).toBe(true)
     expect(filters.has("=")).toBe(false)
     expect(filters.size).toBe(
-      new Set([...REQUIRED_FILTERS, ...AUDIO_FILTERS, "xfade", "color"]).size,
+      new Set([...REQUIRED_FILTERS, ...AUDIO_FILTERS, ...EFFECT_FILTERS]).size,
     )
   })
 })

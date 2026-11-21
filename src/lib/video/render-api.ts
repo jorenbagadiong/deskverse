@@ -12,6 +12,7 @@ import type {
   AudioRole,
   ImageMimeType,
   ProductInfo,
+  VisualEffects,
 } from "@/lib/video/types"
 
 /**
@@ -64,6 +65,11 @@ export interface RenderRequest {
   assetIds: AssetId[]
   /** Optional (DV-003C): omitted or mode "none" renders a silent video. */
   audio?: AudioConfig
+  /**
+   * Optional (DV-003D2): named choices only. Omitted renders static with
+   * cuts, as before; the studio always sends what the user picked.
+   */
+  effects?: VisualEffects
 }
 
 export interface UploadedAudio {
@@ -122,6 +128,8 @@ export interface JobSummary {
   /** From the server-built project; null for drafts or unreadable projects. */
   productName: string | null
   audioMode: AudioMode | null
+  /** The project's effects (static with cuts for pre-DV-003D2 projects); null for drafts. */
+  effects: VisualEffects | null
   imageCount: number
   /** Verified facts, only for completed videos. */
   durationSeconds: number | null

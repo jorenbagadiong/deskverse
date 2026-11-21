@@ -45,6 +45,7 @@ import {
   AUDIO_FILE_EXTENSION,
   sniffAudioContainer,
 } from "@/server/video/audio-sniff"
+import { orientedDimensions, readJpegOrientation } from "@/server/video/exif"
 import { readImageDimensions, sniffImageType } from "@/server/video/image-sniff"
 
 /**
@@ -209,9 +210,14 @@ export interface ImageUpload {
  * is recorded in job.json, e.g. FFprobe decoding. Throw a StorageError with
  * code "invalid-upload" to reject: the file is deleted again.
  */
+/**
+ * `stored` is the size in the file's header. For a JPEG with an EXIF
+ * orientation of 5–8 it is the asset's upright size turned sideways.
+ */
 export type UploadVerifier = (
   filePath: string,
   asset: MediaAsset,
+  stored: { width: number; height: number },
 ) => Promise<void>
 
 export interface AudioUpload {
@@ -539,12 +545,18 @@ export function createVideoStorage(
             "invalid-upload",
             `“${name}” isn't a JPEG, PNG or WebP image (its contents don't match its type).`,
           )
-        const dimensions = readImageDimensions(bytes, actualType)
-        if (!dimensions)
+        const stored = readImageDimensions(bytes, actualType)
+        if (!stored)
           throw new StorageError(
             "invalid-upload",
             `“${name}” has no readable dimensions.`,
           )
+        // Photos record "which way up" in EXIF: the asset's size is the
+        // upright one the browser previews and the video shows (DV-003D2).
+        const dimensions =
+          actualType === "image/jpeg"
+            ? orientedDimensions(stored, readJpegOrientation(bytes))
+            : stored
         // The server identifies files by their bytes; the user's file name
         // (possibly missing or extensionless) is display-only, so the limits
         // are checked against a name derived from the sniffed type.
@@ -571,7 +583,7 @@ export function createVideoStorage(
         // "wx": never overwrite an existing file.
         await fs.writeFile(file, bytes, { mode: FILE_MODE, flag: "wx" })
         try {
-          if (options.verify) await options.verify(file, asset)
+          if (options.verify) await options.verify(file, asset, stored)
           await writeJob(dir, {
             ...job,
             assets: [...job.assets, asset],
@@ -1012,6 +1024,19 @@ export function createVideoStorage(
  * Sizes of a job directory's parts, counting regular files only. Symlinks
  * are never followed (lstat), and only the known two levels are walked.
  */
+/**
+ * A file's size, or 0 when it vanished after its folder was listed: a render
+ * finishing or being cancelled empties work/ while the summary is counted.
+ */
+async function sizeOf(file: string) {
+  try {
+    return (await fs.lstat(file)).size
+  } catch (error) {
+    if (isErrno(error, "ENOENT")) return 0
+    throw error
+  }
+}
+
 async function folderSizes(dir: string) {
   const sizes = { assets: 0, output: 0, work: 0, other: 0, total: 0 }
   let entries: import("node:fs").Dirent[]
@@ -1023,7 +1048,7 @@ async function folderSizes(dir: string) {
   for (const entry of entries) {
     const full = path.join(dir, entry.name)
     if (entry.isFile()) {
-      sizes.other += (await fs.lstat(full)).size
+      sizes.other += await sizeOf(full)
     } else if (entry.isDirectory()) {
       const bucket =
         entry.name === "assets" ||
@@ -1035,7 +1060,7 @@ async function folderSizes(dir: string) {
         .readdir(full, { withFileTypes: true })
         .catch(() => [])) {
         if (!inner.isFile()) continue
-        sizes[bucket] += (await fs.lstat(path.join(full, inner.name))).size
+        sizes[bucket] += await sizeOf(path.join(full, inner.name))
       }
     }
   }

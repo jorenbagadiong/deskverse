@@ -249,6 +249,44 @@ failure by design. Everything else passes. Run the office tests where Chrome
 has a GPU (for example native Windows). Details and the exact list:
 [E2E environment notes](docs/e2e-environment.md).
 
+## DV-003D2 scope: Cinematic effects & EXIF orientation ✅
+
+Pixel Studio's new **Visual effects** card adds gentle movement to the
+rendered MP4, and phone photos now always come out the right way up.
+
+- **Product motion:** **Gentle zoom** (default for new projects) slowly
+  grows the product photo by about 5 % during each scene, smoothly and
+  never cropped or stretched. The backdrop, captions and affiliate
+  disclosure stay perfectly still. **None** keeps photos still.
+- **Scene transitions:** **Crossfade** (default) dissolves each scene into
+  the next over 0.3 s, centered on the scene change, without changing the
+  video's length or frame count. **Cuts** change scenes instantly.
+- **Fully static:** choose None + Cuts. Videos saved before this update
+  have no effects setting and keep rendering static with cuts, including on
+  retry. Retries always reuse the saved effects.
+- **EXIF orientation:** sideways or mirrored phone JPEGs (all eight EXIF
+  orientations) are turned upright exactly once, in a private normalized
+  copy; your original upload is never changed, and the studio preview and
+  the video agree. Large photos are also scaled to at most 2160 px there,
+  which keeps renders fast.
+- **Safe by design:** the browser sends only the two choice names; zoom
+  amount, timing and FFmpeg filters are fixed on the server. If your FFmpeg
+  lacks the `perspective` or `xfade` filter, the choice is disabled with an
+  explanation and static videos still render.
+- The storyboard preview stays a labeled still plan that names the chosen
+  effects; the motion is only in the MP4. Your reduce-motion setting calms
+  the page, not the video file.
+
+Each scene is now encoded on its own and the pieces are joined without
+re-encoding, so memory no longer grows with the number of scenes. Measured
+on the development machine (four real photos, 19 s): gentle zoom + crossfade
+renders in 16.3 s with an FFmpeg peak of 496 MiB, against 8.5 s / 458 MiB for
+the static render before this update (six scenes: 19.8 s / 496 MiB). Details:
+[video architecture §7](docs/video-architecture.md#7-visual-effects-and-exif-orientation-dv-003d2).
+
+**Not in this phase:** pans, per-scene effects, other transition styles and
+a moving preview (DV-003D3 and later).
+
 ## DV-003D1 scope: Reliable job management ✅
 
 Pixel Studio is now built for repeated daily use. Every render is a job saved
@@ -279,7 +317,7 @@ peak about 470 MiB). Details:
 [video architecture §6](docs/video-architecture.md#6-job-management-dv-003d1).
 
 **Not in this phase:** transitions, motion, templates and audio editing
-(DV-003D2 and later).
+(transitions and motion arrived in DV-003D2).
 
 ## DV-003C scope: Voiceover & background music ✅
 

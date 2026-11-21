@@ -21,7 +21,7 @@ import {
   type UploadedAsset,
   type UploadedAudio,
 } from "@/lib/video/render-api"
-import type { AudioRole, ProductInfo } from "@/lib/video/types"
+import type { AudioRole, ProductInfo, VisualEffects } from "@/lib/video/types"
 import { MODE_NEEDS } from "@/lib/video/validation"
 
 export type RenderView =
@@ -89,6 +89,7 @@ export function useRenderJob() {
       product: ProductInfo,
       images: readonly StudioImage[],
       audio?: StudioAudio,
+      effects?: VisualEffects,
     ) => {
       const run = ++generation.current
       const live = () => generation.current === run
@@ -172,6 +173,7 @@ export function useRenderJob() {
                 },
               }
             : {}),
+          ...(effects ? { effects } : {}),
         }
         let status = await call<RenderJobStatus>(renderEndpoint(jobId), {
           method: "POST",

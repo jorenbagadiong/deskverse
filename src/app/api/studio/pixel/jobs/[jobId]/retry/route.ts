@@ -1,3 +1,8 @@
+import {
+  missingEffectFilters,
+  missingEffectsMessage,
+  STATIC_EFFECTS,
+} from "@/lib/video/effects"
 import { isRenderJobId } from "@/lib/video/ids"
 import {
   guardLocalApi,
@@ -50,6 +55,15 @@ export async function POST(
           "audio-unavailable",
           capabilities.audio.reason ??
             "Audio isn't available with this FFmpeg build.",
+        )
+      // Retries reuse the saved effects, so they need the same filters.
+      const effects = project?.effects ?? STATIC_EFFECTS
+      const missingEffects = missingEffectFilters(effects, capabilities)
+      if (missingEffects.length > 0)
+        return jsonError(
+          503,
+          "effects-unavailable",
+          missingEffectsMessage(effects, missingEffects),
         )
     }
     const queued = await queue.retry(jobId)

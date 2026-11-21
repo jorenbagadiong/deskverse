@@ -58,6 +58,7 @@ export type RenderJobErrorCode =
   | "verification-failed"
   | "audio-unavailable"
   | "audio-failed"
+  | "effects-unavailable"
   | "interrupted"
 
 export interface RenderJobError {

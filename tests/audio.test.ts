@@ -1258,7 +1258,10 @@ describe("render service audio stage (mocked FFmpeg)", () => {
     const encodes = spawn.calls.filter(
       (a) => a.includes("-c:v") && a[a.indexOf("-c:v") + 1] === "libx264",
     )
-    expect(encodes).toHaveLength(1)
+    // One H.264 encode per scene segment, joined and muxed without re-encoding.
+    expect(encodes).toHaveLength((await storage.readProject(id)).scenes.length)
+    const join = spawn.calls.find((a) => a.includes("concat"))!
+    expect(join[join.indexOf("-c") + 1]).toBe("copy")
     const mix = spawn.calls.find((a) => a.includes("[aout]"))!
     expect(mix[mix.indexOf("-c:v") + 1]).toBe("copy")
     expect(await fs.readdir(await storage.workDir(id))).toEqual([])

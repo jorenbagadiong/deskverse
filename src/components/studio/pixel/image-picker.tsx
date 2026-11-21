@@ -135,8 +135,9 @@ export function ImagePicker({
           {MEDIA_LIMITS.minCount}–{MEDIA_LIMITS.maxCount} JPEG, PNG or WebP
           images, up to {formatBytes(MEDIA_LIMITS.maxBytes)} each and at least{" "}
           {MEDIA_LIMITS.minSide} px per side. The first image is the hero shot.
-          When you render, they&apos;re sent only to Deskverse on this computer
-          and stored in its private data folder.
+          Sideways phone photos are turned upright automatically, as shown here;
+          your files are never changed. When you render, they&apos;re sent only
+          to Deskverse on this computer and stored in its private data folder.
         </p>
       </div>
 

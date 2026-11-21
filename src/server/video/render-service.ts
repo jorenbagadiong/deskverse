@@ -4,14 +4,24 @@ import { promises as fs } from "node:fs"
 import path from "node:path"
 
 import type { FfmpegCapabilityReport } from "@/lib/video/capabilities"
+import {
+  missingEffectFilters,
+  missingEffectsMessage,
+} from "@/lib/video/effects"
 import { VIDEO_FORMAT } from "@/lib/video/format"
 import type {
   RenderJobErrorCode,
   RenderOutput,
   RenderProgress,
 } from "@/lib/video/render-job"
+import type { ImageMimeType } from "@/lib/video/types"
 import type { Runner, Spawner } from "@/server/process/run-executable"
-import { buildRenderPlan, encoderOptions } from "@/server/video/ffmpeg-command"
+import { readJpegOrientation } from "@/server/video/exif"
+import {
+  buildRenderPlan,
+  encoderOptions,
+  type ImageSource,
+} from "@/server/video/ffmpeg-command"
 import {
   buildAudioPlan,
   loudnessMeasureArgs,
@@ -30,6 +40,7 @@ import {
   type FontMetrics,
   type VideoFontWeight,
 } from "@/server/video/font-metrics"
+import { readImageDimensions } from "@/server/video/image-sniff"
 import {
   resolveInside,
   StorageError,
@@ -126,6 +137,26 @@ async function verify(
   return verified.value
 }
 
+/** Reads only the header and EXIF; pixels are decoded by FFmpeg later. */
+async function readImageSource(
+  filePath: string,
+  mimeType: ImageMimeType,
+): Promise<ImageSource> {
+  const bytes = new Uint8Array(await fs.readFile(filePath))
+  const stored = readImageDimensions(bytes, mimeType)
+  if (!stored)
+    throw new RenderFailure(
+      "invalid-project",
+      "One of this video's images can't be read any more. Start a new render.",
+    )
+  return {
+    path: filePath,
+    orientation: mimeType === "image/jpeg" ? readJpegOrientation(bytes) : 1,
+    storedWidth: stored.width,
+    storedHeight: stored.height,
+  }
+}
+
 /**
  * Renders one queued job end to end and returns FFprobe-verified facts about
  * the result. The job's state transitions are the queue's responsibility;
@@ -167,9 +198,13 @@ export async function renderVideo(
       "This video's project couldn't be read. Start a new render.",
     )
   }
-  const assetPaths = new Map<string, string>()
-  for (const asset of project.assets)
-    assetPaths.set(asset.id, await storage.assetPath(jobId, asset.id))
+  // Orientation and stored size come from each photo's own bytes, so
+  // projects saved before DV-003D2 are turned upright the same way.
+  const imageSources = new Map<string, ImageSource>()
+  for (const asset of project.assets) {
+    const filePath = await storage.assetPath(jobId, asset.id)
+    imageSources.set(asset.id, await readImageSource(filePath, asset.mimeType))
+  }
 
   // Audio prerequisites are checked before any encoding, so a missing AAC
   // encoder fails fast. Silent projects never depend on them.
@@ -184,11 +219,20 @@ export async function renderVideo(
 
   const plan = buildRenderPlan({
     project,
-    assetPaths,
+    imageSources,
     fonts: deps.fonts,
     encoder: { name: encoderName, options: encoderOptions(encoderName) },
     threads: deps.threads,
   })
+
+  // Effects need filters some builds lack: fail now, before any work, with
+  // a message that says which choice to change (DV-003D2).
+  const missing = missingEffectFilters(plan.effects, capabilities)
+  if (missing.length > 0)
+    throw new RenderFailure(
+      "effects-unavailable",
+      missingEffectsMessage(plan.effects, missing),
+    )
 
   // 3. Private scratch space: fonts and caption files, by generated names.
   await storage.cleanupWork(jobId)
@@ -207,7 +251,29 @@ export async function renderVideo(
           flag: "wx",
         })
 
-    // 4. One still frame per scene.
+    // 4. Normalize each photo once: upright (EXIF) and at most 2160 px.
+    for (const [index, image] of plan.images.entries()) {
+      throwIfCancelled(signal)
+      const result = await deps.spawn(deps.commands.ffmpeg, image.args, {
+        cwd: work,
+        signal,
+        timeoutMs: deps.timeouts.sceneMs,
+      })
+      if (wasCancelled(result)) throw new RenderCancelled()
+      if (!result.ok) {
+        deps.log?.(
+          `[pixel] ${jobId} image ${index + 1} normalization failed (${result.reason}): ${result.stderrTail}`,
+        )
+        throw new RenderFailure(
+          result.reason === "timed-out" ? "timed-out" : "render-failed",
+          result.reason === "timed-out"
+            ? `Preparing image ${index + 1} took too long and was stopped.`
+            : `FFmpeg couldn't prepare image ${index + 1}. Check that it opens on your computer, or try a different one.`,
+        )
+      }
+    }
+
+    // 5. One still frame per scene (and its product layer for gentle zoom).
     for (const [index, scene] of plan.scenes.entries()) {
       throwIfCancelled(signal)
       onProgress({
@@ -239,42 +305,70 @@ export async function renderVideo(
       totalScenes: plan.scenes.length,
     })
 
-    // 5. Encode, with progress from FFmpeg's own -progress output.
+    // 6. Encode scene by scene (motion and dissolves happen here), then
+    // join the segments without re-encoding. One segment at a time keeps
+    // memory flat however many scenes there are. Progress comes from
+    // FFmpeg's own -progress output; encodeMs bounds the whole encode.
     const totalSeconds = plan.totalFrames / VIDEO_FORMAT.fps
-    onProgress({
-      phase: "encoding",
-      fraction: 0,
-      encodedSeconds: 0,
-      totalSeconds,
-    })
-    const parse = createProgressParser(({ encodedSeconds }) =>
+    const report = (frames: number) =>
       onProgress({
         phase: "encoding",
-        fraction: Math.min(Math.max(encodedSeconds / totalSeconds, 0), 1),
-        encodedSeconds: Math.min(encodedSeconds, totalSeconds),
+        fraction: Math.min(Math.max(frames / plan.totalFrames, 0), 1),
+        encodedSeconds: Math.min(frames / VIDEO_FORMAT.fps, totalSeconds),
         totalSeconds,
-      }),
-    )
-    const encoded = await deps.spawn(deps.commands.ffmpeg, plan.encode.args, {
-      cwd: work,
-      signal,
-      timeoutMs: deps.timeouts.encodeMs,
-      onStdout: parse,
-    })
-    if (wasCancelled(encoded)) throw new RenderCancelled()
-    if (!encoded.ok) {
+      })
+    report(0)
+    const deadline = clock() + deps.timeouts.encodeMs
+    const encodeFailed = (reason: string, step: string, stderr: string) => {
       deps.log?.(
-        `[pixel] ${jobId} encode with ${encoderName} failed (${encoded.reason}): ${encoded.stderrTail}`,
+        `[pixel] ${jobId} ${step} with ${encoderName} failed (${reason}): ${stderr}`,
       )
-      throw new RenderFailure(
-        encoded.reason === "timed-out" ? "timed-out" : "render-failed",
-        encoded.reason === "timed-out"
+      return new RenderFailure(
+        reason === "timed-out" ? "timed-out" : "render-failed",
+        reason === "timed-out"
           ? `Encoding took longer than ${Math.round(deps.timeouts.encodeMs / 60000)} minutes and was stopped.`
           : `The ${encoderName} encoder failed while encoding the video.`,
       )
     }
+    for (const segment of plan.segments) {
+      throwIfCancelled(signal)
+      const parse = createProgressParser(({ encodedSeconds }) =>
+        report(
+          segment.startFrame +
+            Math.min(encodedSeconds * VIDEO_FORMAT.fps, segment.frames),
+        ),
+      )
+      const encoded = await deps.spawn(deps.commands.ffmpeg, segment.args, {
+        cwd: work,
+        signal,
+        timeoutMs: Math.max(deadline - clock(), 1),
+        onStdout: parse,
+      })
+      if (wasCancelled(encoded)) throw new RenderCancelled()
+      if (!encoded.ok)
+        throw encodeFailed(
+          encoded.reason,
+          `encode of ${segment.sceneId}`,
+          encoded.stderrTail,
+        )
+      report(segment.startFrame + segment.frames)
+    }
+    throwIfCancelled(signal)
+    await fs.writeFile(
+      resolveInside(work, plan.encode.list.name),
+      plan.encode.list.content,
+      { encoding: "utf8", mode: 0o600, flag: "wx" },
+    )
+    const joined = await deps.spawn(deps.commands.ffmpeg, plan.encode.args, {
+      cwd: work,
+      signal,
+      timeoutMs: Math.max(deadline - clock(), 1),
+    })
+    if (wasCancelled(joined)) throw new RenderCancelled()
+    if (!joined.ok)
+      throw encodeFailed(joined.reason, "joining segments", joined.stderrTail)
 
-    // 6. Verify the encoded picture before anything else is built on it.
+    // 7. Verify the encoded picture before anything else is built on it.
     onProgress({ phase: "verifying" })
     let verified = await verify(
       deps,
@@ -285,7 +379,7 @@ export async function renderVideo(
     )
     let published = plan.encode.output
 
-    // 7. Audio (DV-003C): mix the user's files and mux them with the copied
+    // 8. Audio (DV-003C): mix the user's files and mux them with the copied
     // H.264 stream, then verify the result again, now with its AAC track.
     if (audioConfig) {
       onProgress({ phase: "audio", step: "measuring", fraction: null })
@@ -372,7 +466,7 @@ export async function renderVideo(
       published = audioPlan.output
     }
 
-    // 8. Publish into output/ (atomic rename inside the job directory). A
+    // 9. Publish into output/ (atomic rename inside the job directory). A
     // cancellation that arrived during verification wins: nothing is moved.
     throwIfCancelled(signal)
     await storage.commitOutput(jobId, published)

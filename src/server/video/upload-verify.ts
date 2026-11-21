@@ -28,7 +28,7 @@ export function createUploadVerifier(
   run: Runner,
   commands: { ffmpeg: string; ffprobe: string },
 ): UploadVerifier {
-  return async (filePath, asset) => {
+  return async (filePath, asset, stored) => {
     const reject = (reason: string) => {
       throw new StorageError(
         "invalid-upload",
@@ -38,7 +38,11 @@ export function createUploadVerifier(
     const probe = await run(commands.ffprobe, imageProbeArgs(filePath))
     if (!probe.ok) reject("FFprobe couldn't read it.")
     else {
-      const parsed = parseImageProbe(probe.stdout, asset)
+      // FFprobe reports the stored size, before any EXIF orientation.
+      const parsed = parseImageProbe(probe.stdout, {
+        mimeType: asset.mimeType,
+        ...stored,
+      })
       if (!parsed.ok) reject(parsed.reason)
     }
     const decode = await run(commands.ffmpeg, imageDecodeArgs(filePath))

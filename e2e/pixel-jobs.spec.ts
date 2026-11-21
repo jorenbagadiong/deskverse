@@ -28,6 +28,7 @@ const summary = (
   updatedAt: "2026-11-21T09:00:10.000Z",
   productName: "Aurora desk lamp",
   audioMode: "none",
+  effects: { motion: "gentle-zoom", transition: "crossfade" },
   imageCount: 3,
   durationSeconds: 15,
   sizeBytes: 1_450_000,

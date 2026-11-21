@@ -3,6 +3,10 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { CircleCheck, ListChecks, Plus, Trash2 } from "lucide-react"
 
+import {
+  EffectsSection,
+  type EffectAvailability,
+} from "@/components/studio/pixel/effects-section"
 import { FfmpegStatus } from "@/components/studio/pixel/ffmpeg-status"
 import { FormatSummary } from "@/components/studio/pixel/format-summary"
 import {
@@ -26,8 +30,10 @@ import {
   CardDescription,
   CardHeader,
 } from "@/components/ui/card"
+import { DEFAULT_EFFECTS, effectAvailability } from "@/lib/video/effects"
 import { formatDuration } from "@/lib/video/format"
 import type { AssetId } from "@/lib/video/ids"
+import type { VisualEffects } from "@/lib/video/types"
 import { buildStoryboard, storyboardFrames } from "@/lib/video/storyboard"
 import {
   BENEFIT_COUNT,
@@ -55,6 +61,8 @@ const FIELD_IDS: Record<string, string> = {
   disclosure: "affiliate-disclosure",
   images: IMAGES_FIELD,
   "audio.mode": "audio-mode",
+  "effects.motion": "effects-motion",
+  "effects.transition": "effects-transition",
   "audio.voiceover": "audio-voiceover",
   "audio.music": "audio-music",
 }
@@ -76,6 +84,10 @@ export function PixelStudio() {
     ready: boolean
     reason: string | null
   }>({ ready: false, reason: null })
+  // New projects start with gentle zoom and crossfades (DV-003D2).
+  const [effects, setEffects] = useState<VisualEffects>(DEFAULT_EFFECTS)
+  const [effectsAvailable, setEffectsAvailable] =
+    useState<EffectAvailability | null>(null)
   const nextBenefitKey = useRef(2)
   const summaryRef = useRef<HTMLDivElement>(null)
   const pendingFocus = useRef<string | null>(null)
@@ -145,8 +157,30 @@ export function PixelStudio() {
       )
       if (!fits.ok) list.push(...fits.issues)
     }
+    if (effectsAvailable) {
+      if (effects.motion === "gentle-zoom" && !effectsAvailable.gentleZoom)
+        list.push({
+          path: "effects.motion",
+          message:
+            "Gentle zoom needs FFmpeg filters this computer lacks. Choose Product motion: None.",
+        })
+      if (effects.transition === "crossfade" && !effectsAvailable.crossfade)
+        list.push({
+          path: "effects.transition",
+          message:
+            "Crossfades need an FFmpeg filter this computer lacks. Choose Scene transitions: Cuts.",
+        })
+    }
     return list
-  }, [productResult, images.length, audio, audioAvailability, scenes])
+  }, [
+    productResult,
+    images.length,
+    audio,
+    audioAvailability,
+    scenes,
+    effects,
+    effectsAvailable,
+  ])
   const errorFor = (path: string) =>
     attempts > 0 || touched.has(path)
       ? issues.find((issue) => issue.path === path)?.message
@@ -162,7 +196,7 @@ export function PixelStudio() {
   function startRender() {
     if (!canRender || !productResult.ok || render.busy) return
     // The server re-validates the text and rebuilds the storyboard itself.
-    void render.start(productResult.value, images, audio)
+    void render.start(productResult.value, images, audio, effects)
   }
 
   const fieldIdFor = (path: string) => {
@@ -402,6 +436,28 @@ export function PixelStudio() {
 
         <Card>
           <CardHeader>
+            <h2 className="text-title">Visual effects</h2>
+            <CardDescription>
+              Gentle movement for the rendered MP4. Fixed, subtle settings;
+              captions and the disclosure never move.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <EffectsSection
+              effects={effects}
+              onChange={(next) => {
+                setEffects(next)
+                touch("effects.motion")
+                touch("effects.transition")
+              }}
+              availability={effectsAvailable}
+              errorFor={errorFor}
+            />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
             <h2 className="text-title">Disclosure</h2>
             <CardDescription>
               Shown at the top of every scene. Affiliate content must tell
@@ -495,6 +551,7 @@ export function PixelStudio() {
               scenes={scenes}
               imageUrls={imageUrls}
               disclosure={normalizeText(disclosure)}
+              effects={effects}
             />
           </CardContent>
         </Card>
@@ -521,6 +578,11 @@ export function PixelStudio() {
               <FfmpegStatus
                 onStatus={(status, report) => {
                   setFfmpegReady(status === "ready")
+                  setEffectsAvailable(
+                    report && status === "ready"
+                      ? effectAvailability(report)
+                      : null,
+                  )
                   setAudioAvailability({
                     ready: status === "ready" && report?.audio.ready === true,
                     reason:

@@ -4,7 +4,7 @@ import path from "node:path"
 
 import {
   AUDIO_FILTERS,
-  OPTIONAL_FILTERS,
+  EFFECT_FILTERS,
   REQUIRED_FILTERS,
   type CapabilityIssue,
   type EncoderInfo,
@@ -392,7 +392,7 @@ export async function detectFfmpegCapabilities({
         required: true,
         purpose: "video" as const,
       })),
-      ...OPTIONAL_FILTERS.map((name) => ({
+      ...EFFECT_FILTERS.map((name) => ({
         name,
         available: available.has(name),
         required: false,

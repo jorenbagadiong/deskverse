@@ -13,6 +13,7 @@ import {
   MIN_TOTAL_FRAMES,
   VIDEO_FORMAT,
 } from "@/lib/video/format"
+import { isMotionStyle, isTransitionStyle } from "@/lib/video/effects"
 import { isAssetId, type AssetId } from "@/lib/video/ids"
 import {
   AUDIO_CONTAINERS,
@@ -38,6 +39,7 @@ import {
   type VideoProject,
   type VideoScene,
   type VideoSettings,
+  type VisualEffects,
 } from "@/lib/video/types"
 
 export interface ValidationIssue {
@@ -910,6 +912,49 @@ export function validateVideoSettings(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Visual effects (DV-003D2)
+// ---------------------------------------------------------------------------
+
+const EFFECTS_KEYS = ["motion", "transition"] as const
+
+/**
+ * Exactly `{ motion, transition }` with named values. There is nothing else
+ * to send: zoom amount, crossfade length and filters are fixed server-side,
+ * so extra keys (durations, filter strings…) are rejected.
+ */
+export function validateVisualEffects(
+  input: unknown,
+  basePath = "effects",
+): Validation<VisualEffects> {
+  const object = readStrictObject(
+    input,
+    EFFECTS_KEYS,
+    basePath,
+    "Visual effects",
+  )
+  if (!object.ok) return object
+  const issues: ValidationIssue[] = []
+  if (!isMotionStyle(object.value.motion))
+    issues.push({
+      path: join(basePath, "motion"),
+      message: 'Product motion must be "none" or "gentle-zoom".',
+    })
+  if (!isTransitionStyle(object.value.transition))
+    issues.push({
+      path: join(basePath, "transition"),
+      message: 'Scene transitions must be "cut" or "crossfade".',
+    })
+  if (issues.length > 0) return { ok: false, issues }
+  return {
+    ok: true,
+    value: {
+      motion: object.value.motion as VisualEffects["motion"],
+      transition: object.value.transition as VisualEffects["transition"],
+    },
+  }
+}
+
 const PROJECT_KEYS = [
   "product",
   "assets",
@@ -918,6 +963,8 @@ const PROJECT_KEYS = [
   // Optional (DV-003C); absent in silent DV-003B projects.
   "audio",
   "audioAssets",
+  // Optional (DV-003D2); absent in older projects, which render static with cuts.
+  "effects",
 ] as const
 
 export function validateVideoProject(input: unknown): Validation<VideoProject> {
@@ -1024,6 +1071,13 @@ export function validateVideoProject(input: unknown): Validation<VideoProject> {
     }
   }
 
+  let effects: VisualEffects | undefined
+  if (object.value.effects !== undefined) {
+    const checked = validateVisualEffects(object.value.effects)
+    if (!checked.ok) issues.push(...checked.issues)
+    else effects = checked.value
+  }
+
   if (!product.ok || !scenes.ok || !settings.ok || issues.length > 0)
     return { ok: false, issues }
   return {
@@ -1034,6 +1088,7 @@ export function validateVideoProject(input: unknown): Validation<VideoProject> {
       scenes: scenes.value,
       settings: settings.value,
       ...(audio ? { audio, audioAssets } : {}),
+      ...(effects ? { effects } : {}),
     },
   }
 }

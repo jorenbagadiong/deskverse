@@ -3,13 +3,19 @@ import "server-only"
 import { isAssetId } from "@/lib/video/ids"
 import type { RenderJob } from "@/lib/video/render-job"
 import { buildStoryboard } from "@/lib/video/storyboard"
-import type { AudioAsset, AudioConfig, VideoProject } from "@/lib/video/types"
+import type {
+  AudioAsset,
+  AudioConfig,
+  VideoProject,
+  VisualEffects,
+} from "@/lib/video/types"
 import {
   DEFAULT_VIDEO_SETTINGS,
   MEDIA_LIMITS,
   validateAudioConfig,
   validateProduct,
   validateVideoProject,
+  validateVisualEffects,
   type Validation,
   type ValidationIssue,
 } from "@/lib/video/validation"
@@ -25,14 +31,19 @@ import {
  *
  * The browser's storyboard, timings, captions, asset metadata and any FFmpeg
  * option are never accepted: the request may contain exactly
- * `{ product, assetIds, audio? }`, where `audio` only names an audio mode,
- * uploaded audio IDs of this job and a music level. Scenes are rebuilt here with the same template and
+ * `{ product, assetIds, audio?, effects? }`, where `audio` only names an
+ * audio mode, uploaded audio IDs of this job and a music level, and `effects`
+ * only names a motion and a transition style. Scenes are rebuilt here with the same template and
  * fixed format, every image must belong to *this* job, and the result is
  * re-validated as a whole (durations, 15–30 s, references).
  */
 
-/** `audio` is optional (DV-003C); without it the video is silent. */
-const REQUEST_KEYS = ["product", "assetIds", "audio"] as const
+/**
+ * `audio` is optional (DV-003C); without it the video is silent. `effects`
+ * is optional (DV-003D2); without it the video is static with cuts, exactly
+ * as before effects existed.
+ */
+const REQUEST_KEYS = ["product", "assetIds", "audio", "effects"] as const
 
 export function buildTrustedProject(
   job: RenderJob,
@@ -102,6 +113,15 @@ export function buildTrustedProject(
       }
   }
 
+  // Visual effects: named choices only. Static with cuts is stored
+  // explicitly too, so a retry renders exactly what was asked for.
+  let effects: VisualEffects | null = null
+  if (request.effects !== undefined) {
+    const checked = validateVisualEffects(request.effects, "effects")
+    if (!checked.ok) return checked
+    effects = checked.value
+  }
+
   // Rebuild the storyboard server-side and validate the whole project
   // (including that narration fits the video).
   return validateVideoProject({
@@ -110,6 +130,7 @@ export function buildTrustedProject(
     scenes: buildStoryboard(product.value, assetIds),
     settings: { ...DEFAULT_VIDEO_SETTINGS, audio: audio ? "aac" : "none" },
     ...(audio ?? {}),
+    ...(effects ? { effects } : {}),
   })
 }
 

@@ -40,6 +40,7 @@ import {
   type JobSummary,
   type StorageSummary,
 } from "@/lib/video/render-api"
+import { describeEffects } from "@/lib/video/effects"
 import type { RenderProgress } from "@/lib/video/render-job"
 import type { AudioMode } from "@/lib/video/types"
 import { formatBytes } from "@/lib/video/validation"
@@ -231,6 +232,7 @@ function JobRow({
   const details = [
     dateFormat.format(new Date(job.createdAt)),
     job.audioMode ? AUDIO_LABEL[job.audioMode] : null,
+    job.effects ? describeEffects(job.effects) : null,
     job.imageCount ? `${job.imageCount} images` : null,
     job.durationSeconds !== null ? `${job.durationSeconds.toFixed(1)} s` : null,
     job.sizeBytes !== null ? formatBytes(job.sizeBytes) : null,

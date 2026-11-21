@@ -7,6 +7,7 @@ import { DEFAULT_VIDEO_SETTINGS } from "@/lib/video/validation"
 import {
   buildRenderPlan,
   encoderOptions,
+  type ImageSource,
   escapeFilterValue,
   fitText,
   LAYOUT,
@@ -42,7 +43,7 @@ const product = (overrides: Partial<ProductInfo> = {}): ProductInfo => ({
 
 function project(overrides: Partial<ProductInfo> = {}): {
   project: VideoProject
-  paths: Map<string, string>
+  paths: Map<string, ImageSource>
 } {
   const ids: AssetId[] = [createAssetId(), createAssetId(), createAssetId()]
   const p = product(overrides)
@@ -65,7 +66,12 @@ function project(overrides: Partial<ProductInfo> = {}): {
     paths: new Map(
       ids.map((id) => [
         id,
-        `/data/deskverse/video/jobs/job_x/assets/${id}.jpg`,
+        {
+          path: `/data/deskverse/video/jobs/job_x/assets/${id}.jpg`,
+          orientation: 1 as const,
+          storedWidth: 1200,
+          storedHeight: 1600,
+        },
       ]),
     ),
   }
@@ -78,7 +84,7 @@ const plan = (overrides: Partial<ProductInfo> = {}) => {
     paths,
     plan: buildRenderPlan({
       project: p,
-      assetPaths: paths,
+      imageSources: paths,
       fonts,
       encoder: { name: "libx264", options: encoderOptions("libx264") },
       threads: 4,
@@ -253,8 +259,17 @@ describe("render plan (safe FFmpeg arguments)", () => {
     expect(subtexts.slice(1, -1).every((s) => s === undefined)).toBe(true)
   })
 
-  it("composes scenes from stored images with safe input handling", () => {
+  it("normalizes each stored image once, then composes scenes from the copies", () => {
     const { plan: p, paths } = plan()
+    const stored = [...paths.values()].map((source) => source.path)
+    expect(p.images.map((image) => image.inputPath)).toEqual(stored)
+    for (const image of p.images) {
+      expect(image.args).toContain("-noautorotate")
+      expect(image.args[image.args.indexOf("-i") + 1]).toBe(
+        `file:${image.inputPath}`,
+      )
+      expect(image.args.at(-1)).toMatch(/^file:image-\d+\.png$/)
+    }
     for (const scene of p.scenes) {
       expect(scene.args.slice(0, 4)).toEqual([
         "-nostdin",
@@ -264,8 +279,8 @@ describe("render plan (safe FFmpeg arguments)", () => {
       ])
       expect(scene.args).toContain("-protocol_whitelist")
       const input = scene.args[scene.args.indexOf("-i") + 1]
-      expect(input).toBe(`file:${scene.inputPath}`)
-      expect([...paths.values()]).toContain(scene.inputPath)
+      expect(input).toBe(`file:${scene.input}`)
+      expect(p.images.map((image) => image.output)).toContain(scene.input)
       expect(scene.args.at(-1)).toMatch(/^file:scene-\d+\.png$/)
       const graph = scene.args[scene.args.indexOf("-filter_complex") + 1]
       // Image paths stay out of the graph; images keep their proportions.
@@ -274,31 +289,53 @@ describe("render plan (safe FFmpeg arguments)", () => {
     }
   })
 
-  it("encodes H.264 yuv420p at 30 fps, silent, exact frame count, faststart", () => {
+  it("encodes one H.264 yuv420p segment per scene, exact frames, then joins with -c copy", () => {
     const { plan: p, project: proj } = plan()
-    const args = p.encode.args
-    const value = (flag: string) => args[args.indexOf(flag) + 1]
-    expect(value("-c:v")).toBe("libx264")
-    expect(value("-pix_fmt")).toBe("yuv420p")
-    expect(value("-r")).toBe("30")
-    expect(value("-movflags")).toBe("+faststart")
-    expect(value("-f")).toBe("mp4")
-    expect(value("-progress")).toBe("pipe:1")
-    expect(args).toContain("-an")
-    expect(args).toContain("-nostdin")
     const total = proj.scenes.reduce((n, s) => n + s.durationFrames, 0)
     expect(p.totalFrames).toBe(total)
-    expect(value("-frames:v")).toBe(String(total))
-    const graph = value("-filter_complex")
-    for (const scene of proj.scenes)
+    expect(p.segments).toHaveLength(proj.scenes.length)
+    let start = 0
+    p.segments.forEach((segment, i) => {
+      const args = segment.args
+      const value = (flag: string) => args[args.indexOf(flag) + 1]
+      expect(value("-c:v")).toBe("libx264")
+      expect(value("-pix_fmt")).toBe("yuv420p")
+      expect(value("-r")).toBe("30")
+      expect(value("-f")).toBe("mp4")
+      expect(value("-progress")).toBe("pipe:1")
+      expect(args).toContain("-an")
+      expect(args).toContain("-nostdin")
+      // Legacy projects (no effects): each scene exactly its storyboard length.
+      expect(segment.frames).toBe(proj.scenes[i].durationFrames)
+      expect(segment.startFrame).toBe(start)
+      expect(value("-frames:v")).toBe(String(segment.frames))
+      const graph = value("-filter_complex")
       expect(graph).toContain(
-        `loop=loop=${scene.durationFrames - 1}:size=1:start=0`,
+        `loop=loop=${segment.frames - 1}:size=1:start=0,settb=1/30,setpts=N`,
       )
-    // Single still-frame inputs (no -loop): memory doesn't grow with length.
-    expect(args).not.toContain("-loop")
-    expect(graph).toContain("settb=1/30,setpts=N")
-    expect(graph).toContain(`concat=n=${proj.scenes.length}:v=1:a=0`)
-    expect(args.at(-1)).toBe("file:render.mp4")
+      // Single still-frame inputs (no -loop): memory doesn't grow with length.
+      expect(args).not.toContain("-loop")
+      expect(graph).not.toContain("xfade")
+      expect(graph).not.toContain("perspective")
+      expect(graph.includes("fade=t=in")).toBe(i === 0)
+      expect(graph.includes("fade=t=out")).toBe(i === p.segments.length - 1)
+      expect(args.at(-1)).toBe(`file:segment-${i + 1}.mp4`)
+      start += segment.frames
+    })
+    expect(start).toBe(total)
+
+    const join = p.encode.args
+    const value = (flag: string) => join[join.indexOf(flag) + 1]
+    expect(value("-f")).toBe("concat")
+    expect(join.slice(-4)).toEqual(["-f", "mp4", "-y", "file:render.mp4"])
+    expect(value("-c")).toBe("copy")
+    expect(value("-movflags")).toBe("+faststart")
+    expect(value("-frames:v")).toBe(String(total))
+    expect(value("-protocol_whitelist")).toBe("file")
+    expect(join.at(-1)).toBe("file:render.mp4")
+    expect(p.encode.list.content.split("\n")).toEqual(
+      p.segments.map((s) => `file '${s.output}'`),
+    )
   })
 
   it("uses fixed per-encoder options", () => {
@@ -312,7 +349,7 @@ describe("render plan (safe FFmpeg arguments)", () => {
     expect(() =>
       buildRenderPlan({
         project: proj,
-        assetPaths: new Map(),
+        imageSources: new Map(),
         fonts,
         encoder: { name: "libx264", options: [] },
         threads: 1,

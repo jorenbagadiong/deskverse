@@ -136,6 +136,27 @@ export interface AudioConfig {
   musicLevel: MusicLevel
 }
 
+// ---------------------------------------------------------------------------
+// Visual effects (DV-003D2)
+// ---------------------------------------------------------------------------
+
+/** "gentle-zoom": a slow, fixed Ken Burns push-in on the product image only. */
+export const MOTION_STYLES = ["none", "gentle-zoom"] as const
+export type MotionStyle = (typeof MOTION_STYLES)[number]
+
+/** "crossfade": a short, fixed dissolve between scenes. */
+export const TRANSITION_STYLES = ["cut", "crossfade"] as const
+export type TransitionStyle = (typeof TRANSITION_STYLES)[number]
+
+/**
+ * Named choices only: zoom amount, crossfade length and every filter are
+ * fixed on the server (see src/lib/video/effects.ts).
+ */
+export interface VisualEffects {
+  motion: MotionStyle
+  transition: TransitionStyle
+}
+
 /** Everything a render needs, and nothing a client could use to steer FFmpeg. */
 export interface VideoProject {
   product: ProductInfo
@@ -146,4 +167,6 @@ export interface VideoProject {
   audio?: AudioConfig
   /** Facts about the audio files `audio` refers to (absent when silent). */
   audioAssets?: AudioAsset[]
+  /** Absent in projects saved before DV-003D2, which render static with cuts. */
+  effects?: VisualEffects
 }

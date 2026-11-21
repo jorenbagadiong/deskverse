@@ -248,6 +248,7 @@ test.describe("Pixel Studio audio (FFmpeg mocked)", () => {
     expect(Object.keys(renderBody!).sort()).toEqual([
       "assetIds",
       "audio",
+      "effects",
       "product",
     ])
     expect(renderBody!.audio).toEqual({

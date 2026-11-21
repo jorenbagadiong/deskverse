@@ -1,5 +1,6 @@
 import "server-only"
 
+import { STATIC_EFFECTS } from "@/lib/video/effects"
 import {
   videoEndpoint,
   type JobSummary,
@@ -25,6 +26,7 @@ export function jobSummary(
     updatedAt: job.updatedAt,
     productName: project?.product.name ?? null,
     audioMode: project ? (project.audio?.mode ?? "none") : null,
+    effects: project ? (project.effects ?? STATIC_EFFECTS) : null,
     imageCount: project?.assets.length ?? job.assets.length,
     durationSeconds: done ? job.output!.durationSeconds : null,
     sizeBytes: done ? job.output!.sizeBytes : null,

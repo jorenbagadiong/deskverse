@@ -358,12 +358,18 @@ test.describe("Pixel Studio", () => {
     )
     await expect(page.getByRole("button", { name: "Render MP4" })).toBeEnabled()
 
-    // The original image bytes were uploaded, then only text + IDs were sent.
+    // The original image bytes were uploaded, then only text, IDs and the
+    // two effect names (DV-003D2) were sent.
     expect(uploads).toEqual(["image/jpeg", "image/png", "image/jpeg"])
     expect(Object.keys(renderBody as object).sort()).toEqual([
       "assetIds",
+      "effects",
       "product",
     ])
+    expect((renderBody as { effects: unknown }).effects).toEqual({
+      motion: "gentle-zoom",
+      transition: "crossfade",
+    })
     expect((renderBody as { assetIds: string[] }).assetIds).toHaveLength(3)
   })
 

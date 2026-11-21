@@ -1,12 +1,12 @@
 # E2E environment notes: 3D office tests in GPU-less WSL
 
-_Recorded at the DV-003A checkpoint and re-confirmed at DV-003B, DV-003C and DV-003D1 (2026-11-21)._
+_Recorded at the DV-003A checkpoint and re-confirmed at DV-003B, DV-003C, DV-003D1 and DV-003D2 (2026-11-21)._
 
 ## Summary
 
 In WSL2 without a desktop Chrome, `E2E_CHANNEL=chromium yarn test:e2e` runs
 the suite in Playwright's headless Chromium. Every test that renders the 3D
-office then fails, **before and after DV-003A, DV-003B, DV-003C and DV-003D1**. The cause is the test
+office then fails, **before and after DV-003A, DV-003B, DV-003C, DV-003D1 and DV-003D2**. The cause is the test
 environment, not application code. All other tests pass, including every
 Pixel Studio test.
 
@@ -17,6 +17,7 @@ Pixel Studio test.
 | DV-003B on `main` (base `6c701c1`), full suite  |     27 |     24 |                                24 / 24 |
 | DV-003C on `main` (base `f6ff233`), full suite  |     36 |     24 |                                24 / 24 |
 | DV-003D1 on `main` (base `68adbb0`), full suite |     45 |     24 |                                24 / 24 |
+| DV-003D2 on `main` (base `f6fbba4`), full suite |     52 |     24 |                                24 / 24 |
 
 All runs fail the same 24 office tests. At DV-003A, the 22 passing tests
 were the 17 Pixel Studio tests, the 4 page smoke tests and the no-WebGL
@@ -31,7 +32,12 @@ at both widths. At DV-003D1, the 45 passing tests add the 7 job-management
 tests in `e2e/pixel-jobs.spec.ts` (3 mocked history tests, real cancel,
 history after refresh with preview/download/delete, finding and cancelling a
 running render after refresh, and API rejection) and a mobile history test
-at both widths. No new failures appeared.
+at both widths. At DV-003D2, the 52 passing tests add the 7 visual-effects
+tests in `e2e/pixel-effects.spec.ts` (defaults and storyboard label,
+keyboard switching to static, disabled effects on a build without the
+filters, reduced motion, 360/375 px layout, EXIF preview/server agreement,
+and a real gentle zoom + crossfade render with preview, download, frame
+check and history after reload). No new failures appeared.
 
 ## Environment
 

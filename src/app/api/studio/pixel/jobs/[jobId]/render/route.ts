@@ -1,3 +1,8 @@
+import {
+  missingEffectFilters,
+  missingEffectsMessage,
+  STATIC_EFFECTS,
+} from "@/lib/video/effects"
 import { isRenderJobId } from "@/lib/video/ids"
 import {
   guardLocalApi,
@@ -74,6 +79,19 @@ export async function POST(
         "audio-unavailable",
         capabilities.audio.reason ??
           "Audio isn't available with this FFmpeg build. Choose No audio.",
+      )
+    const missingEffects = missingEffectFilters(
+      project.value.effects ?? STATIC_EFFECTS,
+      capabilities,
+    )
+    if (missingEffects.length > 0)
+      return jsonError(
+        503,
+        "effects-unavailable",
+        missingEffectsMessage(
+          project.value.effects ?? STATIC_EFFECTS,
+          missingEffects,
+        ),
       )
     await storage.writeProject(jobId, project.value)
     const queued = await queue.enqueue(jobId)

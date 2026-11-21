@@ -3,7 +3,8 @@ import { ImageOff } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { formatDuration, VIDEO_FORMAT } from "@/lib/video/format"
 import { storyboardFrames } from "@/lib/video/storyboard"
-import type { VideoScene } from "@/lib/video/types"
+import { describeEffects } from "@/lib/video/effects"
+import type { VideoScene, VisualEffects } from "@/lib/video/types"
 
 const KIND_LABEL: Record<VideoScene["kind"], string> = {
   hook: "Hook",
@@ -26,10 +27,12 @@ export function StoryboardPreview({
   scenes,
   imageUrls,
   disclosure,
+  effects,
 }: {
   scenes: readonly VideoScene[]
   imageUrls: ReadonlyMap<string, string>
   disclosure: string
+  effects: VisualEffects
 }) {
   const total = storyboardFrames(scenes)
 
@@ -40,6 +43,16 @@ export function StoryboardPreview({
           {scenes.length} scenes · {formatDuration(total)}
         </span>{" "}
         at {VIDEO_FORMAT.fps} fps. A static plan of the video, not a render.
+      </p>
+      <p
+        className="text-xs text-muted-foreground"
+        data-testid="storyboard-effects"
+      >
+        <span className="font-medium text-foreground">Effects in the MP4:</span>{" "}
+        {describeEffects(effects)}
+        {effects.motion === "none" && effects.transition === "cut"
+          ? " (a fully static video)"
+          : ". Shown still here; they move only in the rendered video."}
       </p>
 
       <div

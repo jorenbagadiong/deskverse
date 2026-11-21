@@ -17,7 +17,8 @@ team's video creator.
 | **DV-003B**   | Real rendering: uploads, server-built projects, FFmpeg renderer, queue, preview, download | ✅ Done |
 | **DV-003C**   | Optional voiceover and background music, mixed and encoded as AAC                         | ✅ Done |
 | **DV-003D1**  | Reliable job management: cancel, retry, history, delete, storage, restart recovery        | ✅ Done |
-| **DV-003D2+** | Transitions, motion, templates and audio editing                                          | Planned |
+| **DV-003D2**  | EXIF orientation, gentle zoom and crossfades, scene-by-scene encoding                     | ✅ Done |
+| **DV-003D3+** | Templates, audio editing and more                                                         | Planned |
 
 ## 1. FFmpeg and FFprobe
 
@@ -141,7 +142,7 @@ Render MP4 ─► POST /jobs ────────────► new draft j
            ─► POST /jobs/:id/audio   ─► optional voiceover / music (DV-003C): byte
               ?role=… (raw bytes)        sniffing, FFprobe streams/codec, full decode,
                                          duration/channel/rate limits
-           ─► POST /jobs/:id/render ─► { product, assetIds, audio? } only; storyboard
+           ─► POST /jobs/:id/render ─► { product, assetIds, audio?, effects? } only; storyboard
               (JSON)                     rebuilt server-side, project.json saved,
                                          job queued → 202 + status
 poll GET /jobs/:id every second ◄──── state + real progress
@@ -149,14 +150,19 @@ poll GET /jobs/:id every second ◄──── state + real progress
                                          1. FFmpeg ready + tested encoder?
                                          2. re-read + re-validate project.json
                                          3. fonts + caption files → work/
-                                         4. compose one still PNG per scene
-                                         5. encode H.264 (-progress pipe:1)
-                                         6. FFprobe verification
-                                         7. audio projects only: measure loudness,
+                                         4. normalize each photo once: EXIF upright,
+                                            ≤ 2160 px (DV-003D2)
+                                         5. compose one still PNG per scene (+ a
+                                            product layer with gentle zoom)
+                                         6. encode one H.264 segment per scene
+                                            (zoom, crossfades; -progress pipe:1),
+                                            join them with -c copy
+                                         7. FFprobe verification
+                                         8. audio projects only: measure loudness,
                                             mix + mux AAC with the copied H.264,
                                             verify again (one AAC track)
-                                         8. work/…mp4 → output/video.mp4
-                                         9. job completed (or failed), work/ wiped
+                                         9. work/…mp4 → output/video.mp4
+                                        10. job completed (or failed), work/ wiped
 <video src=/jobs/:id/video>  ◄──────── verified MP4 only, byte ranges
 Download MP4 (?download=1)   ◄──────── Content-Disposition: attachment
 ```
@@ -166,7 +172,8 @@ FFmpeg works.
 
 ### Scene composition
 
-Each scene is composed once into a 1080×1920 still (`scene-N.png`):
+Each scene is composed once into a 1080×1920 still (`scene-N.png`) from the
+photo's normalized, upright copy (see §7):
 
 1. **Backdrop:** the image scaled to cover the frame, blurred (`gblur`) and
    darkened, over the dark brand color (so transparent PNGs still look right).
@@ -192,14 +199,17 @@ message before rendering, instead of rendering as empty boxes.
 ### Encoding
 
 The scene stills are fed as single-frame inputs. The `loop` filter repeats
-each one for its exact frame count, `settb=1/30,setpts=N` gives exact 1/30 s
-timestamps, and `concat` joins them with a 0.25 s fade-in and 0.4 s fade-out.
-Scenes change with simple cuts.
+each one for its exact frame count and `settb=1/30,setpts=N` gives exact
+1/30 s timestamps. Since DV-003D2 each scene is encoded as its own segment
+(with its gentle zoom and its dissolve into the next scene, when chosen) and
+the segments are joined with `-c copy`; the first segment fades in over
+0.25 s and the last fades out over 0.4 s. See §7.
 
 - `libx264`: `-preset medium -crf 20 -tune stillimage -rc-lookahead 20
 -profile:v high`. Other software encoders get a fixed bitrate (6 Mb/s for
   `libopenh264`) and hardware encoders 8 Mb/s.
-- Always `-pix_fmt yuv420p -r 30 -frames:v <exact> -an -movflags +faststart`.
+- Always `-pix_fmt yuv420p -r 30 -frames:v <exact> -an`; the joined file
+  gets `-movflags +faststart`.
 - Encoder threads: available cores − 1, capped at 4.
 
 **Progress is never estimated.** While encoding, the UI shows FFmpeg's own
@@ -236,7 +246,8 @@ problems.
 - Startup cleanup only removes abandoned drafts (uploads never rendered)
   untouched for 24 hours and stray scratch files. Completed, failed and
   cancelled jobs are never removed automatically.
-- Timeouts: 60 s per scene and 10 minutes for the encode. The process is
+- Timeouts: 60 s per photo normalization and per scene, and 10 minutes for
+  the whole encode (all segments and the join). The process is
   killed with `SIGKILL` at the deadline. FFmpeg never waits for input (stdin
   is closed and `-nostdin` is set).
 
@@ -442,7 +453,166 @@ Interrupted jobs can then be retried. A render is never resumed halfway.
 - Rendering after DV-003D1: FFmpeg peak memory 469–471 MiB (DV-003C: 458–471)
   with identical outputs; the H.264 stream is still copied, not re-encoded.
 
-## 7. Video output target
+## 7. Visual effects and EXIF orientation (DV-003D2)
+
+### EXIF orientation
+
+Phones usually store photos sideways and record "which way up" in the EXIF
+`Orientation` tag (values 1–8: rotations, mirrors, and the transpose /
+transverse combinations). Browsers apply it when they show a photo.
+
+**What FFmpeg 6.1.1 does on its own** (investigated with quadrant-colored
+JPEG fixtures for all eight values): its JPEG handling is inconsistent. The
+mirrored and 180° cases come out partly wrong, and for 5–8 the image keeps
+its stored, sideways size. Deskverse therefore never relies on it.
+
+**The one strategy Deskverse uses:**
+
+1. The server reads the orientation from the JPEG's own bytes
+   (`src/server/video/exif.ts`): a bounded walk over the markers before the
+   image data, then IFD0 of the first `Exif` APP1 segment, big- or
+   little-endian. Missing, truncated or malformed EXIF, or an out-of-range
+   value, means 1 (as stored). The parser never throws and never decodes
+   pixels; no image library is involved.
+2. Uploads record the **upright** size (width and height swapped for 5–8),
+   the same size the browser's preview reports. FFprobe's check of the
+   stored size still compares against the header.
+3. Before composing, each photo the storyboard uses is **normalized once**
+   into the private work directory (`image-N.png`): decoded with
+   `-noautorotate` (raw stored pixels), turned upright by one fixed filter
+   chain, and scaled down to at most 2160 px on its longest side (never
+   up). Every later step reads only that copy, which carries no EXIF, so the
+   transform is applied exactly once. The uploaded original is never
+   modified.
+
+| Orientation | Meaning                   | FFmpeg filters          | Size    |
+| ----------- | ------------------------- | ----------------------- | ------- |
+| 1           | as stored                 | (none)                  | same    |
+| 2           | mirrored horizontally     | `hflip`                 | same    |
+| 3           | rotated 180°              | `hflip,vflip`           | same    |
+| 4           | mirrored vertically       | `vflip`                 | same    |
+| 5           | transposed                | `transpose=cclock_flip` | swapped |
+| 6           | rotated 90° clockwise     | `transpose=clock`       | swapped |
+| 7           | transversed               | `transpose=clock_flip`  | swapped |
+| 8           | rotated 90° anticlockwise | `transpose=cclock`      | swapped |
+
+Each mapping is verified pixel by pixel against real FFmpeg in
+`tests/integration/effects.integration.test.ts`. Projects saved before
+DV-003D2 get the same treatment on retry: the orientation comes from the
+stored file, not from the project. PNG and WebP orientation metadata is not
+applied (rare in practice).
+
+### Effects
+
+Two named choices in the studio's **Visual effects** card. The browser
+sends only the names (`{ motion, transition }`); the zoom amount, crossfade
+length and every filter are fixed on the server, and anything else in the
+request is rejected.
+
+| Setting           | Choices               | New projects  | Projects saved before DV-003D2 |
+| ----------------- | --------------------- | ------------- | ------------------------------ |
+| Product motion    | `none`, `gentle-zoom` | `gentle-zoom` | `none`                         |
+| Scene transitions | `cut`, `crossfade`    | `crossfade`   | `cut`                          |
+
+`none` + `cut` renders a fully static video, like DV-003B/C. The choice is
+saved in `project.json`, so a retry renders exactly the same effects.
+
+**Gentle zoom (Ken Burns).** Only the product photo moves: it grows
+linearly by 5 % over each scene. When effects are on, each scene is composed
+as two stills: the backdrop with the disclosure and captions (`scene-N.png`)
+and the fitted product on a transparent canvas 5 % larger than the
+960 × 800 fit box (`scene-N-product.png`, 1008 × 840). At encode time the
+`perspective` filter resamples that canvas with sub-pixel precision (cubic)
+from the whole canvas on the first frame to its central 1/1.05 on the last,
+and the result is overlaid on the still backdrop. So:
+
+- captions and the disclosure never move (they're in the still, measured at
+  zero change frame to frame);
+- the product is never cropped (the canvas margin is exactly the zoom) or
+  stretched (one factor for both axes);
+- the zoomed product stays clear of the text bands (checked by a unit test).
+
+`zoompan`, the usual choice, was benchmarked and rejected: it rounds its
+window to whole pixels, so the motion visibly stutters (frame-to-frame
+change varied 0.02–2.9, standard deviation ~0.5, against ~0.06 with
+`perspective`).
+
+**Crossfade.** Each scene dissolves into the next over 9 frames (0.3 s),
+centered on the storyboard's boundary B: it starts at B − 4 and ends at
+B + 5. The outgoing scene is held 5 frames longer and the incoming one starts
+4 frames earlier, so the overlaps cancel exactly and the video keeps the
+storyboard's frame count. All timing is in whole frames
+(`sceneTimings` in `src/lib/video/effects.ts`), and the dissolve uses
+`xfade=transition=fade` with offsets that FFmpeg rounds back to the same
+frames. The video's own 0.25 s fade-in and 0.4 s fade-out are unchanged.
+
+### Encoding scene by scene
+
+A single filter graph for the whole video keeps every scene's pipeline
+alive at once; with motion and crossfades that measured 743 MiB (four
+photos) and 816 MiB (six scenes), over budget and growing with the scene
+count. So every render, static or not, encodes **one segment per scene**,
+one after another:
+
+- segment _i_ holds scene _i_ (from where the previous dissolve ended) and,
+  with crossfades, the dissolve into scene _i + 1_, whose first 9 frames
+  (zoom included) are part of the same small graph;
+- every segment uses the same encoder and settings, so the concat demuxer
+  joins them with `-c copy` (`segments.txt` lists generated names only;
+  `-safe 1`, `-protocol_whitelist file`): no second encode;
+- only one or two scenes' stills are in memory at a time, so peak memory no
+  longer depends on how many scenes there are.
+
+Progress during encoding is FFmpeg's own `out_time` for the current segment
+plus the frames of the segments already finished, over the storyboard's
+total. The 10-minute encode timeout covers all segments and the join.
+
+### Availability and failures
+
+`perspective`, `pad` and `xfade` are detected with the other filters but
+aren't required: without them the studio disables the affected choice with
+an explanation, and static videos still render. A request for a missing
+effect is refused before any work (`503 effects-unavailable`, also checked
+on retry), with a message naming the choice to change. The orientation
+filters (`hflip`, `vflip`, `transpose`, `null`) are required, like the other
+core filters.
+
+Cancellation covers the new steps: normalizing photos, composing the split
+stills, each segment and the join. Each spawned FFmpeg is stopped and
+awaited, and the work directory (normalized photos, product layers,
+segments, `segments.txt`) is wiped after every render, successful or not.
+
+### Measured (FFmpeg 6.1.1, this machine)
+
+Real JPEG photos (3840×2400, 3840×2400, 1920×1080, 3840×2400; plus 6400×4000
+and 3841×2400 for six scenes), libx264 with 4 threads, peak memory summed
+over every FFmpeg process of the render (sampled every 25 ms), rendered
+directly through the render service (`DESKVERSE_BENCH=1 yarn
+test:integration effects-bench`).
+
+| Four photos, five scenes, 19 s             | Render | Peak memory |
+| ------------------------------------------ | -----: | ----------: |
+| Before DV-003D2 (static, one encode)       |  8.5 s |     458 MiB |
+| Static + cuts (now: normalize + segments)  | 10.2 s |     373 MiB |
+| Gentle zoom + cuts                         | 13.7 s |     399 MiB |
+| Still photos + crossfade                   | 12.3 s |     444 MiB |
+| Gentle zoom + crossfade                    | 16.3 s |     496 MiB |
+| Static, voiceover + music                  | 12.8 s |     373 MiB |
+| Gentle zoom + crossfade, voiceover + music | 18.7 s |     496 MiB |
+
+| Six photos, six scenes, 23 s (stress) | Render | Peak memory |
+| ------------------------------------- | -----: | ----------: |
+| Before DV-003D2 (static, one encode)  | 10.3 s |     473 MiB |
+| Gentle zoom + crossfade               | 19.8 s |     496 MiB |
+
+Gentle zoom + crossfade takes about 1.9× the pre-DV-003D2 static render and
+1.6× today's static render, at well under the 650 MiB memory target. Static
+renders now use about 85 MiB less memory and about 1.7 s more time, mostly
+spent decoding and normalizing large photos (the price of correct
+orientation). Every output had the storyboard's exact frame count (570 and
+690 frames) and duration.
+
+## 8. Video output target
 
 Fixed in `src/lib/video/format.ts`. Clients can't change it.
 
@@ -493,7 +663,7 @@ server is the real gate.
 - **Scenes:** 3–8, hook first and CTA last, 2–8 s each in whole frames,
   15–30 s total.
 
-## 8. Local file storage
+## 9. Local file storage
 
 `src/server/video/storage.ts` (server-only). Data lives **outside the
 repository** in the per-user application data folder:
@@ -515,6 +685,8 @@ folder in the system temp directory.
   project.json             the server-built project the renderer uses
   assets/<assetId>.<ext>   uploaded images and audio, renamed to generated IDs
   work/                    scratch space for one render, always emptied afterwards
+                           (normalized photos, scene stills and product layers,
+                           per-scene segments, segments.txt)
   output/video.mp4         the finished, verified render
 ```
 
@@ -535,7 +707,7 @@ folder in the system temp directory.
   after verification), and only if the file is a regular file inside
   storage. Its path is never sent to the browser.
 
-## 9. Security model
+## 10. Security model
 
 | Boundary          | Rule                                                                                                                                                                                                                                             |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -563,7 +735,7 @@ WSL's localhost forwarding still lets your Windows browser reach
 public. The hosting gate is a safety net, not a substitute for keeping it
 local.
 
-## 10. Licensing and redistribution
+## 11. Licensing and redistribution
 
 _General information, not legal advice._
 
@@ -601,7 +773,12 @@ _General information, not legal advice._
   scene. Also use each platform's branded-content or paid-partnership
   setting.
 
-## 11. Measured performance
+## 12. Measured performance
+
+_Effects (DV-003D2) and today's scene-by-scene encoding: see
+[§7 Measured](#measured-ffmpeg-611-this-machine-1). The figures below are
+from DV-003B/C, before photos were normalized and scenes encoded
+separately._
 
 One full render on the development machine (WSL2, Ubuntu 24.04, 16 cores,
 9.6 GB RAM, FFmpeg 6.1.1, libx264, no GPU), from four real JPEG photos
@@ -639,9 +816,11 @@ play with an audio track and audible output (the silent one has no audio
 track); Firefox reports 19.02 s because of AAC encoder padding, within the
 0.1 s tolerance.
 
-## 12. Limitations
+## 13. Limitations
 
-- One fixed template, simple cuts, no motion or transitions.
+- One fixed template. Effects are one zoom (in, 5 %) and one transition
+  (0.3 s dissolve); no pans, per-scene choices or other transitions. The
+  storyboard preview stays still; effects appear only in the MP4.
 - Audio: no trimming, offsets, crossfaded loops or per-scene sync points;
   narration always starts at 0:00. Music loop seams are hard cuts. MP3s with
   embedded cover art must be exported without artwork first. Loudness
@@ -649,8 +828,10 @@ track); Firefox reports 19.02 s because of AAC encoder padding, within the
   aren't a broadcast-compliance certification.
 - Captions support the characters in Inter (Latin, Greek, Cyrillic and common
   symbols). Emoji and CJK are rejected rather than drawn.
-- JPEG EXIF orientation isn't applied. A phone photo stored sideways with a
-  rotation tag renders sideways, so rotate it before uploading.
+- EXIF orientation is applied to JPEGs only; orientation metadata in PNG or
+  WebP files is ignored.
+- Every scene is encoded as its own segment and starts with a keyframe:
+  files are a little larger than one continuous encode would be.
 - Jobs are managed by one server process. Running several Deskverse servers
   on the same data folder isn't supported.
 - Orphaned FFmpeg processes are found and stopped on Linux/WSL only (via
@@ -659,14 +840,15 @@ track); Firefox reports 19.02 s because of AAC encoder padding, within the
   Firefox, Safari). Playwright's bundled Chromium can't decode H.264, so the
   E2E suite checks the file itself and playback only where supported.
 
-## 13. Remaining work
+## 14. Remaining work
 
-**DV-003D2 and later:** crossfades (`xfade`), gentle motion on stills, EXIF
-orientation, and more templates. Audio follow-ups: trimming and offsets
-for narration, crossfaded music loops, per-scene timing cues, and accepting
-MP3s with cover art by ignoring the picture.
+**DV-003D3 and later:** more templates and effect styles (pans, per-scene
+choices, other transitions), a moving storyboard preview, and audio
+follow-ups: trimming and offsets for narration, crossfaded music loops,
+per-scene timing cues, and accepting MP3s with cover art by ignoring the
+picture.
 
-## 14. Code map
+## 15. Code map
 
 ```
 assets/fonts/inter/            Inter Bold + Medium (OFL 1.1) for captions
@@ -678,6 +860,7 @@ src/lib/video/                 shared, client-safe
   render-api.ts                HTTP contract: endpoints, request/status shapes (incl. audio)
   validation.ts                all input validation
   storyboard.ts                storyboard template + duration fitting
+  effects.ts                   visual effects: names, defaults, crossfade frame math, availability
   capabilities.ts              capability report types, required filters
 src/server/                    server-only (import "server-only")
   process/run-executable.ts    execFile runner + streaming spawn (no shell), AbortSignal cancellation
@@ -687,13 +870,15 @@ src/server/                    server-only (import "server-only")
   http/range.ts                byte ranges, download names
   http/render-errors.ts        error → HTTP response mapping
   video/ffmpeg-capabilities.ts detection, parsing, encoder test encodes, cache
-  video/ffmpeg-command.ts      layout, caption wrapping, escaping, argument arrays
+  video/ffmpeg-command.ts      layout, caption wrapping, escaping, argument arrays,
+                               photo normalization, zoom, crossfade segments
+  video/exif.ts                JPEG EXIF orientation parser + FFmpeg transforms
   video/ffprobe.ts             probe arguments, image/audio/output verification, progress parser
   video/audio-command.ts       loudness measurement, audio mix/mux arguments, AAC options
   video/audio-sniff.ts         byte-level MP3/WAV/M4A identification
   video/font-metrics.ts        TrueType cmap/hmtx parsing, glyph coverage, widths
   video/project.ts             trusted project reconstruction
-  video/render-service.ts      one render: compose → encode → verify → publish
+  video/render-service.ts      one render: normalize → compose → encode segments → join → verify → publish
   video/render-queue.ts        one-at-a-time queue: cancel, retry, delete, restart recovery
   video/job-summary.ts         history rows and storage summary (no paths)
   video/storage.ts             private job storage, path safety, data dir

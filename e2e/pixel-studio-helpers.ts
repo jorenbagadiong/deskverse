@@ -4,6 +4,7 @@ import { deflateSync, crc32 } from "node:zlib"
 
 import {
   AUDIO_FILTERS,
+  EFFECT_FILTERS,
   REQUIRED_FILTERS,
   type FfmpegCapabilityReport,
 } from "../src/lib/video/capabilities"
@@ -39,7 +40,12 @@ export const READY_REPORT: FfmpegCapabilityReport = {
   ffprobe: { available: true, version: "6.1.1-3ubuntu5", problem: null },
   filters: [
     ...filters,
-    { name: "xfade", available: true, required: false, purpose: "video" },
+    ...EFFECT_FILTERS.map((name) => ({
+      name: name as string,
+      available: true,
+      required: false,
+      purpose: "video" as const,
+    })),
   ],
   h264Encoders: [
     { name: "libx264", hardware: false, works: true },
@@ -269,4 +275,14 @@ export const SILENT_ONLY_REPORT: FfmpegCapabilityReport = {
     reason:
       "The AAC encoder (aac) failed a test encode, so videos can only be silent.",
   },
+}
+
+/** Video works, but this build has no xfade or perspective (DV-003D2). */
+export const NO_EFFECTS_REPORT: FfmpegCapabilityReport = {
+  ...READY_REPORT,
+  filters: READY_REPORT.filters.map((f) =>
+    (EFFECT_FILTERS as readonly string[]).includes(f.name)
+      ? { ...f, available: false }
+      : f,
+  ),
 }

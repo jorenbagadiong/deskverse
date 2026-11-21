@@ -562,7 +562,7 @@ describe("render service (mocked FFmpeg)", () => {
     return prepared
   }
 
-  it("composes each scene, encodes with real progress, verifies and publishes", async () => {
+  it("normalizes images, composes each scene, encodes segments with real progress, joins, verifies and publishes", async () => {
     const { job, project } = await rendering()
     const spawn = fakeSpawn()
     const progress: RenderProgress[] = []
@@ -570,7 +570,16 @@ describe("render service (mocked FFmpeg)", () => {
       progress.push(p),
     )
 
-    expect(spawn.calls).toHaveLength(project.scenes.length + 1)
+    // One normalization per image, one still per scene, one segment per
+    // scene, then the join.
+    const images = new Set(project.scenes.map((s) => s.assetId)).size
+    expect(spawn.calls).toHaveLength(images + 2 * project.scenes.length + 1)
+    expect(
+      spawn.calls.slice(0, images).every((a) => a.includes("-noautorotate")),
+    ).toBe(true)
+    const join = spawn.calls.at(-1)!
+    expect(join).toContain("concat")
+    expect(join[join.indexOf("-c") + 1]).toBe("copy")
     expect(output).toMatchObject({
       width: 1080,
       height: 1920,
@@ -581,7 +590,11 @@ describe("render service (mocked FFmpeg)", () => {
     const fractions = progress
       .filter((p) => p.phase === "encoding")
       .map((p) => (p as { fraction: number }).fraction)
-    expect(fractions).toEqual([0, 0.5, 1])
+    // Monotonic, from 0 to exactly 1, across all segments.
+    expect(fractions[0]).toBe(0)
+    expect(fractions.at(-1)).toBe(1)
+    for (let i = 1; i < fractions.length; i++)
+      expect(fractions[i]).toBeGreaterThanOrEqual(fractions[i - 1])
     expect(progress.at(-1)).toEqual({ phase: "verifying" })
     await storage.transitionJob(job.id, "completed", { output })
     expect(

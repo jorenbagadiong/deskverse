@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { POST as cancelRoute } from "@/app/api/studio/pixel/jobs/[jobId]/cancel/route"
 import { POST as retryRoute } from "@/app/api/studio/pixel/jobs/[jobId]/retry/route"
@@ -538,6 +538,7 @@ describe("history and storage accounting", () => {
       productName: "Product 4",
       state: "draft",
       audioMode: "none", // its server-built project is silent
+      effects: { motion: "none", transition: "cut" }, // and has no effects
       actions: { cancel: false, retry: false, delete: true, preview: false },
     })
     expect(JSON.stringify(summary)).not.toContain(base)
@@ -597,6 +598,31 @@ describe("history and storage accounting", () => {
       completed: 0,
       active: 0,
     })
+  })
+
+  it("counts storage while a render empties its scratch folder (no ENOENT)", async () => {
+    const a = await preparedJob()
+    const work = path.join(storage.root, "jobs", a, "work")
+    await fs.writeFile(path.join(work, "segment-1.mp4"), Buffer.alloc(500))
+    await fs.writeFile(path.join(work, "segment-2.mp4"), Buffer.alloc(700))
+    // segment-1.mp4 is deleted after work/ was listed but before its size is read.
+    const realLstat = fs.lstat.bind(fs)
+    const lstat = vi
+      .spyOn(fs, "lstat")
+      .mockImplementation(async (file, options?) => {
+        if (String(file).endsWith("segment-1.mp4")) {
+          const error = new Error("gone") as NodeJS.ErrnoException
+          error.code = "ENOENT"
+          throw error
+        }
+        return realLstat(file, options as never)
+      })
+    try {
+      const usage = await storage.usage()
+      expect(usage.workBytes).toBe(700)
+    } finally {
+      lstat.mockRestore()
+    }
   })
 
   it("cleans only abandoned data and never active, completed, failed or cancelled jobs", async () => {

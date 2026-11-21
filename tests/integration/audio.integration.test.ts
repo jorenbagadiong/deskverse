@@ -249,6 +249,16 @@ async function render(
 const H264_ENCODES = (calls: string[][]) =>
   calls.filter((a) => a.includes("-c:v") && a[a.indexOf("-c:v") + 1] !== "copy")
 
+/**
+ * Every frame is encoded exactly once (DV-003D2: one segment per scene,
+ * joined with -c copy); the audio stage never re-encodes the picture.
+ */
+const FRAMES_ENCODED = (calls: string[][]) =>
+  H264_ENCODES(calls).reduce(
+    (n, a) => n + Number(a[a.indexOf("-frames:v") + 1]),
+    0,
+  )
+
 beforeAll(async () => {
   capabilities = await detectFfmpegCapabilities({
     run: createRunner({ timeoutMs: 30_000 }),
@@ -327,7 +337,7 @@ describe("real FFmpeg audio rendering", () => {
     const p = probe(result.output!.path)
     expect(p.streams.map((s) => s.codec_type)).toEqual(["video"])
     expect(result.phases).not.toContain("audio")
-    expect(H264_ENCODES(result.calls)).toHaveLength(1)
+    expect(FRAMES_ENCODED(result.calls)).toBe(result.frames)
     console.info(
       `[audio] silent: ${result.seconds.toFixed(1)} s render, ${result.done.output!.sizeBytes} bytes`,
     )
@@ -374,7 +384,7 @@ describe("real FFmpeg audio rendering", () => {
     expect(Number(p.format.duration)).toBeCloseTo(result.frames / 30, 1)
 
     // Encoded once; the audio stage copies the H.264 stream.
-    expect(H264_ENCODES(result.calls)).toHaveLength(1)
+    expect(FRAMES_ENCODED(result.calls)).toBe(result.frames)
     const mux = result.calls.find((a) => a.includes("[aout]"))!
     expect(mux[mux.indexOf("-c:v") + 1]).toBe("copy")
     expect(result.phases).toEqual([
@@ -499,7 +509,7 @@ describe("real FFmpeg audio rendering", () => {
       musicAlone - 15,
     )
     expect(loudness(file).truePeak).toBeLessThan(-0.5)
-    expect(H264_ENCODES(result.calls)).toHaveLength(1)
+    expect(FRAMES_ENCODED(result.calls)).toBe(result.frames)
     console.info(
       `[audio] mixed: voice band ${voiceBand.toFixed(1)} dB, music under speech ${musicUnderSpeech.toFixed(1)} dB, music alone ${musicAlone.toFixed(1)} dB, ${result.seconds.toFixed(1)} s render`,
     )
