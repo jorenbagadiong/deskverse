@@ -14,9 +14,9 @@ import { readEnvFile } from "./src/server/db/env-file"
  *   E2E_BASE_URL=http://localhost:3000  reuse an already running server
  *   E2E_CHANNEL=chromium                use Playwright's bundled Chromium
  *                                       (after `yarn playwright install chromium`)
- *   E2E_DATABASE=1                      for tests that write to the database:
- *                                       always starts a fresh server on its
- *                                       own port, never reuses one, and
+ *   E2E_DATABASE=1                      the database-writing suite (yarn
+ *                                       test:e2e:db): a fresh server on a
+ *                                       scratch database, never reused, and
  *                                       refuses E2E_BASE_URL
  *
  * Database (DV-004A): the server the suite starts never sees your
@@ -40,12 +40,30 @@ const channel =
     ? undefined
     : (process.env.E2E_CHANNEL ?? "chrome")
 
+/**
+ * The suites are separate on purpose:
+ * - ordinary (default): every spec except the Affiliate Ticket specs, on a
+ *   server that may be reused and only ever reads the test database;
+ * - database (E2E_DATABASE=1, `yarn test:e2e:db`): only the Affiliate
+ *   Ticket specs (e2e/tickets*.spec.ts), which write data, on a fresh
+ *   server with its own scratch database and media folder
+ *   (scripts/e2e/database-server.ts). Never reused, never E2E_BASE_URL.
+ */
+const TICKET_SPECS = /tickets(-mobile|-keyboard)?\.spec\.ts$/
+/** Never matches: a project with nothing to run in this suite. */
+const NOTHING = /^$/
+const only = (ordinary: RegExp, database: RegExp) =>
+  databaseTests
+    ? { testMatch: database }
+    : { testMatch: ordinary, testIgnore: TICKET_SPECS }
+
 export default defineConfig({
   testDir: "e2e",
   timeout: 90_000,
   expect: { timeout: 20_000 },
-  // WebGL scenes are GPU-heavy; keep parallelism modest.
-  workers: 2,
+  // WebGL scenes are GPU-heavy; keep parallelism modest. The database suite
+  // runs one test at a time: its tests restart the shared server.
+  workers: databaseTests ? 1 : 2,
   fullyParallel: false,
   retries: 0,
   reporter: [["list"]],
@@ -56,24 +74,38 @@ export default defineConfig({
   },
   webServer: process.env.E2E_BASE_URL
     ? undefined
-    : {
-        command: `yarn build && yarn start --port ${PORT}`,
-        url: `${baseURL}/office`,
-        reuseExistingServer: !databaseTests,
-        timeout: 300_000,
-        // Renders made by the tests go to a throwaway folder, never to your
-        // real Deskverse data directory.
-        env: {
-          DESKVERSE_DATA_DIR: path.join(os.tmpdir(), "deskverse-e2e-data"),
-          DATABASE_URL: testDatabaseUrl,
-          DATABASE_TEST_URL: "",
+    : databaseTests
+      ? {
+          command:
+            "yarn build && yarn tsx --import ./scripts/server-only-hook.mjs scripts/e2e/database-server.ts",
+          url: `${baseURL}/tickets`,
+          reuseExistingServer: false,
+          timeout: 300_000,
+          // Lets the wrapper drop its scratch database and media folder.
+          gracefulShutdown: { signal: "SIGTERM", timeout: 15_000 },
+          env: { E2E_APP_PORT: String(PORT), E2E_CONTROL_PORT: "3212" },
+        }
+      : {
+          command: `yarn build && yarn start --port ${PORT}`,
+          url: `${baseURL}/office`,
+          reuseExistingServer: true,
+          timeout: 300_000,
+          // Renders made by the tests go to a throwaway folder, never to your
+          // real Deskverse data directory.
+          env: {
+            DESKVERSE_DATA_DIR: path.join(os.tmpdir(), "deskverse-e2e-data"),
+            DATABASE_URL: testDatabaseUrl,
+            DATABASE_TEST_URL: "",
+          },
         },
-      },
   projects: [
     {
       name: "desktop",
       use: { viewport: { width: 1280, height: 900 } },
-      testIgnore: /(fallback|mobile)\.spec/,
+      ...only(
+        /^(?!.*(fallback|mobile)\.spec).*\.spec\.ts$/,
+        /tickets(-keyboard)?\.spec\.ts$/,
+      ),
     },
     {
       name: "mobile-375",
@@ -82,7 +114,7 @@ export default defineConfig({
         isMobile: true,
         hasTouch: true,
       },
-      testMatch: /mobile\.spec/,
+      ...only(/mobile\.spec/, /tickets-mobile\.spec\.ts$/),
     },
     {
       name: "mobile-360",
@@ -91,7 +123,7 @@ export default defineConfig({
         isMobile: true,
         hasTouch: true,
       },
-      testMatch: /mobile\.spec/,
+      ...only(/mobile\.spec/, /tickets-mobile\.spec\.ts$/),
     },
     {
       name: "no-webgl",
@@ -101,7 +133,7 @@ export default defineConfig({
           args: ["--disable-3d-apis", "--disable-webgl", "--disable-gpu"],
         },
       },
-      testMatch: /fallback\.spec/,
+      ...only(/fallback\.spec/, NOTHING),
     },
   ],
 })

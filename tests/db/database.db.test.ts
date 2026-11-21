@@ -29,6 +29,11 @@ import {
 
 /** DV-004A: real PostgreSQL (yarn test:db), each test file in its own scratch database. */
 
+/** Every migration in this checkout, in order (follows drizzle/meta/_journal.json). */
+const TAGS = journal.entries.map((entry) => entry.tag)
+const LATEST = TAGS[TAGS.length - 1]
+const LAST_WHEN = journal.entries[journal.entries.length - 1].when
+
 describe("test database isolation", () => {
   it("never sees DATABASE_URL", () => {
     expect(process.env.DATABASE_URL).toBeUndefined()
@@ -76,15 +81,15 @@ describe("connection, migrations and persistence", () => {
   it("applies the versioned migrations to a new database", async () => {
     const pool = createPool(scratch.config)
     try {
-      expect(await runMigrations(pool, journal, migrationsFolder())).toEqual([
-        "0000_init",
-      ])
+      expect(await runMigrations(pool, journal, migrationsFolder())).toEqual(
+        TAGS,
+      )
       const status = await migrationStatus(pool, journal)
       expect(status).toEqual({
-        known: 1,
-        applied: 1,
+        known: TAGS.length,
+        applied: TAGS.length,
         pending: [],
-        current: "0000_init",
+        current: LATEST,
         ahead: false,
       })
       const rows = await createDatabase(pool).select().from(appMetadata)
@@ -107,7 +112,7 @@ describe("connection, migrations and persistence", () => {
       const count = await pools[0].query(
         'SELECT count(*)::int AS n FROM drizzle."__drizzle_migrations"',
       )
-      expect(count.rows[0].n).toBe(1)
+      expect(count.rows[0].n).toBe(TAGS.length)
       const seeds = await pools[0].query(
         "SELECT count(*)::int AS n FROM app_metadata",
       )
@@ -263,7 +268,7 @@ describe("a failing migration", () => {
     const entry = {
       idx: 1,
       version: "7",
-      when: journal.entries[0].when + 1000,
+      when: LAST_WHEN + 1000,
       tag: "0001_broken",
       breakpoints: true,
     }
@@ -283,7 +288,7 @@ describe("a failing migration", () => {
         /Migration failed and was rolled back; the schema is unchanged. PostgreSQL said: relation "no_such_table" does not exist/,
       )
       expect((error as MigrationError).code).toBe("42P01")
-      // All-or-nothing: not even 0000_init was kept, nor the half-done table.
+      // All-or-nothing: none of the pending migrations was kept, nor the half-done table.
       const tables = await pool.query(
         "SELECT to_regclass('public.half_done') AS half, to_regclass('public.app_metadata') AS meta",
       )
@@ -291,9 +296,9 @@ describe("a failing migration", () => {
       expect((await migrationStatus(pool, brokenJournal)).applied).toBe(0)
 
       // The real migrations still apply cleanly afterwards.
-      expect(await runMigrations(pool, journal, migrationsFolder())).toEqual([
-        "0000_init",
-      ])
+      expect(await runMigrations(pool, journal, migrationsFolder())).toEqual(
+        TAGS,
+      )
     } finally {
       await pool.end()
     }
@@ -304,7 +309,7 @@ describe("a failing migration", () => {
     try {
       await pool.query(
         'INSERT INTO drizzle."__drizzle_migrations" (hash, created_at) VALUES ($1, $2)',
-        ["future", journal.entries[0].when + 10_000],
+        ["future", LAST_WHEN + 10_000],
       )
       await expect(
         runMigrations(pool, journal, migrationsFolder()),

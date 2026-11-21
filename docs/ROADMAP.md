@@ -2,7 +2,7 @@
 
 **Version 1.1:** Affiliate Ticket architecture (approved 2026-11-21)
 **Environment:** your own computer, Windows 11 + WSL2 Ubuntu
-**Current milestone:** DV-004A, Local PostgreSQL Foundation
+**Current milestone:** DV-004B, Affiliate Ticket Management (complete); next is DV-004C
 
 ## 1. Vision
 
@@ -77,8 +77,9 @@ approval required · one approved video per day._
 | DV-003D3               | Audio refinements              | Complete                                                         |
 | WebP compatibility fix | WebP upload validation         | Complete                                                         |
 | DV-004A                | Local PostgreSQL foundation    | Complete (see [database architecture](database-architecture.md)) |
+| DV-004B                | Affiliate Ticket management    | Complete (see [Affiliate Tickets](affiliate-tickets.md))         |
 
-These are separate from the Affiliate Ticket system they support.
+DV-001 to DV-003 are separate from the Affiliate Ticket system they support; DV-004A onwards build it.
 
 ## 5. Upcoming milestones
 
@@ -89,7 +90,7 @@ database access, local security, backups and restore.
 _Acceptance:_ data persists across restarts; existing Pixel Studio behaviour
 remains intact.
 
-**DV-004B: Affiliate Ticket Management** ← next. Adds:
+**DV-004B: Affiliate Ticket Management** (complete). Adds:
 
 - the `/tickets`, `/tickets/new` and `/tickets/[ticketId]` pages;
 - creating, editing, saving and archiving tickets;
@@ -102,7 +103,7 @@ reopen all the saved information.
 
 ### Phase 2: Automated workflow
 
-**DV-004C: Durable Campaign Orchestrator.** Task dependencies, worker
+**DV-004C: Durable Campaign Orchestrator** ← next. Task dependencies, worker
 assignment, bounded concurrency, persistence, cancellation, retries,
 pause/resume and restart recovery. Pixel renders **one video at a time**;
 other workers continue independent work.

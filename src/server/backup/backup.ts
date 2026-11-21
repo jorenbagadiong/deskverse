@@ -16,6 +16,7 @@ import {
   MANIFEST_FILE,
   MEDIA_DIR,
   MEDIA_SOURCE,
+  TICKET_MEDIA_SOURCE,
   manifestProblems,
   type BackupManifest,
   type ManifestFile,
@@ -238,6 +239,146 @@ async function collect(dir: string, relative: string, plan: MediaPlan) {
   }
 }
 
+/** A registered Affiliate Ticket attachment (from ticket_assets). */
+export interface TicketAssetRecord {
+  id: string
+  ticketId: string
+  extension: string
+  bytes: number
+  sha256: string
+}
+
+interface TicketMediaPlan {
+  files: (TicketAssetRecord & { source: string; relative: string })[]
+  orphans: number
+  staging: number
+  unrecognized: number
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+const TICKET_FILE = /^([0-9a-f-]{36})\.(jpg|png|webp|mp4)$/
+
+async function lstatOrNull(target: string) {
+  try {
+    return await fs.lstat(target)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null
+    throw error
+  }
+}
+
+/**
+ * Lists the ticket attachments to back up: exactly the files the database
+ * registers. Every record must have its file, as a regular file reached
+ * through no symlink, of the recorded size; otherwise the backup stops
+ * (run yarn tickets:reconcile). Files without a record are left out and
+ * counted, as are unfinished uploads.
+ */
+export async function planTicketMediaBackup(
+  dataRoot: string,
+  records: TicketAssetRecord[],
+): Promise<TicketMediaPlan> {
+  const plan: TicketMediaPlan = {
+    files: [],
+    orphans: 0,
+    staging: 0,
+    unrecognized: 0,
+  }
+  const root = path.join(dataRoot, TICKET_MEDIA_SOURCE)
+  const problems: string[] = []
+  const registered = new Set<string>()
+  for (const record of records) {
+    if (
+      !UUID.test(record.id) ||
+      !UUID.test(record.ticketId) ||
+      !/^(jpg|png|webp|mp4)$/.test(record.extension)
+    ) {
+      problems.push(`a record has an invalid identifier`)
+      continue
+    }
+    const relative = `${TICKET_MEDIA_SOURCE}/${record.ticketId}/assets/${record.id}.${record.extension}`
+    registered.add(relative)
+    let current = dataRoot
+    let ok = true
+    for (const part of relative.split("/")) {
+      current = path.join(current, part)
+      const stat = await lstatOrNull(current)
+      if (!stat) {
+        problems.push(`${relative} is missing`)
+        ok = false
+        break
+      }
+      if (stat.isSymbolicLink()) {
+        problems.push(`${relative} is reached through a symbolic link`)
+        ok = false
+        break
+      }
+    }
+    if (!ok) continue
+    const stat = await fs.lstat(current)
+    if (!stat.isFile()) problems.push(`${relative} isn't a regular file`)
+    else if (stat.size !== record.bytes)
+      problems.push(`${relative} doesn't match its recorded size`)
+    else plan.files.push({ ...record, source: current, relative })
+  }
+  if (problems.length > 0)
+    throw new BackupError(
+      `Some Affiliate Ticket files don't match the database, so nothing was backed up (run yarn tickets:reconcile): ${problems.slice(0, 5).join("; ")}${problems.length > 5 ? ` and ${problems.length - 5} more` : ""}.`,
+    )
+
+  // Count what is deliberately left out.
+  const tickets = await fs
+    .readdir(root, { withFileTypes: true })
+    .catch(() => [])
+  for (const ticket of tickets) {
+    if (!ticket.isDirectory() || !UUID.test(ticket.name)) {
+      plan.unrecognized++
+      continue
+    }
+    for (const folder of await fs.readdir(path.join(root, ticket.name), {
+      withFileTypes: true,
+    })) {
+      const dir = path.join(root, ticket.name, folder.name)
+      if (folder.isDirectory() && folder.name === "staging")
+        plan.staging += (await fs.readdir(dir)).length
+      else if (folder.isDirectory() && folder.name === "assets")
+        for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+          const relative = `${TICKET_MEDIA_SOURCE}/${ticket.name}/assets/${entry.name}`
+          if (registered.has(relative)) continue
+          if (entry.isFile() && TICKET_FILE.test(entry.name)) plan.orphans++
+          else plan.unrecognized++
+        }
+      else plan.unrecognized++
+    }
+  }
+  return plan
+}
+
+async function ticketAssetRecords(
+  client: pg.Client,
+): Promise<TicketAssetRecord[]> {
+  const exists = await client.query<{ present: boolean }>(
+    "SELECT to_regclass('public.ticket_assets') IS NOT NULL AS present",
+  )
+  if (!exists.rows[0].present) return []
+  const result = await client.query<{
+    id: string
+    ticket_id: string
+    extension: string
+    byte_size: string
+    sha256: string
+  }>(
+    "SELECT id, ticket_id, extension, byte_size, sha256 FROM ticket_assets ORDER BY ticket_id, id",
+  )
+  return result.rows.map((r) => ({
+    id: r.id,
+    ticketId: r.ticket_id,
+    extension: r.extension,
+    bytes: Number(r.byte_size),
+    sha256: r.sha256,
+  }))
+}
+
 // ---------------------------------------------------------------------------
 // Is Deskverse running?
 // ---------------------------------------------------------------------------
@@ -438,6 +579,10 @@ export async function createBackup(
         "Another program is connected to the Deskverse database. Stop Deskverse (and any worker) first.",
       )
     const status = await migrationStatus(client, journal)
+    if (status.ahead || status.pending.length > 0)
+      throw new BackupError(
+        "The database schema isn't current. Run yarn db:migrate (or update the code) before backing up.",
+      )
     const version = await client.query<{ v: string }>(
       "SELECT current_setting('server_version') AS v",
     )
@@ -445,12 +590,11 @@ export async function createBackup(
       status,
       serverVersion: version.rows[0].v.split(" ")[0],
       tables: await tableCounts(client),
+      ticketAssets: await ticketAssetRecords(client),
     }
   })
-  if (facts.status.ahead || facts.status.pending.length > 0)
-    throw new BackupError(
-      "The database schema isn't current. Run yarn db:migrate (or update the code) before backing up.",
-    )
+  // Checked before anything is written.
+  const ticketPlan = await planTicketMediaBackup(dataRoot, facts.ticketAssets)
 
   // 3. Write into a .partial folder; rename only when complete and verified.
   const stamp = now()
@@ -492,6 +636,20 @@ export async function createBackup(
       files.push({ path: file.relative, ...copied })
       bytes += copied.bytes
     }
+    const ticketFiles: ManifestFile[] = []
+    let ticketBytes = 0
+    for (const file of ticketPlan.files) {
+      const copied = await copyWithHash(
+        file.source,
+        path.join(workDir, MEDIA_DIR, ...file.relative.split("/")),
+      )
+      if (copied.sha256 !== file.sha256 || copied.bytes !== file.bytes)
+        throw new BackupError(
+          `${file.relative} doesn't match the checksum recorded when it was uploaded, so nothing was backed up (run yarn tickets:reconcile).`,
+        )
+      ticketFiles.push({ path: file.relative, ...copied })
+      ticketBytes += copied.bytes
+    }
 
     const manifest: BackupManifest = {
       format: BACKUP_FORMAT,
@@ -520,6 +678,17 @@ export async function createBackup(
         excluded: {
           scratchFolders: plan.scratchFolders,
           unrecognized: plan.unrecognized,
+        },
+      },
+      ticketMedia: {
+        source: TICKET_MEDIA_SOURCE,
+        assets: ticketFiles.length,
+        files: ticketFiles,
+        bytes: ticketBytes,
+        excluded: {
+          orphans: ticketPlan.orphans,
+          staging: ticketPlan.staging,
+          unrecognized: ticketPlan.unrecognized,
         },
       },
     }
@@ -607,7 +776,10 @@ export async function verifyBackup(dir: string): Promise<string[]> {
   }
 
   const listed = new Set<string>()
-  for (const file of manifest.media.files) {
+  for (const file of [
+    ...manifest.media.files,
+    ...(manifest.ticketMedia?.files ?? []),
+  ]) {
     listed.add(file.path)
     const full = path.join(dir, MEDIA_DIR, ...file.path.split("/"))
     try {
@@ -709,7 +881,11 @@ export async function restoreBackup({
 
   // Media: copy, then check every checksum of the copies.
   await fs.mkdir(dataRoot, { recursive: true, mode: DIR_MODE })
-  for (const file of manifest.media.files) {
+  const allFiles = [
+    ...manifest.media.files,
+    ...(manifest.ticketMedia?.files ?? []),
+  ]
+  for (const file of allFiles) {
     const parts = file.path.split("/")
     const copied = await copyWithHash(
       path.join(dir, MEDIA_DIR, ...parts),
@@ -726,6 +902,7 @@ export async function restoreBackup({
     async (client) => ({
       status: await migrationStatus(client, journal),
       tables: await tableCounts(client),
+      ticketAssets: await ticketAssetRecords(client),
     }),
   )
   if (restored.status.current !== manifest.database.migrations.current)
@@ -737,9 +914,26 @@ export async function restoreBackup({
       throw new BackupError(
         `The restored table ${table} has ${restored.tables[table] ?? 0} rows; the backup recorded ${count}.`,
       )
+  // Format 2: every restored ticket record has exactly its restored file.
+  if (manifest.ticketMedia) {
+    const files = new Map(manifest.ticketMedia.files.map((f) => [f.path, f]))
+    if (restored.ticketAssets.length !== files.size)
+      throw new BackupError(
+        "The restored database's ticket media records don't match the backed-up files.",
+      )
+    for (const record of restored.ticketAssets) {
+      const file = files.get(
+        `${TICKET_MEDIA_SOURCE}/${record.ticketId}/assets/${record.id}.${record.extension}`,
+      )
+      if (!file || file.sha256 !== record.sha256 || file.bytes !== record.bytes)
+        throw new BackupError(
+          "A restored ticket media record doesn't match its restored file.",
+        )
+    }
+  }
   return {
     manifest,
-    files: manifest.media.files.length,
+    files: allFiles.length,
     tables: restored.tables,
     migration: restored.status.current,
   }

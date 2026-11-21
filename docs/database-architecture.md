@@ -1,9 +1,13 @@
-# Database architecture (DV-004A)
+# Database architecture (DV-004A, DV-004B)
 
-Deskverse stores future **Affiliate Tickets** in a local PostgreSQL database
-on your own computer. DV-004A sets up only the foundation: installation,
-configuration, migrations, a health check, tests and backups. It doesn't add
-any ticket tables or pages yet; those come in DV-004B.
+Deskverse stores **Affiliate Tickets** in a local PostgreSQL database on
+your own computer:
+
+- **DV-004A** set up the foundation: installation, configuration,
+  migrations, a health check, tests and backups.
+- **DV-004B** added the ticket tables, the ticket media folder and backup
+  format 2. The tickets themselves are documented in
+  [affiliate-tickets.md](affiliate-tickets.md).
 
 **PostgreSQL isn't needed for Pixel Studio or the office.** They work exactly
 as before with the database stopped, missing or misconfigured. Pixel Studio's
@@ -145,7 +149,9 @@ src/server/db/
   env-file.ts     reads one .env file without touching process.env
 src/server/backup/
   backup.ts       createBackup(), verifyBackup(), restoreBackup()
-  manifest.ts     manifest format and validation
+  manifest.ts     manifest format (versions 1 and 2) and validation
+src/server/tickets/                    Affiliate Tickets (DV-004B): repository, media, events, HTTP helpers
+src/lib/tickets/                       ticket contract, validation and browser client (client-safe)
 src/lib/system/database-health.ts      health report contract (client-safe)
 src/app/api/system/database/health/    the endpoint
 src/components/system/database-status.tsx   the "Local PostgreSQL" card
@@ -198,9 +204,17 @@ How it works:
   `app_metadata` row, `database.initialized`, which is used to check that
   data survives restarts, backups and restores.
 
-DV-004A schema: one table, `app_metadata (key text PK, value jsonb,
-created_at, updated_at)`. There are no Affiliate Ticket, product, task,
-approval or scheduling tables.
+Schema:
+
+| Migration                          | Adds                                                                                                                                                             |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0000_init` (DV-004A)              | `app_metadata (key text PK, value jsonb, created_at, updated_at)` + the `database.initialized` row                                                               |
+| `0001_affiliate_tickets` (DV-004B) | `affiliate_tickets`, `ticket_products`, `ticket_references`, `ticket_assets`, `ticket_events` (see [affiliate-tickets.md §3](affiliate-tickets.md#3-data-model)) |
+
+`0001` was applied to a fresh scratch database by `yarn test:db` before it
+was applied to the development database. It creates tables only; nothing
+existing is changed. There are still no worker-task, deliverable, approval
+or scheduling tables.
 
 ## 6. Health check
 
@@ -238,11 +252,12 @@ Unexpected errors are logged on the server, redacted.
 
 ## 7. Tests and test-database safeguards
 
-| Command         | Needs PostgreSQL | What                                                                                                        |
-| --------------- | ---------------- | ----------------------------------------------------------------------------------------------------------- |
-| `yarn test`     | no               | config, URL validation, guards, error mapping, health with fake sockets, route guard, manifest, backup plan |
-| `yarn test:db`  | yes              | connection, migrations, persistence, rollback, pool cleanup, timeouts, backup + isolated restore            |
-| `yarn test:e2e` | optional         | "Local PostgreSQL" card states (mocked) + the real endpoint (read-only)                                     |
+| Command            | Needs PostgreSQL | What                                                                                                                 |
+| ------------------ | ---------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `yarn test`        | no               | config, URL validation, guards, error mapping, health with fake sockets, route guard, manifest, backup plan          |
+| `yarn test:db`     | yes              | connection, migrations, persistence, rollback, pool cleanup, timeouts, backup + isolated restore                     |
+| `yarn test:e2e`    | optional         | ordinary suite: "Local PostgreSQL" card states (mocked) + the real endpoint (read-only), ticket list states (mocked) |
+| `yarn test:e2e:db` | yes              | database suite: the Affiliate Ticket workflow, writing to its own scratch database (see below)                       |
 
 Safeguards:
 
@@ -272,10 +287,21 @@ Safeguards:
     loading `.env.local`'s `DATABASE_URL`, so it never sees your
     development database.
   - A reused server (`reuseExistingServer`) or `E2E_BASE_URL` may be using
-    any database. DV-004A's E2E tests are read-only, so this is safe.
-  - Future tests that write to the database must run with `E2E_DATABASE=1`.
-    That starts a fresh server on port 3211, never reuses one, and refuses
-    `E2E_BASE_URL`.
+    any database, so the ordinary suite never writes to one: ticket specs
+    are excluded from it.
+  - **Database-writing tests** (`e2e/tickets*.spec.ts`) run only in
+    `yarn test:e2e:db` (`E2E_DATABASE=1`). That suite:
+    - refuses `E2E_BASE_URL` and never reuses a server;
+    - starts `scripts/e2e/database-server.ts`, which creates a guarded
+      scratch database (`deskverse_test_e2e_<pid>_<random>`, migrated from
+      empty) and a temporary media folder, then starts `next start` on port
+      3211 with only those;
+    - routes the app's database traffic through a local proxy (port 3213),
+      so tests can cut PostgreSQL while the app runs;
+    - restarts the app between steps through a 127.0.0.1 control endpoint
+      (3212);
+    - removes the database and folder on exit (graceful shutdown); a killed
+      run's leftovers are removed at the next start.
 
 ## 8. Backup and restore
 
@@ -303,11 +329,24 @@ deskverse-backup-20261121T123456Z/
   manifest.sha256    checksum of manifest.json
   database.dump      pg_dump custom format, --no-owner --no-privileges
   media/video/jobs/<jobId>/job.json, project.json, assets/…, output/video.mp4
+  media/tickets/<ticketId>/assets/<assetId>.<ext>     (format 2, DV-004B)
 ```
+
+**Ticket attachments (format 2)** are the files `ticket_assets` registers,
+no more and no less:
+
+- Each record's file must exist as a regular file, reached through no
+  symlink, with the recorded size. While copying, its SHA-256 must match
+  the one recorded at upload. Otherwise the backup stops before writing
+  anything ("run `yarn tickets:reconcile`").
+- Files with no record and unfinished uploads are left out and counted in
+  the manifest.
+- After a restore, every restored record must match its restored file.
 
 What is left out:
 
 - Each job's `work/` folder (temporary render files).
+- Ticket files with no database record, and unfinished uploads (`staging/`).
 - Symlinks and anything that isn't a recognised job file.
 - Role passwords: `pg_dump` doesn't dump roles, and `pg_dump` /
   `pg_restore` get the password through `PGPASSWORD` in a minimal child
@@ -356,8 +395,14 @@ Compatibility:
 
 - `pg_restore` must be the same major version as the dump or newer; the
   manifest records both the server and `pg_dump` versions.
-- The backup format is versioned (`formatVersion: 1`), and the restore
-  refuses versions it doesn't know.
+- The backup format is versioned. DV-004B writes `formatVersion: 2` and
+  reads 1 and 2; any other version is refused.
+- **DV-004A backups (format 1) still restore.** `backup-tickets.db.test.ts`
+  checks this with a real format 1 backup written by DV-004A's own code
+  (taken from commit `81fca88` with `git show`). It is restored with
+  today's code and then migrated forward to the current schema with
+  `yarn db:migrate`. A format 1 backup restores at schema `0000_init`, so
+  run `yarn db:migrate` afterwards.
 
 **Tested** (`tests/db/backup.db.test.ts`). A fixture is backed up from a
 scratch database and a temporary data folder that holds a real Pixel job
@@ -370,9 +415,9 @@ another connection is open.
 ## 9. Pixel Studio compatibility
 
 - Pixel Studio's data stays where and how it was: files under
-  `~/.local/share/deskverse/video/jobs`. DV-004A doesn't move, rename,
-  rewrite, migrate, delete or reformat anything there. No Pixel code reads
-  the database.
+  `~/.local/share/deskverse/video/jobs`. Neither DV-004A nor DV-004B moves,
+  renames, rewrites, migrates, deletes or reformats anything there. No Pixel
+  code reads the database. Ticket media lives beside it, in `tickets/`.
 - Rendering, uploads, history, retry, cancellation, deletion, restart
   recovery and the FFmpeg queue are unchanged. Verified at DV-004A:
   - with PostgreSQL running: unit, FFmpeg integration and the full E2E suite
@@ -383,8 +428,8 @@ another connection is open.
     `offline`, and the server stayed up.
 - Backups read Pixel's files without changing them. Restores only write into
   a new, empty folder.
-- PostgreSQL becomes the source of truth for **Affiliate Tickets**. Linking
-  tickets to render jobs is planned for DV-005C.
+- PostgreSQL is the source of truth for **Affiliate Tickets** (DV-004B).
+  Linking tickets to render jobs is planned for DV-005C.
 
 ## 10. Security
 
@@ -439,6 +484,6 @@ another connection is open.
   it only through WSL's localhost forwarding, which isn't needed or
   documented here.
 
-**Next: DV-004B — Affiliate Ticket Management.** `/tickets`, `/tickets/new`
-and `/tickets/[ticketId]`, built on this foundation, with new versioned
-migrations. See [ROADMAP.md](ROADMAP.md).
+**DV-004B (Affiliate Ticket Management) is built on this foundation.** The
+next milestone is **DV-004C, the Durable Campaign Orchestrator**. See
+[ROADMAP.md](ROADMAP.md).

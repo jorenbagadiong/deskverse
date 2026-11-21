@@ -4,6 +4,20 @@ import { test as base, expect, type Page } from "@playwright/test"
 const IGNORED = [/GL Driver Message/, /GPU stall/]
 
 /**
+ * Per-test allowances for console errors a test deliberately provokes,
+ * e.g. Chrome's "Failed to load resource: … 503" when a test takes the
+ * database down on purpose. Each pattern applies only to the page it was
+ * registered for, only in that test, and must actually occur.
+ */
+const allowances = new WeakMap<Page, { pattern: RegExp; seen: boolean }[]>()
+
+export function allowConsoleError(page: Page, pattern: RegExp) {
+  const list = allowances.get(page) ?? []
+  list.push({ pattern, seen: false })
+  allowances.set(page, list)
+}
+
+/**
  * `test` with two extras:
  * - every test fails if the page logs an error or warning (hydration errors included)
  * - WebGL draw calls are counted on window.__draws so tests can verify on-demand rendering
@@ -16,6 +30,13 @@ export const test = base.extend<{ consoleProblems: string[] }>({
         if (!["error", "warning"].includes(message.type())) return
         const text = message.text()
         if (IGNORED.some((pattern) => pattern.test(text))) return
+        const allowed = (allowances.get(page) ?? []).find(
+          (a) => message.type() === "error" && a.pattern.test(text),
+        )
+        if (allowed) {
+          allowed.seen = true
+          return
+        }
         problems.push(`${message.type()}: ${text.slice(0, 300)}`)
       })
       page.on("pageerror", (error) =>
@@ -43,6 +64,11 @@ export const test = base.extend<{ consoleProblems: string[] }>({
       })
       await use(problems)
       expect(problems, "console errors or warnings").toEqual([])
+      const unused = (allowances.get(page) ?? []).filter((a) => !a.seen)
+      expect(
+        unused.map((a) => String(a.pattern)),
+        "allowed console errors that never happened",
+      ).toEqual([])
     },
     { auto: true },
   ],

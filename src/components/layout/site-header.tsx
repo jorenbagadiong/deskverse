@@ -6,11 +6,14 @@ import { brand } from "@/config/brand"
 import { cn } from "@/lib/utils"
 
 const nav = [
-  // Hidden on the narrowest phones, where the logo (also a home link) suffices.
+  // Hidden on the narrowest phones (under 400 px), so the menu and theme
+  // switcher fit: the logo is also a home link, and the design-system
+  // showcase is the least needed page on a phone.
   { href: "/", label: "Overview", className: "max-[399px]:hidden" },
+  { href: "/tickets", label: "Tickets" },
   { href: "/office", label: "Office" },
   { href: "/studio/pixel", label: "Studio" },
-  { href: "/brand", label: "Brand" },
+  { href: "/brand", label: "Brand", className: "max-[399px]:hidden" },
 ]
 
 export function SiteHeader() {

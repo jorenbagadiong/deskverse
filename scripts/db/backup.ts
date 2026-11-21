@@ -45,6 +45,14 @@ run(async () => {
     `  Media:    ${manifest.media.jobs} render jobs, ${manifest.media.files.length} files, ${mb(manifest.media.bytes)} ` +
       `(left out ${manifest.media.excluded.scratchFolders} temporary work folders)`,
   )
+  const tickets = manifest.ticketMedia
+  if (tickets)
+    console.log(
+      `  Tickets:  ${tickets.assets} attachments, ${mb(tickets.bytes)}` +
+        (tickets.excluded.orphans + tickets.excluded.staging > 0
+          ? ` (left out ${tickets.excluded.orphans} unregistered files and ${tickets.excluded.staging} unfinished uploads)`
+          : ""),
+    )
   console.log(
     "  Copy this folder to another drive to protect against disk loss.",
   )

@@ -1,25 +1,26 @@
 # E2E environment notes: 3D office tests in GPU-less WSL
 
-_Recorded at the DV-003A checkpoint and re-confirmed at DV-003B, DV-003C, DV-003D1, DV-003D2, DV-003D3 and DV-004A (2026-11-21)._
+_Recorded at the DV-003A checkpoint and re-confirmed at DV-003B, DV-003C, DV-003D1, DV-003D2, DV-003D3, DV-004A and DV-004B (2026-11-22)._
 
 ## Summary
 
 In WSL2 without a desktop Chrome, `E2E_CHANNEL=chromium yarn test:e2e` runs
 the suite in Playwright's headless Chromium. Every test that renders the 3D
-office then fails, **before and after DV-003A, DV-003B, DV-003C, DV-003D1, DV-003D2, DV-003D3 and DV-004A**. The cause is the test
+office then fails, **before and after DV-003A, DV-003B, DV-003C, DV-003D1, DV-003D2, DV-003D3, DV-004A and DV-004B**. The cause is the test
 environment, not application code. All other tests pass, including every
 Pixel Studio test.
 
-| Run                                             | Passed | Failed | Office failures with the WebGL warning |
-| ----------------------------------------------- | -----: | -----: | -------------------------------------: |
-| Clean `main` (`dfde85a`), office specs only     |      0 |     24 |                                24 / 24 |
-| `feat/dv-003-pixel-video-creator`, full suite   |     22 |     24 |                                24 / 24 |
-| DV-003B on `main` (base `6c701c1`), full suite  |     27 |     24 |                                24 / 24 |
-| DV-003C on `main` (base `f6ff233`), full suite  |     36 |     24 |                                24 / 24 |
-| DV-003D1 on `main` (base `68adbb0`), full suite |     45 |     24 |                                24 / 24 |
-| DV-003D2 on `main` (base `f6fbba4`), full suite |     52 |     24 |                                24 / 24 |
-| DV-003D3 on `main` (base `731d432`), full suite |     57 |     24 |                                24 / 24 |
-| DV-004A on `main` (base `3a9e917`), full suite  |     65 |     24 |                                24 / 24 |
+| Run                                                | Passed | Failed | Office failures with the WebGL warning |
+| -------------------------------------------------- | -----: | -----: | -------------------------------------: |
+| Clean `main` (`dfde85a`), office specs only        |      0 |     24 |                                24 / 24 |
+| `feat/dv-003-pixel-video-creator`, full suite      |     22 |     24 |                                24 / 24 |
+| DV-003B on `main` (base `6c701c1`), full suite     |     27 |     24 |                                24 / 24 |
+| DV-003C on `main` (base `f6ff233`), full suite     |     36 |     24 |                                24 / 24 |
+| DV-003D1 on `main` (base `68adbb0`), full suite    |     45 |     24 |                                24 / 24 |
+| DV-003D2 on `main` (base `f6fbba4`), full suite    |     52 |     24 |                                24 / 24 |
+| DV-003D3 on `main` (base `731d432`), full suite    |     57 |     24 |                                24 / 24 |
+| DV-004A on `main` (base `3a9e917`), full suite     |     65 |     24 |                                24 / 24 |
+| DV-004B on `main` (base `81fca88`), ordinary suite |     69 |     24 |                                24 / 24 |
 
 All runs fail the same 24 office tests. At DV-003A, the 22 passing tests
 were the 17 Pixel Studio tests, the 4 page smoke tests and the no-WebGL
@@ -51,7 +52,11 @@ passing tests add the 8 database-status tests in
 `e2e/system-database.spec.ts` (Ready, Not configured, Database not running
 and Connection failed states, an unreachable server and Check again, the
 360 px layout, the real endpoint's safe no-store report, and refusal of
-cross-site requests). No new failures
+cross-site requests). At DV-004B, the ordinary suite's 69 passing tests add
+the 4 mocked Affiliate Ticket list-state tests in `e2e/ticket-states.spec.ts`.
+The database-writing ticket specs (`e2e/tickets*.spec.ts`, 11 tests) run
+separately with `yarn test:e2e:db` on their own scratch database: 11 passed,
+none of them render the 3D office. No new failures
 appeared.
 
 ## Environment

@@ -44,6 +44,9 @@ function png(width: number, height: number) {
   return b
 }
 
+const TAGS = journal.entries.map((entry) => entry.tag)
+const LATEST = TAGS[TAGS.length - 1]
+
 const sha256 = async (file: string) =>
   createHash("sha256")
     .update(await readFile(file))
@@ -163,7 +166,7 @@ describe("backup and isolated restore", () => {
     ])
     expect(manifest.database).toMatchObject({
       format: "pg_dump-custom",
-      migrations: { applied: 1, current: "0000_init" },
+      migrations: { applied: TAGS.length, current: LATEST },
       tables: { app_metadata: 3 },
     })
     expect(manifest.database.serverVersion).toMatch(/^\d+\.\d+/)
@@ -250,7 +253,7 @@ describe("backup and isolated restore", () => {
     })
     expect(result).toMatchObject({
       files: 3,
-      migration: "0000_init",
+      migration: LATEST,
       tables: { app_metadata: 3 },
     })
 

@@ -16,9 +16,10 @@ engine. Everything runs on your own computer.
 Deskverse is becoming a ticket-driven affiliate marketing platform: you
 create an **Affiliate Ticket** with products, links and media, and the AI
 team researches, writes, renders, reviews, schedules and tracks the content
-(see the [roadmap](docs/ROADMAP.md)). Affiliate Tickets will be stored in a
-**local PostgreSQL** database (set up in DV-004A). Pixel Studio and the
-office don't need it: they work with PostgreSQL stopped or not installed.
+(see the [roadmap](docs/ROADMAP.md)). Affiliate Tickets are stored in a
+**local PostgreSQL** database (set up in DV-004A, used from DV-004B) and
+their media in Deskverse's private data folder. Pixel Studio and the office
+don't need PostgreSQL: they work with it stopped or not installed.
 
 ## Tech stack
 
@@ -99,26 +100,28 @@ move the repo into the Linux home directory.
 
 ## Development commands
 
-| Command                 | What it does                                           |
-| ----------------------- | ------------------------------------------------------ |
-| `yarn dev`              | Start the dev server (Turbopack)                       |
-| `yarn build`            | Production build                                       |
-| `yarn start`            | Serve the production build locally                     |
-| `yarn lint`             | ESLint (Next.js core-web-vitals + TypeScript)          |
-| `yarn typecheck`        | Generate route types, then `tsc --noEmit`              |
-| `yarn format`           | Prettier write (sorts Tailwind classes too)            |
-| `yarn format:check`     | Prettier check                                         |
-| `yarn test`             | Vitest unit tests (office, design, video engine)       |
-| `yarn test:integration` | Real FFmpeg render tests, video + audio (needs FFmpeg) |
-| `yarn test:db`          | Real PostgreSQL tests on the test database only        |
-| `yarn test:e2e`         | Playwright browser tests (builds + serves locally)     |
-| `yarn check`            | lint + typecheck + format check + tests                |
-| `yarn db:migrate`       | Apply versioned migrations to `DATABASE_URL`           |
-| `yarn db:check`         | Read-only database status                              |
-| `yarn db:generate`      | Create a new migration from `src/server/db/schema.ts`  |
-| `yarn db:backup`        | Offline backup: database + Pixel job files + manifest  |
-| `yarn db:backup:verify` | Re-check a backup's checksums                          |
-| `yarn db:restore`       | Restore into an empty database and a new data folder   |
+| Command                  | What it does                                           |
+| ------------------------ | ------------------------------------------------------ |
+| `yarn dev`               | Start the dev server (Turbopack)                       |
+| `yarn build`             | Production build                                       |
+| `yarn start`             | Serve the production build locally                     |
+| `yarn lint`              | ESLint (Next.js core-web-vitals + TypeScript)          |
+| `yarn typecheck`         | Generate route types, then `tsc --noEmit`              |
+| `yarn format`            | Prettier write (sorts Tailwind classes too)            |
+| `yarn format:check`      | Prettier check                                         |
+| `yarn test`              | Vitest unit tests (office, design, video engine)       |
+| `yarn test:integration`  | Real FFmpeg render tests, video + audio (needs FFmpeg) |
+| `yarn test:db`           | Real PostgreSQL tests on the test database only        |
+| `yarn test:e2e`          | Playwright browser tests (builds + serves locally)     |
+| `yarn test:e2e:db`       | Affiliate Ticket browser tests on a scratch database   |
+| `yarn check`             | lint + typecheck + format check + tests                |
+| `yarn db:migrate`        | Apply versioned migrations to `DATABASE_URL`           |
+| `yarn db:check`          | Read-only database status                              |
+| `yarn db:generate`       | Create a new migration from `src/server/db/schema.ts`  |
+| `yarn db:backup`         | Offline backup: database + Pixel job files + manifest  |
+| `yarn db:backup:verify`  | Re-check a backup's checksums                          |
+| `yarn db:restore`        | Restore into an empty database and a new data folder   |
+| `yarn tickets:reconcile` | Check ticket media against the database (`--apply`)    |
 
 ## Project structure
 
@@ -130,8 +133,10 @@ src/
     brand/page.tsx      Design-system showcase (/brand)
     office/page.tsx     Interactive 3D office (/office)
     studio/pixel/       Pixel Studio, the video tool (/studio/pixel)
+    tickets/            Affiliate Tickets: list, new, workspace (/tickets)
     api/studio/pixel/   Localhost-only capability, upload, render, status and video endpoints
     api/system/         Localhost-only database health endpoint
+    api/tickets/        Localhost-only Affiliate Ticket, product and media endpoints
     globals.css         Design tokens (light/dark) + Tailwind theme mapping
     icon.svg            Favicon
   components/
@@ -147,6 +152,7 @@ src/
         shared/         Batching, geometry cache, procedural shapes, ambient scheduler
     studio/pixel/       Pixel Studio form, image picker, storyboard, FFmpeg status, render panel
     system/             "Local PostgreSQL" status card
+    tickets/            Ticket list, forms, product editor, workspace
     theme/              Theme provider + switcher
     ui/                 shadcn/ui components
   config/               brand.ts, design-tokens.ts, employees.ts, employee-status.ts, office.ts
@@ -157,12 +163,14 @@ src/
   server/               Server-only: process runner, local-only guards, FFmpeg detection,
                         command builder, renderer, queue, private job storage
     db/                 PostgreSQL config, pool, Drizzle schema, migrations, health, test guards
-    backup/             Offline backup, verify and restore
+    backup/             Offline backup, verify and restore (format 2: + ticket media)
+    tickets/            Ticket repository (transactions + events), media storage and checks
 drizzle/                Versioned SQL migrations (committed)
-scripts/                yarn db:* commands, setup-local.sh (PostgreSQL install)
+scripts/                yarn db:* and tickets:* commands, setup-local.sh, e2e/ database test server
 assets/fonts/inter/     Inter Bold + Medium (SIL OFL 1.1) for video captions
 docs/                   ROADMAP.md, brand-guidelines.md, animation-guidelines.md,
-                        3d-office-architecture.md, video-architecture.md, database-architecture.md
+                        3d-office-architecture.md, video-architecture.md, database-architecture.md,
+                        affiliate-tickets.md
 tests/                  Vitest unit tests (+ integration/: real FFmpeg, db/: real PostgreSQL)
 e2e/                    Playwright browser tests
 ```
@@ -271,6 +279,44 @@ software WebGL and logs a deprecation warning, which the suite treats as a
 failure by design. Everything else passes. Run the office tests where Chrome
 has a GPU (for example native Windows). Details and the exact list:
 [E2E environment notes](docs/e2e-environment.md).
+
+## DV-004B scope: Affiliate Ticket management ✅
+
+The first real, saved Affiliate Tickets. **Tickets** in the header opens
+them.
+
+- **Create a ticket** (`/tickets/new`):
+  - a title, description, instructions, target platform (TikTok, Instagram
+    Reels, YouTube Shorts, Other), priority and publishing preferences;
+  - each ticket gets a number like **AFT-0001**.
+- **Add products** in the ticket workspace (`/tickets/[ticketId]`):
+  - name, affiliate link, description, specifications/facts, notes, source
+    and media rights, plus reference links (listing, manufacturer, review,
+    demo video, other);
+  - one product or many (10+ is fine; up to 100), reordered with the arrows.
+  - Links are stored only, never opened.
+- **Upload media:**
+  - JPEG, PNG or WebP images, checked like Pixel Studio's;
+  - MP4 clips as reference material (Pixel can't render clips yet);
+  - files are verified with FFmpeg and stored privately in
+    `~/.local/share/deskverse/tickets/`.
+- **Lifecycle:**
+  - Draft → **Ready** (needs a product with a name and a valid affiliate
+    link) → back to Draft on any change;
+  - **Archive** (read-only, reversible) and **Restore**;
+  - Ready only means _eligible for future processing_: nothing runs yet.
+- **Activity history** of every saved change. It holds field names and
+  counts, never your links or text.
+- **Find tickets** on `/tickets`: search by title or number, filter by
+  status, page through results.
+- **Safe failures:**
+  - if PostgreSQL is down, Deskverse says so and keeps what you typed;
+  - edits from a stale tab are refused rather than overwriting.
+- **Backups** (`yarn db:backup`) now include ticket media (format 2), each
+  file checked against its recorded checksum. DV-004A backups still restore.
+- **Pixel Studio is unchanged;** its jobs are not in the database.
+
+Details: [Affiliate Tickets](docs/affiliate-tickets.md).
 
 ## DV-004A scope: Local PostgreSQL foundation ✅
 
@@ -513,8 +559,9 @@ Rendering, uploads and downloads followed in DV-003B (above).
 ## Future milestones
 
 The plan from here is the Affiliate Ticket workflow in
-[docs/ROADMAP.md](docs/ROADMAP.md), starting with **DV-004B: Affiliate
-Ticket Management** (`/tickets`, `/tickets/new`, `/tickets/[ticketId]`).
+[docs/ROADMAP.md](docs/ROADMAP.md). Next is **DV-004C: Durable Campaign
+Orchestrator** (task dependencies, worker assignment, retries and restart
+recovery; Pixel renders one video at a time).
 Earlier ideas:
 
 - **Remaining AI team.** Quill, Vera, Relay and Ledger join the office using
