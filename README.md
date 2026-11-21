@@ -10,7 +10,15 @@ dashboard combined with an interactive, game-inspired virtual workplace staffed
 by playful robot employees (Scout, Quill, Pixel, Vera, Tempo, Relay and Ledger).
 
 The project is **local-first** and needs **no paid subscriptions**: no
-database, auth provider, cloud hosting, paid AI API or hosted workflow engine.
+hosted database, auth provider, cloud hosting, paid AI API or hosted workflow
+engine. Everything runs on your own computer.
+
+Deskverse is becoming a ticket-driven affiliate marketing platform: you
+create an **Affiliate Ticket** with products, links and media, and the AI
+team researches, writes, renders, reviews, schedules and tracks the content
+(see the [roadmap](docs/ROADMAP.md)). Affiliate Tickets will be stored in a
+**local PostgreSQL** database (set up in DV-004A). Pixel Studio and the
+office don't need it: they work with PostgreSQL stopped or not installed.
 
 ## Tech stack
 
@@ -23,6 +31,7 @@ database, auth provider, cloud hosting, paid AI API or hosted workflow engine.
 | Motion     | Anime.js v4 (DOM), React Three Fiber loop (3D)                |
 | 3D         | three.js, @react-three/fiber, @react-three/drei               |
 | Video      | Native FFmpeg + FFprobe on your machine (optional, DV-003)    |
+| Database   | Local PostgreSQL 16 + Drizzle ORM (for Affiliate Tickets)     |
 | Theming    | next-themes (dark default, light, system)                     |
 | Icons      | lucide-react                                                  |
 | Font       | Inter (self-hosted via `@fontsource-variable/inter`)          |
@@ -101,8 +110,15 @@ move the repo into the Linux home directory.
 | `yarn format:check`     | Prettier check                                         |
 | `yarn test`             | Vitest unit tests (office, design, video engine)       |
 | `yarn test:integration` | Real FFmpeg render tests, video + audio (needs FFmpeg) |
+| `yarn test:db`          | Real PostgreSQL tests on the test database only        |
 | `yarn test:e2e`         | Playwright browser tests (builds + serves locally)     |
 | `yarn check`            | lint + typecheck + format check + tests                |
+| `yarn db:migrate`       | Apply versioned migrations to `DATABASE_URL`           |
+| `yarn db:check`         | Read-only database status                              |
+| `yarn db:generate`      | Create a new migration from `src/server/db/schema.ts`  |
+| `yarn db:backup`        | Offline backup: database + Pixel job files + manifest  |
+| `yarn db:backup:verify` | Re-check a backup's checksums                          |
+| `yarn db:restore`       | Restore into an empty database and a new data folder   |
 
 ## Project structure
 
@@ -115,6 +131,7 @@ src/
     office/page.tsx     Interactive 3D office (/office)
     studio/pixel/       Pixel Studio, the video tool (/studio/pixel)
     api/studio/pixel/   Localhost-only capability, upload, render, status and video endpoints
+    api/system/         Localhost-only database health endpoint
     globals.css         Design tokens (light/dark) + Tailwind theme mapping
     icon.svg            Favicon
   components/
@@ -129,18 +146,24 @@ src/
         workstation/    Shared desk + seven job-specific prop sets
         shared/         Batching, geometry cache, procedural shapes, ambient scheduler
     studio/pixel/       Pixel Studio form, image picker, storyboard, FFmpeg status, render panel
+    system/             "Local PostgreSQL" status card
     theme/              Theme provider + switcher
     ui/                 shadcn/ui components
   config/               brand.ts, design-tokens.ts, employees.ts, employee-status.ts, office.ts
   hooks/                WebGL support + reduced-motion hooks
   lib/                  motion.ts (Anime.js conventions), office-simulation.ts, utils.ts
     video/              Video format, types, IDs, validation, storyboard, API contract (client-safe)
+    system/             Database health report contract (client-safe)
   server/               Server-only: process runner, local-only guards, FFmpeg detection,
                         command builder, renderer, queue, private job storage
+    db/                 PostgreSQL config, pool, Drizzle schema, migrations, health, test guards
+    backup/             Offline backup, verify and restore
+drizzle/                Versioned SQL migrations (committed)
+scripts/                yarn db:* commands, setup-local.sh (PostgreSQL install)
 assets/fonts/inter/     Inter Bold + Medium (SIL OFL 1.1) for video captions
-docs/                   brand-guidelines.md, animation-guidelines.md, 3d-office-architecture.md,
-                        video-architecture.md
-tests/                  Vitest unit tests (+ integration/: real FFmpeg)
+docs/                   ROADMAP.md, brand-guidelines.md, animation-guidelines.md,
+                        3d-office-architecture.md, video-architecture.md, database-architecture.md
+tests/                  Vitest unit tests (+ integration/: real FFmpeg, db/: real PostgreSQL)
 e2e/                    Playwright browser tests
 ```
 
@@ -248,6 +271,37 @@ software WebGL and logs a deprecation warning, which the suite treats as a
 failure by design. Everything else passes. Run the office tests where Chrome
 has a GPU (for example native Windows). Details and the exact list:
 [E2E environment notes](docs/e2e-environment.md).
+
+## DV-004A scope: Local PostgreSQL foundation ✅
+
+The groundwork for **Affiliate Tickets**: a secure local database. No ticket
+pages or workers yet; those start in DV-004B.
+
+- **Install once:** `bash scripts/db/setup-local.sh` installs Ubuntu's
+  PostgreSQL 16 and makes it listen on 127.0.0.1 only. It creates a
+  dedicated app role and database and a separate test role and database,
+  and writes random passwords to `.env.local` (mode 600). Your sudo
+  password is typed into your own terminal and never stored. Then run
+  `yarn db:migrate` and `yarn db:check`.
+- **Configuration:** `DATABASE_URL` and `DATABASE_TEST_URL` in `.env.local`
+  (template: `.env.example`, placeholders only). URLs must point at this
+  computer; passwords never appear in logs, messages or the browser.
+- **Migrations:** versioned SQL in `drizzle/` (Drizzle ORM + drizzle-kit),
+  applied transactionally by `yarn db:migrate` and safe to repeat.
+- **Status:** the overview page shows **Local PostgreSQL**: Ready, Not
+  configured, Database not running or Connection failed, from
+  `GET /api/system/database/health` (read-only, local-only, no secrets).
+- **Backups:** `yarn db:backup` (with Deskverse stopped) saves the database,
+  Pixel Studio's job files and uploads, finished videos and a checksummed
+  manifest. `yarn db:restore` only restores into an empty database and a
+  new folder.
+- **Tests:** `yarn test:db` runs against throwaway `deskverse_test_*`
+  databases only, never your development data.
+- **Pixel Studio is unchanged:** its render jobs stay as files in
+  `~/.local/share/deskverse/video/jobs`, nothing was migrated, and it keeps
+  working with PostgreSQL stopped.
+
+Details: [database architecture](docs/database-architecture.md).
 
 ## DV-003D3 scope: Voiceover timing & music loops ✅
 
@@ -457,6 +511,11 @@ from your own product images and captions. When rendering arrives, native
 Rendering, uploads and downloads followed in DV-003B (above).
 
 ## Future milestones
+
+The plan from here is the Affiliate Ticket workflow in
+[docs/ROADMAP.md](docs/ROADMAP.md), starting with **DV-004B: Affiliate
+Ticket Management** (`/tickets`, `/tickets/new`, `/tickets/[ticketId]`).
+Earlier ideas:
 
 - **Remaining AI team.** Quill, Vera, Relay and Ledger join the office using
   the same registry, robot and workstation components.

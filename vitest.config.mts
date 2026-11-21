@@ -15,8 +15,9 @@ export default defineConfig({
   resolve: { alias },
   test: {
     include: ["tests/**/*.test.ts"],
-    // Real-FFmpeg tests run separately: yarn test:integration.
-    exclude: [...configDefaults.exclude, "tests/integration/**"],
+    // Real-FFmpeg tests run separately (yarn test:integration), and so do
+    // real-PostgreSQL tests (yarn test:db): unit tests need neither.
+    exclude: [...configDefaults.exclude, "tests/integration/**", "tests/db/**"],
     environment: "node",
   },
 })

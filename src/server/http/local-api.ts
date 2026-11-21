@@ -69,6 +69,33 @@ export function guardLocalApi(
 }
 
 /**
+ * Guard for Deskverse's local system endpoints (e.g. the database health
+ * check): the same loopback checks as Pixel Studio's, and the same refusal
+ * on hosting platforms, with wording that isn't about rendering.
+ */
+export function guardLocalSystemApi(
+  request: Request,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): Response | null {
+  if (
+    env.DESKVERSE_DISABLE_LOCAL_RENDERING === "1" ||
+    HOSTING_MARKERS.some((key) => env[key])
+  )
+    return jsonError(
+      503,
+      "local-services-disabled",
+      "Local services only run on your own computer, so they're disabled on this server.",
+    )
+  if (!checkLocalRequest(request.headers).ok)
+    return jsonError(
+      403,
+      "forbidden",
+      "Deskverse's local system endpoints only answer a browser on this computer.",
+    )
+  return null
+}
+
+/**
  * Action endpoints (cancel, retry, delete, cleanup) take no input at all; a
  * body is refused rather than ignored.
  */

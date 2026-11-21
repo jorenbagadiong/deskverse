@@ -5,6 +5,7 @@ import { AnimatedLogo } from "@/components/brand/animated-logo"
 import { EmployeeAvatar } from "@/components/employees/employee-card"
 import { StatusBadge } from "@/components/employees/status-badge"
 import { Reveal } from "@/components/motion/reveal"
+import { DatabaseStatus } from "@/components/system/database-status"
 import { Button } from "@/components/ui/button"
 import { brand } from "@/config/brand"
 import { employees } from "@/config/employees"
@@ -81,6 +82,20 @@ export default function Home() {
             </div>
           ))}
         </Reveal>
+      </section>
+
+      <section
+        aria-labelledby="services-title"
+        className="border-t border-border py-section"
+      >
+        <h2 id="services-title" className="mb-2 text-title">
+          Local services
+        </h2>
+        <p className="mb-stack max-w-2xl text-sm text-muted-foreground">
+          Everything runs on this computer. PostgreSQL will store Affiliate
+          Tickets; Pixel Studio and the office work without it.
+        </p>
+        <DatabaseStatus />
       </section>
 
       <section

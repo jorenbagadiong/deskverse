@@ -1,12 +1,12 @@
 # E2E environment notes: 3D office tests in GPU-less WSL
 
-_Recorded at the DV-003A checkpoint and re-confirmed at DV-003B, DV-003C, DV-003D1, DV-003D2 and DV-003D3 (2026-11-21)._
+_Recorded at the DV-003A checkpoint and re-confirmed at DV-003B, DV-003C, DV-003D1, DV-003D2, DV-003D3 and DV-004A (2026-11-21)._
 
 ## Summary
 
 In WSL2 without a desktop Chrome, `E2E_CHANNEL=chromium yarn test:e2e` runs
 the suite in Playwright's headless Chromium. Every test that renders the 3D
-office then fails, **before and after DV-003A, DV-003B, DV-003C, DV-003D1, DV-003D2 and DV-003D3**. The cause is the test
+office then fails, **before and after DV-003A, DV-003B, DV-003C, DV-003D1, DV-003D2, DV-003D3 and DV-004A**. The cause is the test
 environment, not application code. All other tests pass, including every
 Pixel Studio test.
 
@@ -19,6 +19,7 @@ Pixel Studio test.
 | DV-003D1 on `main` (base `68adbb0`), full suite |     45 |     24 |                                24 / 24 |
 | DV-003D2 on `main` (base `f6fbba4`), full suite |     52 |     24 |                                24 / 24 |
 | DV-003D3 on `main` (base `731d432`), full suite |     57 |     24 |                                24 / 24 |
+| DV-004A on `main` (base `3a9e917`), full suite  |     65 |     24 |                                24 / 24 |
 
 All runs fail the same 24 office tests. At DV-003A, the 22 passing tests
 were the 17 Pixel Studio tests, the 4 page smoke tests and the no-WebGL
@@ -45,7 +46,12 @@ rendering, the exact millisecond request plus server-approved timing, the
 360 px layout, and a real render of trimmed, offset narration over looping
 music with preview, download, a 300 Hz band level check and history after
 reload); two DV-003C audio tests were updated for the deliberately changed
-rules (timed fit message, 5-minute recording limit). No new failures
+rules (timed fit message, 5-minute recording limit). At DV-004A, the 65
+passing tests add the 8 database-status tests in
+`e2e/system-database.spec.ts` (Ready, Not configured, Database not running
+and Connection failed states, an unreachable server and Check again, the
+360 px layout, the real endpoint's safe no-store report, and refusal of
+cross-site requests). No new failures
 appeared.
 
 ## Environment

@@ -1,0 +1,746 @@
+import { execFile } from "node:child_process"
+import { createHash } from "node:crypto"
+import { createReadStream, createWriteStream, promises as fs } from "node:fs"
+import path from "node:path"
+import { Transform } from "node:stream"
+import { pipeline } from "node:stream/promises"
+
+import pg from "pg"
+
+import { isRenderJobId } from "@/lib/video/ids"
+import {
+  BACKUP_FORMAT,
+  BACKUP_FORMAT_VERSION,
+  DATABASE_DUMP_FILE,
+  MANIFEST_CHECKSUM_FILE,
+  MANIFEST_FILE,
+  MEDIA_DIR,
+  MEDIA_SOURCE,
+  manifestProblems,
+  type BackupManifest,
+  type ManifestFile,
+} from "@/server/backup/manifest"
+import { redact, type DatabaseConfig } from "@/server/db/config"
+import { classifyDatabaseError } from "@/server/db/errors"
+import { migrationStatus, type Journal } from "@/server/db/migrations"
+
+/**
+ * Offline backup and restore of Deskverse's data (DV-004A).
+ *
+ * A backup holds:
+ *   manifest.json     what is inside, with SHA-256 checksums (no secrets)
+ *   manifest.sha256   checksum of the manifest itself
+ *   database.dump     pg_dump custom format (no owners, no privileges, no passwords)
+ *   media/video/jobs/<jobId>/{job.json, project.json, assets/…, output/…}
+ *
+ * Each job's work/ folder (temporary render files) is left out.
+ *
+ * Consistency: a database dump and a file copy aren't one atomic snapshot.
+ * The only supported procedure is offline: stop Deskverse (and any worker)
+ * first. createBackup refuses while a Deskverse server or render process is
+ * running, or while anything else is connected to the database.
+ *
+ * Restore never overwrites anything: the target database must be empty and
+ * the target data folder must not exist yet (or be empty).
+ */
+
+export class BackupError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "BackupError"
+  }
+}
+
+const DIR_MODE = 0o700
+const FILE_MODE = 0o600
+const TOOL_TIMEOUT_MS = 10 * 60_000
+
+// ---------------------------------------------------------------------------
+// PostgreSQL client tools
+// ---------------------------------------------------------------------------
+
+/**
+ * Runs pg_dump / pg_restore with the connection in libpq environment
+ * variables, so the password never appears on a command line (visible to
+ * other processes) and never in an error message.
+ */
+function runPgTool(
+  program: "pg_dump" | "pg_restore",
+  args: string[],
+  db: DatabaseConfig | null,
+): Promise<string> {
+  const env: Record<string, string | undefined> = {
+    PATH: process.env.PATH,
+    LANG: "C.UTF-8",
+    PGCONNECT_TIMEOUT: "5",
+  }
+  if (db) {
+    env.PGHOST = db.host
+    env.PGPORT = String(db.port)
+    env.PGUSER = db.user
+    env.PGPASSWORD = db.password
+    env.PGDATABASE = db.database
+  }
+  return new Promise((resolve, reject) => {
+    execFile(
+      program,
+      args,
+      {
+        // A minimal environment: nothing else from this process leaks in.
+        env: env as NodeJS.ProcessEnv,
+        timeout: TOOL_TIMEOUT_MS,
+        maxBuffer: 16 * 1024 * 1024,
+      },
+      (error, stdout, stderr) => {
+        if (!error) return resolve(stdout)
+        const missing = (error as NodeJS.ErrnoException).code === "ENOENT"
+        const detail = redact(
+          String(stderr || error.message)
+            .trim()
+            .split("\n")
+            .slice(0, 3)
+            .join(" "),
+          db?.password ?? "",
+        )
+        reject(
+          new BackupError(
+            missing
+              ? `${program} isn't installed. Install it with: sudo apt install postgresql-client`
+              : `${program} failed: ${detail}`,
+          ),
+        )
+      },
+    )
+  })
+}
+
+async function toolVersion(program: "pg_dump" | "pg_restore") {
+  const out = await runPgTool(program, ["--version"], null)
+  return /(\d+(?:\.\d+)*)/.exec(out)?.[1] ?? "unknown"
+}
+
+/** Throws unless pg_restore can read the whole table of contents. */
+async function checkDumpReadable(file: string) {
+  const list = await runPgTool("pg_restore", ["--list", file], null)
+  if (!/^; Archive created at/m.test(list))
+    throw new BackupError("The database dump isn't a readable pg_dump archive.")
+}
+
+// ---------------------------------------------------------------------------
+// Files
+// ---------------------------------------------------------------------------
+
+async function sha256File(file: string) {
+  const hash = createHash("sha256")
+  await pipeline(createReadStream(file), hash)
+  return hash.digest("hex")
+}
+
+/** Copies a file and returns the SHA-256 of the bytes read. */
+async function copyWithHash(from: string, to: string) {
+  const hash = createHash("sha256")
+  let bytes = 0
+  await fs.mkdir(path.dirname(to), { recursive: true, mode: DIR_MODE })
+  await pipeline(
+    createReadStream(from),
+    new Transform({
+      transform(chunk: Buffer, _encoding, done) {
+        hash.update(chunk)
+        bytes += chunk.byteLength
+        done(null, chunk)
+      },
+    }),
+    createWriteStream(to, { flags: "wx", mode: FILE_MODE }),
+  )
+  return { bytes, sha256: hash.digest("hex") }
+}
+
+function isInside(parent: string, child: string) {
+  const relative = path.relative(parent, child)
+  return (
+    relative === "" ||
+    (!relative.startsWith("..") && !path.isAbsolute(relative))
+  )
+}
+
+async function isEmptyOrMissing(dir: string) {
+  try {
+    return (await fs.readdir(dir)).length === 0
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return true
+    throw error
+  }
+}
+
+/** Job files that are backed up; everything else in a job folder is not. */
+const JOB_FILES = new Set(["job.json", "project.json"])
+const JOB_FOLDERS = new Set(["assets", "output"])
+const SCRATCH_FOLDER = "work"
+
+interface MediaPlan {
+  files: { source: string; relative: string }[]
+  jobs: number
+  scratchFolders: number
+  unrecognized: number
+}
+
+/** Lists what to copy from <dataRoot>/video/jobs. Never follows symlinks. */
+export async function planMediaBackup(dataRoot: string): Promise<MediaPlan> {
+  const plan: MediaPlan = {
+    files: [],
+    jobs: 0,
+    scratchFolders: 0,
+    unrecognized: 0,
+  }
+  const jobsRoot = path.join(dataRoot, MEDIA_SOURCE)
+  let jobs: import("node:fs").Dirent[]
+  try {
+    jobs = await fs.readdir(jobsRoot, { withFileTypes: true })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return plan
+    throw error
+  }
+  for (const job of jobs.sort((a, b) => a.name.localeCompare(b.name))) {
+    if (!job.isDirectory() || !isRenderJobId(job.name)) {
+      plan.unrecognized++
+      continue
+    }
+    plan.jobs++
+    const jobDir = path.join(jobsRoot, job.name)
+    for (const entry of await fs.readdir(jobDir, { withFileTypes: true })) {
+      const full = path.join(jobDir, entry.name)
+      if (entry.isFile() && JOB_FILES.has(entry.name))
+        plan.files.push({
+          source: full,
+          relative: `${MEDIA_SOURCE}/${job.name}/${entry.name}`,
+        })
+      else if (entry.isDirectory() && entry.name === SCRATCH_FOLDER)
+        plan.scratchFolders++
+      else if (entry.isDirectory() && JOB_FOLDERS.has(entry.name))
+        await collect(full, `${MEDIA_SOURCE}/${job.name}/${entry.name}`, plan)
+      else plan.unrecognized++
+    }
+  }
+  return plan
+}
+
+async function collect(dir: string, relative: string, plan: MediaPlan) {
+  const entries = await fs.readdir(dir, { withFileTypes: true })
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    const full = path.join(dir, entry.name)
+    if (!/^[A-Za-z0-9._-]+$/.test(entry.name) || entry.name.startsWith(".")) {
+      plan.unrecognized++
+    } else if (entry.isFile()) {
+      plan.files.push({ source: full, relative: `${relative}/${entry.name}` })
+    } else if (entry.isDirectory()) {
+      await collect(full, `${relative}/${entry.name}`, plan)
+    } else plan.unrecognized++ // symlinks, sockets…
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Is Deskverse running?
+// ---------------------------------------------------------------------------
+
+export interface ActiveProcess {
+  pid: number
+  kind: "deskverse-server" | "data-folder"
+}
+
+/**
+ * Finds a running Deskverse Next.js server (any process whose working
+ * directory is the repository and whose command is `next …` or
+ * `next-server`) and any process working inside the data folder (FFmpeg
+ * renders). Linux only (/proc); elsewhere returns null ("can't tell").
+ */
+export async function findActiveProcesses(
+  projectRoot: string,
+  dataRoot: string,
+  procRoot = "/proc",
+): Promise<ActiveProcess[] | null> {
+  let pids: string[]
+  try {
+    pids = (await fs.readdir(procRoot)).filter((name) => /^\d+$/.test(name))
+  } catch {
+    return null
+  }
+  const active: ActiveProcess[] = []
+  for (const pid of pids) {
+    if (Number(pid) === process.pid) continue
+    let cwd: string
+    let cmdline: string
+    try {
+      cwd = await fs.readlink(path.join(procRoot, pid, "cwd"))
+      cmdline = (await fs.readFile(path.join(procRoot, pid, "cmdline"), "utf8"))
+        .split("\0")
+        .join(" ")
+    } catch {
+      continue // another user's process, or it just exited
+    }
+    if (isInside(dataRoot, cwd))
+      active.push({ pid: Number(pid), kind: "data-folder" })
+    else if (
+      cwd === projectRoot &&
+      /(^|[\s/])next(-server)?(\s|$)/.test(cmdline)
+    )
+      active.push({ pid: Number(pid), kind: "deskverse-server" })
+  }
+  return active
+}
+
+// ---------------------------------------------------------------------------
+// Database facts
+// ---------------------------------------------------------------------------
+
+function connect(db: DatabaseConfig, applicationName: string) {
+  const client = new pg.Client({
+    host: db.host,
+    port: db.port,
+    database: db.database,
+    user: db.user,
+    password: db.password,
+    connectionTimeoutMillis: 5_000,
+    statement_timeout: 30_000,
+    application_name: applicationName,
+  })
+  client.on("error", () => {})
+  return client
+}
+
+async function withClient<T>(
+  db: DatabaseConfig,
+  applicationName: string,
+  work: (client: pg.Client) => Promise<T>,
+): Promise<T> {
+  const client = connect(db, applicationName)
+  try {
+    await client.connect()
+  } catch (error) {
+    throw new BackupError(classifyDatabaseError(error).message)
+  }
+  try {
+    return await work(client)
+  } finally {
+    await client.end().catch(() => {})
+  }
+}
+
+/** Row counts of every ordinary table in the public schema. */
+async function tableCounts(client: pg.Client) {
+  const tables = await client.query<{ name: string }>(
+    `SELECT c.relname AS name
+       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
+      ORDER BY c.relname`,
+  )
+  const counts: Record<string, number> = {}
+  for (const { name } of tables.rows) {
+    // Identifiers can't be query parameters; this quotes them safely.
+    const result = await client.query<{ n: string }>(
+      `SELECT count(*) AS n FROM public.${client.escapeIdentifier(name)}`,
+    )
+    counts[name] = Number(result.rows[0].n)
+  }
+  return counts
+}
+
+/** Number of user objects (tables, views, sequences…) outside system schemas. */
+async function userObjectCount(client: pg.Client) {
+  const result = await client.query<{ n: string }>(
+    `SELECT count(*) AS n
+       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+        AND n.nspname NOT LIKE 'pg_toast%'
+        AND n.nspname NOT LIKE 'pg_temp%'`,
+  )
+  return Number(result.rows[0].n)
+}
+
+// ---------------------------------------------------------------------------
+// Backup
+// ---------------------------------------------------------------------------
+
+export interface CreateBackupOptions {
+  db: DatabaseConfig
+  journal: Journal
+  /** Deskverse's data folder (resolveDataRoot()). */
+  dataRoot: string
+  /** Folder that receives deskverse-backup-<time>/. */
+  backupsRoot: string
+  /** The repository, to detect a running Deskverse server. */
+  projectRoot: string
+  deskverseVersion: string
+  now?: () => Date
+  /** Tests that don't start a server may skip the /proc scan. */
+  checkProcesses?: boolean
+}
+
+export interface BackupResult {
+  dir: string
+  manifest: BackupManifest
+}
+
+export async function createBackup(
+  options: CreateBackupOptions,
+): Promise<BackupResult> {
+  const {
+    db,
+    journal,
+    dataRoot,
+    backupsRoot,
+    projectRoot,
+    deskverseVersion,
+    now = () => new Date(),
+    checkProcesses = true,
+  } = options
+  for (const [label, dir] of [
+    ["backup folder", backupsRoot],
+    ["data folder", dataRoot],
+  ] as const)
+    if (!path.isAbsolute(dir))
+      throw new BackupError(`The ${label} must be an absolute path.`)
+  if (isInside(dataRoot, backupsRoot) || isInside(backupsRoot, dataRoot))
+    throw new BackupError(
+      "Keep backups outside the Deskverse data folder (and vice versa).",
+    )
+  if (isInside(projectRoot, backupsRoot))
+    throw new BackupError(
+      "Keep backups outside the repository, so media and dumps can't be committed.",
+    )
+
+  // 1. Offline check.
+  if (checkProcesses) {
+    const active = await findActiveProcesses(projectRoot, dataRoot)
+    if (active === null)
+      throw new BackupError(
+        "Can't check for running Deskverse processes on this system (no /proc).",
+      )
+    if (active.length > 0)
+      throw new BackupError(
+        `Stop Deskverse before backing up. Still running: ${active
+          .map((p) =>
+            p.kind === "deskverse-server"
+              ? `Deskverse server (pid ${p.pid})`
+              : `a process using the data folder (pid ${p.pid})`,
+          )
+          .join(", ")}.`,
+      )
+  }
+
+  // 2. Database facts, and nobody else connected.
+  const facts = await withClient(db, "deskverse-backup", async (client) => {
+    const others = await client.query<{ n: string }>(
+      `SELECT count(*) AS n FROM pg_stat_activity
+        WHERE datname = current_database() AND pid <> pg_backend_pid()`,
+    )
+    if (Number(others.rows[0].n) > 0)
+      throw new BackupError(
+        "Another program is connected to the Deskverse database. Stop Deskverse (and any worker) first.",
+      )
+    const status = await migrationStatus(client, journal)
+    const version = await client.query<{ v: string }>(
+      "SELECT current_setting('server_version') AS v",
+    )
+    return {
+      status,
+      serverVersion: version.rows[0].v.split(" ")[0],
+      tables: await tableCounts(client),
+    }
+  })
+  if (facts.status.ahead || facts.status.pending.length > 0)
+    throw new BackupError(
+      "The database schema isn't current. Run yarn db:migrate (or update the code) before backing up.",
+    )
+
+  // 3. Write into a .partial folder; rename only when complete and verified.
+  const stamp = now()
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace(/\.\d+Z$/, "Z")
+  const name = `deskverse-backup-${stamp}`
+  const finalDir = path.join(backupsRoot, name)
+  const workDir = `${finalDir}.partial`
+  await fs.mkdir(backupsRoot, { recursive: true, mode: DIR_MODE })
+  if (!(await isEmptyOrMissing(finalDir)))
+    throw new BackupError(`A backup named ${name} already exists.`)
+  await fs.mkdir(workDir, { mode: DIR_MODE })
+
+  try {
+    const dumpFile = path.join(workDir, DATABASE_DUMP_FILE)
+    await runPgTool(
+      "pg_dump",
+      [
+        "--format=custom",
+        "--no-owner",
+        "--no-privileges",
+        "--no-password",
+        `--file=${dumpFile}`,
+      ],
+      db,
+    )
+    await fs.chmod(dumpFile, FILE_MODE)
+    await checkDumpReadable(dumpFile)
+
+    const plan = await planMediaBackup(dataRoot)
+    const files: ManifestFile[] = []
+    let bytes = 0
+    for (const file of plan.files) {
+      const copied = await copyWithHash(
+        file.source,
+        path.join(workDir, MEDIA_DIR, ...file.relative.split("/")),
+      )
+      files.push({ path: file.relative, ...copied })
+      bytes += copied.bytes
+    }
+
+    const manifest: BackupManifest = {
+      format: BACKUP_FORMAT,
+      formatVersion: BACKUP_FORMAT_VERSION,
+      createdAt: now().toISOString(),
+      procedure: "offline",
+      deskverse: { version: deskverseVersion },
+      database: {
+        file: DATABASE_DUMP_FILE,
+        format: "pg_dump-custom",
+        bytes: (await fs.stat(dumpFile)).size,
+        sha256: await sha256File(dumpFile),
+        serverVersion: facts.serverVersion,
+        pgDumpVersion: await toolVersion("pg_dump"),
+        migrations: {
+          applied: facts.status.applied,
+          current: facts.status.current,
+        },
+        tables: facts.tables,
+      },
+      media: {
+        source: MEDIA_SOURCE,
+        jobs: plan.jobs,
+        files,
+        bytes,
+        excluded: {
+          scratchFolders: plan.scratchFolders,
+          unrecognized: plan.unrecognized,
+        },
+      },
+    }
+    await writeManifest(workDir, manifest)
+    const problems = await verifyBackup(workDir)
+    if (problems.length > 0)
+      throw new BackupError(
+        `The new backup failed verification: ${problems.join("; ")}`,
+      )
+    await fs.rename(workDir, finalDir)
+    return { dir: finalDir, manifest }
+  } catch (error) {
+    // Leave nothing half-written that could be mistaken for a backup.
+    await fs.rm(workDir, { recursive: true, force: true })
+    throw error
+  }
+}
+
+async function writeManifest(dir: string, manifest: BackupManifest) {
+  const text = `${JSON.stringify(manifest, null, 2)}\n`
+  await fs.writeFile(path.join(dir, MANIFEST_FILE), text, {
+    mode: FILE_MODE,
+    flag: "wx",
+  })
+  const digest = createHash("sha256").update(text).digest("hex")
+  await fs.writeFile(
+    path.join(dir, MANIFEST_CHECKSUM_FILE),
+    `${digest}  ${MANIFEST_FILE}\n`,
+    { mode: FILE_MODE, flag: "wx" },
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Verify
+// ---------------------------------------------------------------------------
+
+export async function readManifest(dir: string): Promise<BackupManifest> {
+  let text: string
+  try {
+    text = await fs.readFile(path.join(dir, MANIFEST_FILE), "utf8")
+  } catch {
+    throw new BackupError(`${dir} has no ${MANIFEST_FILE}; it isn't a backup.`)
+  }
+  const value: unknown = JSON.parse(text)
+  const problems = manifestProblems(value)
+  if (problems.length > 0)
+    throw new BackupError(`Invalid manifest: ${problems.join("; ")}`)
+  return value as BackupManifest
+}
+
+/** Re-checks every checksum. Returns problems; empty means intact. */
+export async function verifyBackup(dir: string): Promise<string[]> {
+  const problems: string[] = []
+  let text: string
+  try {
+    text = await fs.readFile(path.join(dir, MANIFEST_FILE), "utf8")
+  } catch {
+    return [`no ${MANIFEST_FILE}`]
+  }
+  try {
+    const recorded = (
+      await fs.readFile(path.join(dir, MANIFEST_CHECKSUM_FILE), "utf8")
+    ).split(/\s+/)[0]
+    if (createHash("sha256").update(text).digest("hex") !== recorded)
+      problems.push("manifest.json doesn't match manifest.sha256")
+  } catch {
+    problems.push(`no ${MANIFEST_CHECKSUM_FILE}`)
+  }
+  let manifest: BackupManifest
+  try {
+    manifest = await readManifest(dir)
+  } catch (error) {
+    return [...problems, (error as Error).message]
+  }
+
+  const dump = path.join(dir, DATABASE_DUMP_FILE)
+  try {
+    if ((await sha256File(dump)) !== manifest.database.sha256)
+      problems.push("database.dump checksum mismatch")
+    else await checkDumpReadable(dump)
+  } catch (error) {
+    problems.push(
+      error instanceof BackupError ? error.message : "database.dump is missing",
+    )
+  }
+
+  const listed = new Set<string>()
+  for (const file of manifest.media.files) {
+    listed.add(file.path)
+    const full = path.join(dir, MEDIA_DIR, ...file.path.split("/"))
+    try {
+      const stat = await fs.lstat(full)
+      if (!stat.isFile()) problems.push(`${file.path} isn't a regular file`)
+      else if (stat.size !== file.bytes)
+        problems.push(`${file.path} has the wrong size`)
+      else if ((await sha256File(full)) !== file.sha256)
+        problems.push(`${file.path} checksum mismatch`)
+    } catch {
+      problems.push(`${file.path} is missing`)
+    }
+  }
+  // Nothing unlisted may hide in the media folder.
+  const present = await listFiles(path.join(dir, MEDIA_DIR))
+  const extra = present.filter((file) => !listed.has(file))
+  if (extra.length > 0)
+    problems.push(`${extra.length} file(s) in media/ aren't in the manifest`)
+  return problems
+}
+
+async function listFiles(root: string, prefix = ""): Promise<string[]> {
+  let entries: import("node:fs").Dirent[]
+  try {
+    entries = await fs.readdir(path.join(root, prefix), { withFileTypes: true })
+  } catch {
+    return []
+  }
+  const files: string[] = []
+  for (const entry of entries) {
+    const relative = prefix ? `${prefix}/${entry.name}` : entry.name
+    if (entry.isDirectory()) files.push(...(await listFiles(root, relative)))
+    else files.push(relative)
+  }
+  return files
+}
+
+// ---------------------------------------------------------------------------
+// Restore
+// ---------------------------------------------------------------------------
+
+export interface RestoreOptions {
+  /** A verified backup folder. */
+  dir: string
+  /** Must be an empty database. */
+  target: DatabaseConfig
+  /** Becomes a Deskverse data folder; must not exist yet, or be empty. */
+  dataRoot: string
+  journal: Journal
+}
+
+export interface RestoreResult {
+  manifest: BackupManifest
+  files: number
+  tables: Record<string, number>
+  migration: string | null
+}
+
+export async function restoreBackup({
+  dir,
+  target,
+  dataRoot,
+  journal,
+}: RestoreOptions): Promise<RestoreResult> {
+  const problems = await verifyBackup(dir)
+  if (problems.length > 0)
+    throw new BackupError(
+      `The backup failed verification, so nothing was restored: ${problems.join("; ")}`,
+    )
+  const manifest = await readManifest(dir)
+
+  if (!path.isAbsolute(dataRoot))
+    throw new BackupError("The restore data folder must be an absolute path.")
+  if (!(await isEmptyOrMissing(dataRoot)))
+    throw new BackupError(
+      "The restore data folder isn't empty. Restore never overwrites files: choose a new folder.",
+    )
+  await withClient(target, "deskverse-restore", async (client) => {
+    if ((await userObjectCount(client)) > 0)
+      throw new BackupError(
+        "The target database isn't empty. Restore never overwrites data: create a new, empty database.",
+      )
+  })
+
+  // Database: all or nothing.
+  await runPgTool(
+    "pg_restore",
+    [
+      "--no-owner",
+      "--no-privileges",
+      "--no-password",
+      "--single-transaction",
+      "--exit-on-error",
+      `--dbname=${target.database}`,
+      path.join(dir, DATABASE_DUMP_FILE),
+    ],
+    target,
+  )
+
+  // Media: copy, then check every checksum of the copies.
+  await fs.mkdir(dataRoot, { recursive: true, mode: DIR_MODE })
+  for (const file of manifest.media.files) {
+    const parts = file.path.split("/")
+    const copied = await copyWithHash(
+      path.join(dir, MEDIA_DIR, ...parts),
+      path.join(dataRoot, ...parts),
+    )
+    if (copied.sha256 !== file.sha256 || copied.bytes !== file.bytes)
+      throw new BackupError(`Restored ${file.path} doesn't match the backup.`)
+  }
+
+  // The restored database must match what the manifest recorded.
+  const restored = await withClient(
+    target,
+    "deskverse-restore",
+    async (client) => ({
+      status: await migrationStatus(client, journal),
+      tables: await tableCounts(client),
+    }),
+  )
+  if (restored.status.current !== manifest.database.migrations.current)
+    throw new BackupError(
+      "The restored database's schema version doesn't match the backup.",
+    )
+  for (const [table, count] of Object.entries(manifest.database.tables))
+    if (restored.tables[table] !== count)
+      throw new BackupError(
+        `The restored table ${table} has ${restored.tables[table] ?? 0} rows; the backup recorded ${count}.`,
+      )
+  return {
+    manifest,
+    files: manifest.media.files.length,
+    tables: restored.tables,
+    migration: restored.status.current,
+  }
+}
