@@ -6,27 +6,27 @@ TikTok, Instagram Reels and YouTube Shorts. It's named after Pixel, the
 team's video creator.
 
 > **What this is not.** Pixel Studio does not generate AI footage, voices or
-> images. FFmpeg _assembles media you supply_: it crops and scales your
-> photos, adds gentle motion, draws your captions and joins the scenes into
-> one MP4. Every pixel in the output comes from your images and your text.
+> images. FFmpeg _assembles media you supply_: it scales and frames your
+> photos, draws your captions and joins the scenes into one MP4. Every pixel
+> in the output comes from your images and your text.
 
-| Phase       | Scope                                                                              | Status        |
-| ----------- | ---------------------------------------------------------------------------------- | ------------- |
-| **DV-003A** | Environment detection, strict types, validation, storyboard UI, storage foundation | ✅ This phase |
-| **DV-003B** | Real rendering: job queue, FFmpeg command builder, progress, download              | Planned       |
-| **DV-003C** | Audio: music bed and/or voice-over, AAC encoding                                   | Planned       |
+| Phase       | Scope                                                                                     | Status  |
+| ----------- | ----------------------------------------------------------------------------------------- | ------- |
+| **DV-003A** | Environment detection, strict types, validation, storyboard UI, storage foundation        | ✅ Done |
+| **DV-003B** | Real rendering: uploads, server-built projects, FFmpeg renderer, queue, preview, download | ✅ Done |
+| **DV-003C** | Audio: music bed and/or voice-over, AAC encoding                                          | Planned |
+| **DV-003D** | Persistent queue, cancellation, retries, transitions and motion                           | Planned |
 
 ## 1. FFmpeg and FFprobe
 
 - **FFmpeg** is a command-line program that decodes, filters and encodes
-  audio and video. Pixel Studio will use it to scale and crop each image to
-  1080×1920, apply a slow zoom (`zoompan`), draw captions (`drawtext`), fade
-  between scenes and encode the result as H.264 in an MP4 container.
-- **FFprobe** ships with FFmpeg and _reads_ media. It reports dimensions,
-  duration, codecs and streams. DV-003B uses it to re-check uploaded images
-  server-side and to verify the finished MP4.
+  audio and video. Pixel Studio uses it to compose each scene (backdrop,
+  framed product image, captions) and to encode the scenes as one H.264 MP4.
+- **FFprobe** ships with FFmpeg and _reads_ media. Pixel Studio uses it to
+  re-check every uploaded image and to verify every finished video before
+  anyone can see it.
 
-Both run as **native programs on your computer**. Deskverse does not use
+Both run as **native programs on your computer**. Deskverse doesn't use
 FFmpeg.wasm, cloud rendering or paid APIs, and it doesn't bundle FFmpeg. You
 install it once with your OS package manager.
 
@@ -47,20 +47,18 @@ Verify the install:
 ffmpeg  -hide_banner -version | head -1   # e.g. ffmpeg version 6.1.1-3ubuntu5
 ffprobe -hide_banner -version | head -1
 ffmpeg  -hide_banner -encoders | grep -E ' (libx264|libopenh264|aac) '
-ffmpeg  -hide_banner -filters  | grep -E ' (drawtext|zoompan|xfade) '
+ffmpeg  -hide_banner -filters  | grep -E ' (drawtext|gblur|colorchannelmixer|loop) '
 ```
 
 Then open http://localhost:3000/studio/pixel and select **Check again** in the
 _Local FFmpeg_ card. No server restart is needed (results are cached for at
 most 30 seconds).
 
-Ubuntu 24.04 ships FFmpeg 6.1 and Ubuntu 22.04 ships 4.4. Both include
-libx264, libfreetype (for `drawtext`), `zoompan` and `xfade`. Builds older
-than 5.0 work but show an "untested" warning.
-
-**macOS:** `brew install ffmpeg`. **Native Windows (without WSL):** install a
-full build (for example from the gyan.dev or BtbN builds) and add its `bin`
-folder to `PATH`.
+Ubuntu 24.04 ships FFmpeg 6.1 and Ubuntu 22.04 ships 4.4; both include
+libx264 and libfreetype (for `drawtext`). Builds older than 5.0 work but show
+an "untested" warning. **macOS:** `brew install ffmpeg`. **Native Windows
+(without WSL):** install a full build (for example the gyan.dev or BtbN
+builds) and add its `bin` folder to `PATH`.
 
 ### Non-standard locations
 
@@ -78,102 +76,200 @@ configuration error.
 
 ## 3. Environment detection
 
-`src/server/video/ffmpeg-capabilities.ts` (server-only) runs four fixed,
-read-only commands and parses their output:
+`src/server/video/ffmpeg-capabilities.ts` (server-only) runs fixed, read-only
+commands and parses their output:
 
-| Command                         | Learns                                           |
-| ------------------------------- | ------------------------------------------------ |
-| `ffmpeg -hide_banner -version`  | FFmpeg version, license flags (GPL/LGPL/nonfree) |
-| `ffprobe -hide_banner -version` | FFprobe version                                  |
-| `ffmpeg -hide_banner -encoders` | Every H.264 and AAC encoder in the build         |
-| `ffmpeg -hide_banner -filters`  | Whether each required filter exists              |
+| Command                           | Learns                                           |
+| --------------------------------- | ------------------------------------------------ |
+| `ffmpeg -hide_banner -version`    | FFmpeg version, license flags (GPL/LGPL/nonfree) |
+| `ffprobe -hide_banner -version`   | FFprobe version                                  |
+| `ffmpeg -hide_banner -encoders`   | Every H.264 and AAC encoder in the build         |
+| `ffmpeg -hide_banner -filters`    | Whether each required filter exists              |
+| Test encode (6 frames, discarded) | Which H.264 encoder actually works               |
 
-- **libx264 is never assumed.** All H.264 encoders are listed and ranked:
-  `libx264`, then `libopenh264`, then other software encoders, then hardware
-  encoders (`h264_nvenc`, `h264_qsv`, `h264_vaapi`, `h264_amf`…).
-  `libx264rgb` is excluded because it can't produce `yuv420p`. Hardware
-  encoders are only _listed_ by FFmpeg. Whether the GPU and drivers work is
-  proven by a test render in DV-003B, so a hardware-only build shows a
-  warning.
-- **Required filters:** `scale`, `crop`, `pad`, `setsar`, `fps`, `format`,
-  `overlay`, `drawtext`, `zoompan`, `fade`, `concat`. **Optional:** `xfade`
-  (smoother transitions; otherwise scenes cut).
-- **AAC** is reported but only warns when missing, because audio arrives in
-  DV-003C.
+- **Encoders are tested, not trusted.** Being listed in `-encoders` only
+  means "compiled in"; hardware encoders often fail without a GPU or
+  drivers. Candidates are ranked (`libx264`, `libopenh264`, other software,
+  then hardware such as `h264_nvenc`, `h264_qsv`, `h264_vaapi`) and each is
+  test-encoded in that order at 1080×1920 `yuv420p`, with the exact options
+  renders use, into FFmpeg's null muxer, until one succeeds. Only an encoder
+  that passed can be selected. If none pass, the status is `unsupported`.
+  `libx264rgb` is excluded (it can't produce `yuv420p`).
+- **Required filters** (exactly what the renderer uses): `color`, `split`,
+  `scale`, `crop`, `gblur`, `colorchannelmixer`, `overlay`, `drawtext`,
+  `format`, `loop`, `settb`, `setpts`, `setsar`, `concat`, `fade`.
+  **Optional:** `xfade` (crossfades, planned for DV-003D).
+- **AAC** is reported, but a missing AAC encoder only warns, because audio
+  arrives in DV-003C.
 
-Result status:
-
-| Status        | Meaning                                                                                      |
-| ------------- | -------------------------------------------------------------------------------------------- |
-| `ready`       | FFmpeg + FFprobe found, an H.264 encoder and all required filters exist (warnings may apply) |
-| `missing`     | FFmpeg or FFprobe can't be found or started                                                  |
-| `unsupported` | Installed, but no H.264 encoder or a required filter is missing                              |
-
-Every problem comes with a plain-language message: not found, permission
-denied, didn't respond within 5 s, not really FFmpeg, invalid override,
-missing filters (with a note that `drawtext` needs libfreetype), and so on.
-
-### Capability endpoint
+| Status        | Meaning                                                                                       |
+| ------------- | --------------------------------------------------------------------------------------------- |
+| `ready`       | FFmpeg + FFprobe found, all required filters present, an H.264 encoder passed its test encode |
+| `missing`     | FFmpeg or FFprobe can't be found or started                                                   |
+| `unsupported` | Installed, but a required filter is missing or no H.264 encoder works                         |
 
 `GET /api/studio/pixel/capabilities` (`?refresh=1` skips the 30 s cache)
-returns an `FfmpegCapabilityReport` (`src/lib/video/capabilities.ts`). It
-contains booleans, sanitized version strings, encoder/filter names, a derived
-license label and human-readable issues. It **never** includes executable
-paths, environment variables, `./configure` flags (which can contain build
-paths) or raw process output.
+returns an `FfmpegCapabilityReport`: booleans, sanitized versions,
+encoder/filter names with test results, a license label and plain-language
+issues. It **never** includes executable paths, environment variables,
+`./configure` flags (they can contain build paths) or raw process output.
 
-The route runs on the **Node.js runtime**. With Cache Components enabled,
-Next.js 16 doesn't allow (or need) `export const runtime`: Node.js is the only
-runtime. Reading request headers keeps the route out of build-time
-prerendering, so detection always runs on the serving machine. Other methods
-answer `405`.
+All routes run on the **Node.js runtime**. With Cache Components enabled,
+Next.js 16 doesn't allow (or need) `export const runtime`. Reading request
+headers keeps them out of build-time prerendering.
 
-## 4. Video output target
+## 4. Rendering workflow
+
+```
+Browser                                Server (this computer)
+───────                                ──────────────────────
+pick 3–6 images (File objects kept)
+fill in text, preview storyboard
+Render MP4 ─► POST /jobs ────────────► new draft job (generated ID)
+           ─► POST /jobs/:id/assets ─► per image: size limit while streaming,
+              (raw bytes, one per        byte sniffing, header dimensions,
+               request)                  FFprobe codec/size check, test decode,
+                                         stored as assets/<assetId>.<ext> (0600)
+           ─► POST /jobs/:id/render ─► { product, assetIds } only; storyboard
+              (JSON)                     rebuilt server-side, project.json saved,
+                                         job queued → 202 + status
+poll GET /jobs/:id every second ◄──── state + real progress
+                                       queue worker (one at a time):
+                                         1. FFmpeg ready + tested encoder?
+                                         2. re-read + re-validate project.json
+                                         3. fonts + caption files → work/
+                                         4. compose one still PNG per scene
+                                         5. encode H.264 (-progress pipe:1)
+                                         6. FFprobe verification
+                                         7. work/render.mp4 → output/video.mp4
+                                         8. job completed (or failed), work/ wiped
+<video src=/jobs/:id/video>  ◄──────── verified MP4 only, byte ranges
+Download MP4 (?download=1)   ◄──────── Content-Disposition: attachment
+```
+
+The browser receives a job ID and polls; no HTTP request is held open while
+FFmpeg works.
+
+### Scene composition
+
+Each scene is composed once into a 1080×1920 still (`scene-N.png`):
+
+1. **Backdrop:** the image scaled to cover the frame, blurred (`gblur`) and
+   darkened, over the dark brand color (so transparent PNGs still look right).
+2. **Product image:** the whole image fitted inside 960 × 800 px, centered
+   with its proportions preserved (`force_original_aspect_ratio=decrease`).
+   Nothing is cropped from the product.
+3. **Text:** the affiliate disclosure (Inter Medium 32 px on a dark band, top
+   of every scene), the caption (Inter Bold, 84 → 52 px, on a dark box, or on
+   the accent pill for the call to action) and the product name under the
+   hook and call to action.
+
+**Mobile safe areas:** platform UI covers roughly the top ~200 px, the bottom
+~400 px and a right-hand rail. Text stays between y = 210 and y ≈ 1560, in a
+centered 820 px column.
+
+**Text layout:** FFmpeg's `drawtext` doesn't wrap, so the server wraps
+captions itself using real glyph widths read from the font file
+(`font-metrics.ts`). Lines are balanced (no orphan last word), long words
+break by character, and the font size steps down until a caption fits three
+lines. Characters the font can't draw (emoji, CJK…) are rejected with a clear
+message before rendering, instead of rendering as empty boxes.
+
+### Encoding
+
+The scene stills are fed as single-frame inputs. The `loop` filter repeats
+each one for its exact frame count, `settb=1/30,setpts=N` gives exact 1/30 s
+timestamps, and `concat` joins them with a 0.25 s fade-in and 0.4 s fade-out.
+Scenes change with simple cuts.
+
+- `libx264`: `-preset medium -crf 20 -tune stillimage -rc-lookahead 20
+-profile:v high`. Other software encoders get a fixed bitrate (6 Mb/s for
+  `libopenh264`) and hardware encoders 8 Mb/s.
+- Always `-pix_fmt yuv420p -r 30 -frames:v <exact> -an -movflags +faststart`.
+- Encoder threads: available cores − 1, capped at 4.
+
+**Progress is never estimated.** While encoding, the UI shows FFmpeg's own
+`out_time` (from `-progress pipe:1`) over the storyboard's exact duration.
+Before that it shows the real number of composed scenes. Waiting, preparing
+and verifying show no percentage.
+
+### Output verification
+
+Before a job may complete, FFprobe must confirm all of the following. If
+anything is off, the file is discarded and the job fails with the list of
+problems.
+
+- MP4 container (format `mp4` and an ISO brand such as `isom`, not QuickTime)
+- exactly one video stream, H.264, 1080 × 1920, `yuv420p`, 30/1 fps
+- no audio track
+- duration within 15–30 s and within 0.1 s of the storyboard
+- frame count equal to the storyboard's
+- non-empty file
+
+### Queue and restarts
+
+- One render at a time, at most 3 waiting (more → 429 "try again in a
+  minute"), and the same job can't be started twice (409).
+- State lives in `job.json`; live progress lives in memory.
+- **Restarts:** when the server starts, any job still `queued` or `rendering`
+  belongs to the previous process and is marked `failed` ("interrupted") and
+  any partial output is deleted, so nothing half-rendered is reported as
+  complete.
+- Startup cleanup removes drafts and failed jobs older than 24 hours.
+  Completed videos stay until you delete them.
+- Timeouts: 60 s per scene and 10 minutes for the encode. The process is
+  killed with `SIGKILL` at the deadline. FFmpeg never waits for input (stdin
+  is closed and `-nostdin` is set).
+
+## 5. Video output target
 
 Fixed in `src/lib/video/format.ts`. Clients can't change it.
 
-| Property     | Value                                                                      |
-| ------------ | -------------------------------------------------------------------------- |
-| Resolution   | 1080 × 1920 px                                                             |
-| Aspect ratio | 9:16 (vertical)                                                            |
-| Frame rate   | 30 fps                                                                     |
-| Container    | MP4 (`+faststart` in DV-003B, so playback starts before download finishes) |
-| Video codec  | H.264, `yuv420p` (plays on every phone and platform)                       |
-| Duration     | 15–30 seconds                                                              |
-| Audio        | None until DV-003C                                                         |
+| Property     | Value                                                        |
+| ------------ | ------------------------------------------------------------ |
+| Resolution   | 1080 × 1920 px                                               |
+| Aspect ratio | 9:16 (vertical)                                              |
+| Frame rate   | 30 fps (constant)                                            |
+| Container    | MP4 with `+faststart` (playback starts before download ends) |
+| Video codec  | H.264 (High profile with libx264), `yuv420p`                 |
+| Duration     | 15–30 seconds                                                |
+| Audio        | None until DV-003C                                           |
 
 ### Storyboard template
 
-`buildStoryboard()` (`src/lib/video/storyboard.ts`) produces a fixed template:
+`buildStoryboard()` (`src/lib/video/storyboard.ts`) produces a fixed
+template. The browser uses it for the preview and **the server rebuilds it
+independently** for rendering.
 
 1. **Hook:** headline over the hero (first) image, with the product name
 2. **Benefits:** one scene per benefit (1–5), cycling through the other images
-3. **Call to action:** CTA button-style caption over the hero image
+3. **Call to action:** CTA pill over the hero image, with the product name
 
-The **affiliate disclosure** is overlaid on every scene. Durations are whole
-frames: base durations (3 s hook, 4 s per benefit, 4 s CTA) are fitted
-proportionally into 15–30 s, with each scene kept within 2–8 s.
+The affiliate disclosure is on every scene. Durations are whole frames: base
+durations (3 s hook, 4 s per benefit, 4 s CTA) are fitted proportionally
+into 15–30 s, with each scene kept within 2–8 s.
 
 ### Validation rules
 
-`src/lib/video/validation.ts` is shared by the form and, from DV-003B, by the
-server, where it is the real gate. Inputs are treated as `unknown`.
+`src/lib/video/validation.ts` is shared by the form and the server; the
+server is the real gate.
 
-- **Strict objects:** unknown keys are rejected everywhere (product, scenes,
-  captions, settings, assets). A request can't carry `ffmpegArgs`,
-  `outputPath`, `filter`, `fontfile` or any other field.
-- **Settings** must equal the fixed defaults exactly.
-- **Text:** NFC-normalized and whitespace collapsed to one line. Lengths are
-  counted in characters (product name 60, headline 70, benefit 80, CTA 40,
-  disclosure 140). Control characters, bidi overrides, zero-width and other
-  invisible format characters, private-use characters and lone surrogates
-  are refused. Emoji joiners stay allowed.
-- **Images:** JPEG, PNG or WebP only (no SVG or GIF), extension must match
-  type, 1 byte to 10 MB, 1–6 images, each side 320–8192 px, at most 40 MP.
-- **Scenes:** 3–8 scenes, hook first and CTA last, 2–8 s each in whole
-  frames, 15–30 s total, and image references must point at project images.
+- **Render requests** may contain exactly `{ product, assetIds }`. Scenes,
+  timings, settings, captions, asset metadata, paths and FFmpeg options are
+  rejected ("decided by the server").
+- **Strict objects** everywhere: unknown keys are errors.
+- **Text:** NFC-normalized, whitespace collapsed to one line, lengths in
+  characters (product name 60, headline 70, benefit 80, CTA 40, disclosure
+  140). Control, bidi-override, zero-width, private-use and lone-surrogate
+  characters are refused, and so are characters the video font can't draw.
+- **Images:** 3–6 per video; JPEG, PNG or WebP only (no SVG or GIF); at most
+  10 MB each; each side 320–8192 px, at most 40 MP. Every image ID must belong
+  to the job being rendered (cross-job references are rejected) and appear
+  only once.
+- **Scenes:** 3–8, hook first and CTA last, 2–8 s each in whole frames,
+  15–30 s total.
 
-## 5. Local file storage
+## 6. Local file storage
 
 `src/server/video/storage.ts` (server-only). Data lives **outside the
 repository** in the per-user application data folder:
@@ -186,54 +282,50 @@ repository** in the per-user application data folder:
 
 `DESKVERSE_DATA_DIR` overrides it. It must be absolute, and any location
 inside the project (including `public/`) is refused, so private files can
-never be served by Next.js or committed. In WSL this is the Linux filesystem,
-which is fast and not synced by Windows tools.
+never be served by Next.js or committed. Playwright runs use a throwaway
+folder in the system temp directory.
 
 ```
 <data>/video/jobs/<jobId>/
-  job.json                 RenderJob metadata (state, assets, error, output)
+  job.json                 state, assets, error, verified output facts
+  project.json             the server-built project the renderer uses
   assets/<assetId>.<ext>   uploaded images, renamed to generated IDs
-  work/                    temporary render files; wiped by cleanupWork()
-  output/video.mp4         the finished render
+  work/                    scratch space for one render, always emptied afterwards
+  output/video.mp4         the finished, verified render
 ```
 
-The storage API covers job creation, image validation and storage, job
-metadata and state transitions, asset paths for the renderer, work-directory
-cleanup, job deletion, stale-job cleanup and safe output retrieval:
-
 - **Generated IDs only:** `job_` / `asset_` + 128 random bits in hex. User
-  file names are sanitized and kept for display only.
-- **Path containment:** every path is built with `resolveInside()`, which
-  allows only simple segments and proves the result stays under the root.
-  Symlinks are refused and real paths re-checked, so `..`, absolute paths and
-  link tricks can't escape.
-- **Upload checks:** size limit before anything else, then the type is
-  identified **by the file's bytes** (magic numbers), and it must match the
-  declared type. Dimensions are read from headers without decoding pixels.
-- **Owner-only permissions:** directories `0700`, files `0600`; files are
-  written with `wx` (never overwrite) and metadata is written atomically
-  (temp file + rename). Updates to one job are serialized.
-- **Lifecycle:** `draft → queued → rendering → completed`, with `failed →
-queued` retries and `cancelled`. Images can only be added to a draft.
-  Stale-job cleanup never touches queued/rendering jobs or folders it didn't
-  create.
-- **Outputs:** returned only for `completed` jobs, and only if the file is a
-  regular file inside storage. The absolute path is for server-side streaming
-  and is never sent to the browser.
+  file names are sanitized and only displayed.
+- **Path containment:** every path is built with `resolveInside()` (simple
+  segments only, proven to stay under the root). Symlinks are refused and
+  real paths re-checked.
+- **Uploads:** `Content-Length` is checked first, the body is counted while
+  streaming and cut off at 10 MB, the type is identified by the file's
+  bytes, FFprobe must agree on codec and size, and FFmpeg must decode the
+  image without errors. A failed check deletes the file again.
+- **Owner-only permissions:** directories `0700`, files `0600`, files written
+  with `wx` (never overwrite), metadata written atomically (temp file +
+  rename), and updates to one job serialized. `project.json` can only be
+  written while the job is a draft.
+- **Outputs:** served only for `completed` jobs (which the queue sets only
+  after verification), and only if the file is a regular file inside
+  storage. Its path is never sent to the browser.
 
-## 6. Render security boundaries
+## 7. Security model
 
-| Boundary                    | Rule                                                                                                                                                                                                                            |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Browser → server            | The browser sends _data_ (text, images), never commands, flags, filters, paths or codec options. Strict validation rejects unknown fields.                                                                                      |
-| Server → FFmpeg             | Only `execFile` (no shell) with argument arrays built by server code from the fixed format. Hard timeout, output cap, minimal environment (`PATH` + OS essentials), stdin closed. Raw errors are mapped to codes, never echoed. |
-| Captions → FFmpeg (DV-003B) | Caption text is written to per-job text files and passed with `drawtext=textfile=…`. It is never interpolated into a filter string, so FFmpeg's filter escaping can't be abused.                                                |
-| Files                       | Generated names, containment checks, symlink refusal, byte-level type sniffing, size limits, data dir outside the repo and `public/`.                                                                                           |
-| Network                     | The capability endpoint checks `Host` (blocks DNS rebinding), `X-Forwarded-Host`/`-For`, `Origin` and `Sec-Fetch-Site` (blocks cross-site calls).                                                                               |
+| Boundary          | Rule                                                                                                                                                                                                                                         |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Browser → server  | The browser sends _data_: image bytes, product text and image IDs. Never commands, flags, filters, paths, timings or codec options.                                                                                                          |
+| Server → FFmpeg   | `spawn`/`execFile` with `shell: false` and argument arrays built by server code. `-nostdin`, closed stdin, `-protocol_whitelist file`, `file:` inputs/outputs, timeouts, output caps, minimal environment.                                   |
+| Captions → FFmpeg | Text goes to per-job UTF-8 files drawn with `drawtext=textfile=…:expansion=none`, so `%{…}`, quotes, colons and brackets are drawn literally. Filter graphs contain only generated, escaped values.                                          |
+| Errors            | Users see plain messages. Raw FFmpeg output (which may contain paths) only goes to the server log.                                                                                                                                           |
+| Files             | Generated names, containment checks, symlink refusal, byte sniffing plus FFprobe and decode checks, size limits, data outside the repo.                                                                                                      |
+| Network           | Every endpoint (capabilities, jobs, uploads, render, status, video) checks `Host` (DNS rebinding), `X-Forwarded-*`, `Origin` and `Sec-Fetch-Site`. The render request must be JSON.                                                          |
+| Hosting           | Rendering is **disabled** (503) when a hosting platform is detected (`VERCEL`, `NETLIFY`, `RENDER`, `FLY_APP_NAME`, `RAILWAY_ENVIRONMENT`, `K_SERVICE`, `AWS_LAMBDA_FUNCTION_NAME`, `DYNO`) or `DESKVERSE_DISABLE_LOCAL_RENDERING=1` is set. |
 
-**Header checks are not a network firewall.** A program on another machine
-that can reach the port can forge headers. `next dev` / `next start` listen on
-all interfaces by default, so for strict local-only use bind to loopback:
+**These checks are not authentication.** Headers can be forged by a program
+that reaches the port directly. `next dev` / `next start` listen on all
+interfaces by default, so run Deskverse bound to loopback:
 
 ```bash
 yarn dev   -H 127.0.0.1
@@ -241,94 +333,121 @@ yarn start -H 127.0.0.1
 ```
 
 WSL's localhost forwarding still lets your Windows browser reach
-`http://localhost:3000`.
+`http://localhost:3000`. Don't deploy Pixel Studio's rendering anywhere
+public. The hosting gate is a safety net, not a substitute for keeping it
+local.
 
-## 7. Licensing considerations
+## 8. Licensing and redistribution
 
-_This is general information, not legal advice._
+_General information, not legal advice._
 
-- **FFmpeg** is LGPL 2.1+ by default. Builds configured with `--enable-gpl`
-  (needed for libx264, as in Ubuntu's package) are GPL. Builds with
-  `--enable-nonfree` (e.g. `libfdk_aac`) may be used but **not
-  redistributed**. Pixel Studio shows the detected license and warns about
-  non-free builds.
+- **FFmpeg** is LGPL 2.1+ by default. Builds with `--enable-gpl` (needed for
+  libx264, as in Ubuntu's package) are GPL. Builds with `--enable-nonfree`
+  may be used but **not redistributed**. Pixel Studio shows the detected
+  license and warns about non-free builds.
 - **Deskverse doesn't bundle, link or distribute FFmpeg.** It starts the copy
   you installed as a separate program, so FFmpeg's license terms don't extend
   to Deskverse's code. If a future release bundles FFmpeg binaries, it must
   ship the license text and corresponding source as the (L)GPL requires.
-- **H.264 is covered by patents** administered by a patent pool (Via LA, which
-  absorbed MPEG LA's AVC program). Pool terms have historically waived
-  royalties for internet video distributed free to viewers, but review the
-  current terms for your use, especially for paid or commercial distribution
-  of the encoder itself. Cisco's prebuilt OpenH264 binaries come with Cisco
-  covering the pool royalties.
+- **H.264 is covered by patents** administered by a patent pool (Via LA,
+  which absorbed MPEG LA's AVC program). Pool terms have historically waived
+  royalties for internet video distributed free to viewers; review the
+  current terms for your use, especially for paid distribution. Cisco's
+  prebuilt OpenH264 binaries come with Cisco covering the pool royalties.
+- **Caption font:** Inter 4.1 by The Inter Project Authors, under the SIL Open
+  Font License 1.1 (`assets/fonts/inter/LICENSE.txt`). The OFL allows
+  commercial use, bundling with software and embedding in videos you
+  distribute. The font files may not be sold on their own, and modified
+  versions must be renamed. Deskverse ships the unmodified static
+  `Inter-Bold.ttf` and `Inter-Medium.ttf` from the official 4.1 release.
 - **Your media:** you need the rights to every image you use. Affiliate
-  programs often restrict how product images may be used (some only allow
-  images fetched through their own tools), so check your program's terms.
+  programs often restrict how product images may be used, so check your
+  program's terms.
 - **Disclosure:** advertising rules (e.g. the US FTC Endorsement Guides) and
   platform policies require a clear disclosure when you can earn a
-  commission. Pixel Studio requires disclosure text and shows it on every
+  commission. Pixel Studio requires disclosure text and burns it into every
   scene. Also use each platform's branded-content or paid-partnership
   setting.
 
-## 8. Phase A limitations
+## 9. Measured performance
 
-- **No rendering.** The Render button is disabled with an explanation, and no
-  video file is produced.
-- Images are previewed in the browser with `blob:` URLs and are **not
-  uploaded**. The storage layer is implemented and tested but not yet wired
-  to an upload endpoint.
-- The storyboard is a static preview (no motion, transitions or timing
-  playback). Captions use the browser's font, while the render will use a
-  bundled font.
-- One fixed template and format. No audio.
-- Capability detection lists hardware encoders but can't confirm they work
-  without a test render.
+One full render on the development machine (WSL2, Ubuntu 24.04, 16 cores,
+9.6 GB RAM, FFmpeg 6.1.1, libx264, no GPU), from four real JPEG photos
+(three at 3840×2400, one at 1920×1080) uploaded through the HTTP API:
 
-## 9. Planned DV-003B: rendering
+| Measure                                    | Result                      |
+| ------------------------------------------ | --------------------------- |
+| Render request → verified completion       | 9.3 s                       |
+| Output                                     | 19.0 s, 570 frames, 1.45 MB |
+| FFmpeg peak memory (one process at a time) | 471 MiB                     |
+| FFmpeg peak CPU                            | ~3.9 cores                  |
+| Upload + FFprobe checks (3 photos, via UI) | ~0.7 s                      |
+| Full decode of the output                  | no errors                   |
 
-1. **Upload endpoint** (localhost-only, size-limited streaming) that calls
-   `storage.addImageAsset()`, plus FFprobe re-validation of each image.
-2. **Server-side project validation** with `validateVideoProject()`. The
-   server rebuilds the storyboard itself rather than trusting client scenes.
-3. **FFmpeg command builder:** a pure, unit-tested function from a
-   `VideoProject` plus the selected encoder to an argument array, with
-   per-scene `scale/crop/zoompan/fade`, `drawtext=textfile=` captions with
-   a bundled open-licensed font (OFL), `concat`, `-pix_fmt yuv420p -r 30
--movflags +faststart`, and encoder-specific quality flags (`-crf` for
-   libx264, bitrate for others).
-4. **Job queue:** one render at a time, `queued → rendering → completed/failed`,
-   progress from `-progress pipe:1`, cancellation by killing the child,
-   timeouts, and `cleanupWork()` afterwards.
-5. **Output:** FFprobe verification (1080×1920, H.264, 30 fps, duration),
-   then a localhost-only download route that streams
-   `resolveCompletedOutput()`, plus stale-job cleanup on startup.
-6. **Hardware encoder test:** a one-second probe render before trusting a
-   hardware-only encoder.
+libx264's own frame buffers dominate memory use. An earlier version fed the
+scenes as looping inputs, which made FFmpeg decode every scene ahead in
+parallel and reached 1.4–1.7 GB. The single-frame inputs plus `loop` filter,
+4-thread cap and shorter lookahead bring it under 0.5 GB, and memory no
+longer grows with the number of scenes. Rendering on CPU is expected; slow
+isn't failing, and the encode timeout is 10 minutes.
 
-## 10. Code map
+## 10. Limitations (DV-003B)
+
+- One fixed template, simple cuts, no motion or transitions, no audio.
+- Captions support the characters in Inter (Latin, Greek, Cyrillic and common
+  symbols). Emoji and CJK are rejected rather than drawn.
+- JPEG EXIF orientation isn't applied. A phone photo stored sideways with a
+  rotation tag renders sideways, so rotate it before uploading.
+- No cancellation, retry or delete button yet. Completed videos stay in the
+  data folder until removed by hand.
+- The queue lives in one server process. Running several Deskverse servers on
+  the same data folder isn't supported.
+- The in-page preview needs a browser with H.264 playback (Chrome, Edge,
+  Firefox, Safari). Playwright's bundled Chromium can't decode H.264, so the
+  E2E suite checks the file itself and playback only where supported.
+
+## 11. Remaining work
+
+**DV-003C (audio):** an optional music bed and/or voice-over supplied by the
+user, AAC encoding (the AAC check already exists), loudness normalization,
+and output verification extended to one AAC stream.
+
+**DV-003D (queue and polish):** a persistent queue, cancel and retry in the
+UI, deleting jobs and outputs, crossfades (`xfade`), gentle motion on stills,
+EXIF orientation, and more templates.
+
+## 12. Code map
 
 ```
-src/lib/video/               shared, client-safe
-  format.ts                  fixed output format, frame helpers
-  types.ts                   ProductInfo, MediaAsset, VideoScene, Caption, VideoSettings, VideoProject
-  ids.ts                     RenderJobId / AssetId: generation + strict patterns
-  render-job.ts              job states, transitions, RenderJob metadata
-  validation.ts              all input validation
-  storyboard.ts              storyboard template + duration fitting
-  capabilities.ts            public capability report types, required filters
-src/server/                  server-only (import "server-only")
-  process/run-executable.ts  the only way to start a program (execFile, no shell)
-  video/ffmpeg-capabilities.ts  detection, parsing, encoder ranking, cache
-  video/storage.ts           private job storage, path safety, data dir
-  video/image-sniff.ts       byte-level image type and dimension checks
-  http/local-request.ts      localhost-only header checks
-src/app/api/studio/pixel/capabilities/route.ts   GET capability report
-src/app/studio/pixel/page.tsx                    Pixel Studio page
-src/components/studio/pixel/                     studio UI
-tests/video-config.test.ts, tests/ffmpeg-capabilities.test.ts, tests/video-storage.test.ts
-e2e/pixel-studio.spec.ts, e2e/pixel-studio-mobile.spec.ts
+assets/fonts/inter/            Inter Bold + Medium (OFL 1.1) for captions
+src/lib/video/                 shared, client-safe
+  format.ts                    fixed output format, frame helpers
+  types.ts                     ProductInfo, MediaAsset, VideoScene, Caption, VideoSettings, VideoProject
+  ids.ts                       RenderJobId / AssetId: generation + strict patterns
+  render-job.ts                job states, transitions, RenderOutput, RenderProgress
+  render-api.ts                HTTP contract: endpoints, request/status shapes
+  validation.ts                all input validation
+  storyboard.ts                storyboard template + duration fitting
+  capabilities.ts              capability report types, required filters
+src/server/                    server-only (import "server-only")
+  process/run-executable.ts    execFile runner + streaming spawn (no shell)
+  http/local-request.ts        loopback Host/Origin/Fetch-Metadata checks
+  http/local-api.ts            endpoint guard, hosting gate, bounded body reading
+  http/range.ts                byte ranges, download names
+  http/render-errors.ts        error → HTTP response mapping
+  video/ffmpeg-capabilities.ts detection, parsing, encoder test encodes, cache
+  video/ffmpeg-command.ts      layout, caption wrapping, escaping, argument arrays
+  video/ffprobe.ts             probe arguments, upload/output verification, progress parser
+  video/font-metrics.ts        TrueType cmap/hmtx parsing, glyph coverage, widths
+  video/project.ts             trusted project reconstruction
+  video/render-service.ts      one render: compose → encode → verify → publish
+  video/render-queue.ts        one-at-a-time queue, restart recovery, singleton
+  video/storage.ts             private job storage, path safety, data dir
+  video/image-sniff.ts         byte-level image type and dimension checks
+  video/upload-verify.ts       FFprobe + decode upload check, public job status
+src/app/api/studio/pixel/      capabilities, jobs, assets, render, status, video routes
+src/components/studio/pixel/   studio UI, render panel, use-render-job hook
+tests/*.test.ts                unit tests (FFmpeg mocked)
+tests/integration/             real-FFmpeg integration test (yarn test:integration)
+e2e/pixel-*.spec.ts            Playwright: UI (mocked FFmpeg) and real rendering
 ```
-
-Unit and UI tests mock FFmpeg (an injected runner, and a mocked endpoint in
-Playwright), so they don't need FFmpeg installed.

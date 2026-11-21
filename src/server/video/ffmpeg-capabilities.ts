@@ -13,6 +13,8 @@ import {
   type FfmpegLicense,
   type FilterStatus,
 } from "@/lib/video/capabilities"
+import { VIDEO_FORMAT } from "@/lib/video/format"
+import { encoderOptions } from "@/server/video/ffmpeg-command"
 import {
   createRunner,
   type RunFailureReason,
@@ -113,10 +115,60 @@ export function rankH264Encoders(
       (e) =>
         e.type === "video" && e.codec === "h264" && e.name !== "libx264rgb",
     )
-    .map((e) => ({ name: e.name, hardware: HARDWARE_SUFFIX.test(e.name) }))
+    .map((e): EncoderInfo => ({
+      name: e.name,
+      hardware: HARDWARE_SUFFIX.test(e.name),
+      works: null,
+    }))
   const rank = (e: EncoderInfo) =>
     e.name === "libx264" ? 0 : e.name === "libopenh264" ? 1 : e.hardware ? 3 : 2
   return h264.sort((a, b) => rank(a) - rank(b))
+}
+
+/**
+ * A short real encode with the exact options and pixel format renders use,
+ * discarded by the null muxer. Listing in `-encoders` only means "compiled
+ * in"; hardware encoders in particular often fail without a GPU or drivers.
+ */
+export function testEncodeArgs(encoder: string) {
+  return [
+    "-nostdin",
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    `color=c=black:s=${VIDEO_FORMAT.width}x${VIDEO_FORMAT.height}:r=${VIDEO_FORMAT.fps}`,
+    "-frames:v",
+    "6",
+    "-c:v",
+    encoder,
+    ...encoderOptions(encoder),
+    "-pix_fmt",
+    VIDEO_FORMAT.pixelFormat,
+    "-f",
+    "null",
+    "-",
+  ]
+}
+
+/** Test-encodes candidates in preference order until one works. */
+export async function verifyEncoders(
+  run: Runner,
+  command: string,
+  candidates: readonly EncoderInfo[],
+): Promise<EncoderInfo[]> {
+  const results = candidates.map((e) => ({
+    ...e,
+    works: null as boolean | null,
+  }))
+  for (const encoder of results) {
+    const result = await run(command, testEncodeArgs(encoder.name))
+    encoder.works = result.ok
+    if (result.ok) break
+  }
+  return results
 }
 
 const AAC_PREFERENCE = ["aac", "libfdk_aac", "aac_at", "aac_mf"]
@@ -322,7 +374,11 @@ export async function detectFfmpegCapabilities({
         required: false,
       })),
     ]
-    h264Encoders = rankH264Encoders(encoders)
+    h264Encoders = await verifyEncoders(
+      run,
+      ffmpeg.command,
+      rankH264Encoders(encoders),
+    )
     aacEncoder = pickAacEncoder(encoders)
 
     const missingRequired = filters
@@ -346,19 +402,25 @@ export async function detectFfmpegCapabilities({
         message:
           "This FFmpeg build has no H.264 encoder, so it can't produce MP4 videos that play everywhere. Install a build with libx264 or libopenh264.",
       })
-    else if (!h264Encoders.some((e) => e.name === "libx264")) {
-      const best = h264Encoders[0]
+    else if (!h264Encoders.some((e) => e.works)) {
+      issues.push({
+        code: "no-working-encoder",
+        severity: "error",
+        message: `None of this FFmpeg's H.264 encoders (${h264Encoders.map((e) => e.name).join(", ")}) could encode a test video, so rendering can't work. Install a build with libx264 (for example with: sudo apt install ffmpeg).`,
+      })
+    } else if (h264Encoders.find((e) => e.works)?.name !== "libx264") {
+      const best = h264Encoders.find((e) => e.works)!
       issues.push(
         best.hardware
           ? {
               code: "hardware-encoder-only",
               severity: "warning",
-              message: `libx264 isn't available. Only hardware H.264 encoders were found (${h264Encoders.map((e) => e.name).join(", ")}); they depend on your GPU and drivers and are verified only when a render runs.`,
+              message: `libx264 isn't available or didn't work, so the hardware encoder ${best.name} will be used. It passed a test encode, but it depends on your GPU drivers.`,
             }
           : {
               code: "no-libx264",
               severity: "warning",
-              message: `libx264 isn't available; ${best.name} will be used instead. Quality per megabyte may be lower.`,
+              message: `libx264 isn't available or didn't work; ${best.name} will be used instead. Quality per megabyte may be lower.`,
             },
       )
     }
@@ -398,7 +460,7 @@ export async function detectFfmpegCapabilities({
     ffprobe: ffprobe.status,
     filters,
     h264Encoders,
-    selectedH264Encoder: h264Encoders[0]?.name ?? null,
+    selectedH264Encoder: h264Encoders.find((e) => e.works)?.name ?? null,
     aacEncoder,
     license,
     issues,

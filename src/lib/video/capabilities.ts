@@ -35,8 +35,13 @@ export interface FilterStatus {
 
 export interface EncoderInfo {
   name: string
-  /** Hardware encoders are compiled in but only proven to work by a test render (DV-003B). */
   hardware: boolean
+  /**
+   * Result of a real test encode (1080×1920, yuv420p). Listed encoders aren't
+   * trusted: true = encoded, false = failed, null = not tested because a
+   * preferred encoder already worked.
+   */
+  works: boolean | null
 }
 
 /** From the build's ./configure flags. Paths in those flags are never sent. */
@@ -50,6 +55,7 @@ export type CapabilityIssueCode =
   | "invalid-configuration"
   | "missing-filters"
   | "no-h264-encoder"
+  | "no-working-encoder"
   | "no-libx264"
   | "hardware-encoder-only"
   | "no-aac-encoder"
@@ -65,7 +71,7 @@ export interface CapabilityIssue {
 /**
  * - ready:       everything Phase B needs is present (warnings may still apply)
  * - missing:     FFmpeg or FFprobe isn't installed / can't be found
- * - unsupported: installed, but lacks a required filter or any H.264 encoder
+ * - unsupported: installed, but lacks a required filter or a working H.264 encoder
  */
 export type CapabilityStatus = "ready" | "missing" | "unsupported"
 
@@ -77,7 +83,10 @@ export interface FfmpegCapabilityReport {
   ffprobe: ExecutableStatus
   filters: FilterStatus[]
   h264Encoders: EncoderInfo[]
-  /** The encoder DV-003B will use, by preference: libx264, libopenh264, then hardware. */
+  /**
+   * The encoder renders use: the first, by preference (libx264, libopenh264,
+   * other software, hardware), that passed a real test encode.
+   */
   selectedH264Encoder: string | null
   /** Informational until audio arrives in DV-003C. */
   aacEncoder: string | null
@@ -85,22 +94,26 @@ export interface FfmpegCapabilityReport {
   issues: CapabilityIssue[]
 }
 
-/** Filters the planned Phase B pipeline depends on. */
+/** Filters the DV-003B renderer uses (see src/server/video/ffmpeg-command.ts). */
 export const REQUIRED_FILTERS = [
+  "color",
+  "split",
   "scale",
   "crop",
-  "pad",
-  "setsar",
-  "fps",
-  "format",
+  "gblur",
+  "colorchannelmixer",
   "overlay",
   "drawtext",
-  "zoompan",
-  "fade",
+  "format",
+  "loop",
+  "settb",
+  "setpts",
+  "setsar",
   "concat",
+  "fade",
 ] as const
 
-/** Nice to have: smoother transitions. Rendering falls back to cuts without it. */
+/** Not used yet: crossfades between scenes are planned for DV-003D. */
 export const OPTIONAL_FILTERS = ["xfade"] as const
 
 export const CAPABILITIES_ENDPOINT = "/api/studio/pixel/capabilities"

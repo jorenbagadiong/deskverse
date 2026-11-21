@@ -19,6 +19,7 @@ import {
   pickAacEncoder,
   rankH264Encoders,
   resolveExecutable,
+  testEncodeArgs,
 } from "@/server/video/ffmpeg-capabilities"
 
 // --- Captured output (trimmed) from Ubuntu 24.04's ffmpeg 6.1.1 -------------
@@ -87,13 +88,25 @@ const healthy: Machine = {
   "ffmpeg -hide_banner -filters": ok(FILTERS),
 }
 
+/**
+ * Test encodes (`… -c:v <encoder> … -f null -`) are keyed as
+ * "encode <encoder>" and succeed unless the machine says otherwise.
+ */
 function fakeRunner(machine: Machine, calls: string[] = []): Runner {
   return async (command, args) => {
+    if (args.at(-1) === "-" && args.includes("null")) {
+      const encoder = args[args.indexOf("-c:v") + 1]
+      const key = `encode ${encoder}`
+      calls.push(key)
+      return machine[key] ?? ok("")
+    }
     const key = `${command} ${args.join(" ")}`
     calls.push(key)
     return machine[key] ?? missing
   }
 }
+
+const encodeFails: RunResult = { ok: false, reason: "failed", exitCode: 1 }
 
 const detect = (machine: Machine, env: Record<string, string> = {}) =>
   detectFfmpegCapabilities({
@@ -177,9 +190,9 @@ describe("FFmpeg output parsing", () => {
       { name: "libx265", type: "video", codec: "hevc" },
     ])
     expect(ranked).toEqual([
-      { name: "libx264", hardware: false },
-      { name: "libopenh264", hardware: false },
-      { name: "h264_nvenc", hardware: true },
+      { name: "libx264", hardware: false, works: null },
+      { name: "libopenh264", hardware: false, works: null },
+      { name: "h264_nvenc", hardware: true, works: null },
     ])
   })
 
@@ -202,7 +215,9 @@ describe("FFmpeg output parsing", () => {
     expect(filters.has("xfade")).toBe(true)
     expect(filters.has("color")).toBe(true)
     expect(filters.has("=")).toBe(false)
-    expect(filters.size).toBe(REQUIRED_FILTERS.length + 2)
+    expect(filters.size).toBe(
+      new Set([...REQUIRED_FILTERS, "xfade", "color"]).size,
+    )
   })
 })
 
@@ -324,14 +339,14 @@ describe("capability detection", () => {
     const report = await detect({
       ...healthy,
       "ffmpeg -hide_banner -filters": ok(
-        REQUIRED_FILTERS.filter((f) => f !== "drawtext" && f !== "zoompan")
+        REQUIRED_FILTERS.filter((f) => f !== "drawtext" && f !== "gblur")
           .map((f) => filterLine(f))
           .join("\n"),
       ),
     })
     expect(report.status).toBe("unsupported")
     const issue = report.issues.find((i) => i.code === "missing-filters")!
-    expect(issue.message).toMatch(/drawtext, zoompan/)
+    expect(issue.message).toMatch(/gblur, drawtext/)
     expect(issue.message).toMatch(/libfreetype/)
     expect(report.filters.find((f) => f.name === "xfade")).toEqual({
       name: "xfade",
@@ -398,11 +413,58 @@ describe("capability detection", () => {
     const calls: string[] = []
     await detectFfmpegCapabilities({ run: fakeRunner(healthy, calls), env: {} })
     expect(calls.sort()).toEqual([
+      // One real test encode: libx264 worked, so nothing else is tried.
+      "encode libx264",
       "ffmpeg -hide_banner -encoders",
       "ffmpeg -hide_banner -filters",
       "ffmpeg -hide_banner -version",
       "ffprobe -hide_banner -version",
     ])
+  })
+
+  it("doesn't trust the encoder list: falls back when libx264 fails a test encode", async () => {
+    const calls: string[] = []
+    const report = await detectFfmpegCapabilities({
+      run: fakeRunner({ ...healthy, "encode libx264": encodeFails }, calls),
+      env: {},
+    })
+    expect(report.status).toBe("ready")
+    expect(report.selectedH264Encoder).toBe("h264_nvenc")
+    expect(report.h264Encoders).toEqual([
+      { name: "libx264", hardware: false, works: false },
+      { name: "h264_nvenc", hardware: true, works: true },
+      { name: "h264_vaapi", hardware: true, works: null },
+    ])
+    expect(report.issues.map((i) => i.code)).toEqual(["hardware-encoder-only"])
+    expect(calls.filter((c) => c.startsWith("encode"))).toEqual([
+      "encode libx264",
+      "encode h264_nvenc",
+    ])
+  })
+
+  it("is unsupported when every listed encoder fails to encode", async () => {
+    const report = await detect({
+      ...healthy,
+      "encode libx264": encodeFails,
+      "encode h264_nvenc": encodeFails,
+      "encode h264_vaapi": { ok: false, reason: "timed-out", exitCode: null },
+    })
+    expect(report.status).toBe("unsupported")
+    expect(report.selectedH264Encoder).toBeNull()
+    expect(report.h264Encoders.every((e) => e.works === false)).toBe(true)
+    const issue = report.issues.find((i) => i.code === "no-working-encoder")!
+    expect(issue.severity).toBe("error")
+    expect(issue.message).toMatch(/could encode a test video/)
+  })
+
+  it("test-encodes at the real output size and pixel format, to nowhere", () => {
+    const args = testEncodeArgs("libx264")
+    expect(args).toContain("color=c=black:s=1080x1920:r=30")
+    expect(
+      args.slice(args.indexOf("-pix_fmt"), args.indexOf("-pix_fmt") + 2),
+    ).toEqual(["-pix_fmt", "yuv420p"])
+    expect(args.slice(-3)).toEqual(["-f", "null", "-"])
+    expect(args).toContain("-nostdin")
   })
 
   it("refuses unsafe executable overrides without running anything", async () => {

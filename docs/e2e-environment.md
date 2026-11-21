@@ -1,23 +1,28 @@
 # E2E environment notes: 3D office tests in GPU-less WSL
 
-_Recorded at the DV-003A checkpoint (2026-11-21)._
+_Recorded at the DV-003A checkpoint and re-confirmed at DV-003B (2026-11-21)._
 
 ## Summary
 
 In WSL2 without a desktop Chrome, `E2E_CHANNEL=chromium yarn test:e2e` runs
 the suite in Playwright's headless Chromium. Every test that renders the 3D
-office then fails, **before and after DV-003A**. The cause is the test
+office then fails, **before and after DV-003A and DV-003B**. The cause is the test
 environment, not application code. All other tests pass, including every
 Pixel Studio test.
 
-| Run                                           | Passed | Failed | Office failures with the WebGL warning |
-| --------------------------------------------- | -----: | -----: | -------------------------------------: |
-| Clean `main` (`dfde85a`), office specs only   |      0 |     24 |                                24 / 24 |
-| `feat/dv-003-pixel-video-creator`, full suite |     22 |     24 |                                24 / 24 |
+| Run                                            | Passed | Failed | Office failures with the WebGL warning |
+| ---------------------------------------------- | -----: | -----: | -------------------------------------: |
+| Clean `main` (`dfde85a`), office specs only    |      0 |     24 |                                24 / 24 |
+| `feat/dv-003-pixel-video-creator`, full suite  |     22 |     24 |                                24 / 24 |
+| DV-003B on `main` (base `6c701c1`), full suite |     27 |     24 |                                24 / 24 |
 
-Both runs fail the same 24 office tests. On the feature branch, the 22 passing
-tests are the 17 Pixel Studio tests, the 4 page smoke tests and the no-WebGL
-fallback test.
+All runs fail the same 24 office tests. At DV-003A, the 22 passing tests
+were the 17 Pixel Studio tests, the 4 page smoke tests and the no-WebGL
+fallback test. At DV-003B, the 27 passing tests are 19 Pixel Studio UI
+tests (15 desktop, 4 mobile; FFmpeg mocked), the 3 real-server tests in
+`e2e/pixel-render.spec.ts` (a real render through the UI plus two API
+rejection tests; none skipped, FFmpeg 6.1.1 is installed), the 4 page smoke
+tests and the fallback test. No new failures appeared.
 
 ## Environment
 

@@ -14,9 +14,14 @@ import {
   validateMediaMetadata,
 } from "@/lib/video/validation"
 
-/** An image chosen in the browser. Phase A keeps it local: nothing is uploaded. */
+/**
+ * An image chosen in the browser. The original File is kept so Render can
+ * upload the real bytes (never the blob: preview URL) to the local server.
+ */
 export interface StudioImage {
+  /** Local key for previews; the server assigns its own ID on upload. */
   id: AssetId
+  file: File
   /** blob: URL for previews; revoked when the image is removed. */
   url: string
   name: string
@@ -64,6 +69,7 @@ async function inspectImage(file: File): Promise<Inspection> {
     ok: true,
     image: {
       id: createAssetId(),
+      file,
       url: URL.createObjectURL(file),
       name,
       mimeType: checked.value.mimeType,
@@ -129,7 +135,8 @@ export function ImagePicker({
           {MEDIA_LIMITS.minCount}–{MEDIA_LIMITS.maxCount} JPEG, PNG or WebP
           images, up to {formatBytes(MEDIA_LIMITS.maxBytes)} each and at least{" "}
           {MEDIA_LIMITS.minSide} px per side. The first image is the hero shot.
-          Images stay in this browser; nothing is uploaded in this phase.
+          When you render, they&apos;re sent only to Deskverse on this computer
+          and stored in its private data folder.
         </p>
       </div>
 

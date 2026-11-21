@@ -1,3 +1,6 @@
+import os from "node:os"
+import path from "node:path"
+
 import { defineConfig } from "@playwright/test"
 
 /**
@@ -38,6 +41,11 @@ export default defineConfig({
         url: `${baseURL}/office`,
         reuseExistingServer: true,
         timeout: 300_000,
+        // Renders made by the tests go to a throwaway folder, never to your
+        // real Deskverse data directory.
+        env: {
+          DESKVERSE_DATA_DIR: path.join(os.tmpdir(), "deskverse-e2e-data"),
+        },
       },
   projects: [
     {

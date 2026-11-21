@@ -53,7 +53,8 @@ export const BENEFIT_COUNT = { min: 1, max: 5 } as const
 export const MEDIA_LIMITS = {
   /** Per image. Large enough for a phone photo, small enough to keep renders fast. */
   maxBytes: 10 * 1024 * 1024,
-  minCount: 1,
+  /** DV-003B: a hook, benefit and call-to-action image at minimum. */
+  minCount: 3,
   maxCount: 6,
   /** Smallest side; below this an image is visibly soft at 1080 px wide. */
   minSide: 320,

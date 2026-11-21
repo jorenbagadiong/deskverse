@@ -18,14 +18,20 @@ import {
   type RenderJob,
   type RenderJobError,
   type RenderJobState,
+  type RenderOutput,
 } from "@/lib/video/render-job"
-import { IMAGE_EXTENSIONS, type MediaAsset } from "@/lib/video/types"
+import {
+  IMAGE_EXTENSIONS,
+  type MediaAsset,
+  type VideoProject,
+} from "@/lib/video/types"
 import {
   formatBytes,
   MEDIA_LIMITS,
   sanitizeDisplayName,
   validateMediaAsset,
   validateMediaMetadata,
+  validateVideoProject,
 } from "@/lib/video/validation"
 import { readImageDimensions, sniffImageType } from "@/server/video/image-sniff"
 
@@ -36,6 +42,7 @@ import { readImageDimensions, sniffImageType } from "@/server/video/image-sniff"
  *
  *   <data dir>/video/jobs/<jobId>/
  *     job.json                 metadata (RenderJob)
+ *     project.json             the server-built VideoProject the renderer uses
  *     assets/<assetId>.<ext>   uploaded images, renamed to generated IDs
  *     work/                    temporary render files, safe to wipe
  *     output/video.mp4         the finished render
@@ -185,6 +192,16 @@ export interface ImageUpload {
   fileName: string
 }
 
+/**
+ * Extra check run on an upload after it is written (privately) but before it
+ * is recorded in job.json, e.g. FFprobe decoding. Throw a StorageError with
+ * code "invalid-upload" to reject: the file is deleted again.
+ */
+export type UploadVerifier = (
+  filePath: string,
+  asset: MediaAsset,
+) => Promise<void>
+
 export interface CompletedOutput {
   /** Absolute path for server-side streaming only. Never send it to a browser. */
   path: string
@@ -200,14 +217,37 @@ export interface VideoStorage {
     to: RenderJobState,
     details?: { error?: RenderJobError; output?: RenderJob["output"] },
   ): Promise<RenderJob>
-  addImageAsset(jobId: string, upload: ImageUpload): Promise<MediaAsset>
+  addImageAsset(
+    jobId: string,
+    upload: ImageUpload,
+    options?: { verify?: UploadVerifier },
+  ): Promise<MediaAsset>
+  /** Stores the server-built project (project.json) for the renderer. */
+  writeProject(jobId: string, project: VideoProject): Promise<void>
+  /** Reads and re-validates project.json against the job's own assets. */
+  readProject(jobId: string): Promise<VideoProject>
+  /** The job's private scratch directory (exists; inside storage). */
+  workDir(jobId: string): Promise<string>
+  /**
+   * Moves a verified file from work/ to output/video.mp4 while the job is
+   * rendering. Only called after FFprobe verification.
+   */
+  commitOutput(jobId: string, workFileName: string): Promise<void>
+  /** Removes output/video.mp4 if present (after a failed render). */
+  discardOutput(jobId: string): Promise<void>
+  /** IDs of jobs currently in one of `states`. */
+  findJobs(states: readonly RenderJobState[]): Promise<RenderJobId[]>
   /** Server-side path of a stored asset, for the render pipeline. */
   assetPath(jobId: string, assetId: string): Promise<string>
   /** Empties the job's `work/` directory. */
   cleanupWork(jobId: string): Promise<void>
   deleteJob(jobId: string): Promise<void>
   /** Deletes finished/abandoned jobs not updated within `olderThanMs`. Returns their IDs. */
-  cleanupStaleJobs(options: { olderThanMs: number }): Promise<RenderJobId[]>
+  cleanupStaleJobs(options: {
+    olderThanMs: number
+    /** Only remove jobs in these states (default: any inactive state). */
+    states?: readonly RenderJobState[]
+  }): Promise<RenderJobId[]>
   /** The finished video, only if the job completed and the file is a real file inside storage. */
   resolveCompletedOutput(jobId: string): Promise<CompletedOutput | null>
 }
@@ -215,6 +255,7 @@ export interface VideoStorage {
 const DIR_MODE = 0o700
 const FILE_MODE = 0o600
 const OUTPUT_FILE = "video.mp4"
+const PROJECT_FILE = "project.json"
 
 export function createVideoStorage(
   dataRoot: string,
@@ -259,18 +300,22 @@ export function createVideoStorage(
     return dir
   }
 
-  async function writeJob(dir: string, job: RenderJob) {
-    const file = resolveInside(dir, "job.json")
+  /** Writes JSON via a temp file + rename, so readers never see half a file. */
+  async function writeJsonAtomic(dir: string, name: string, value: unknown) {
+    const file = resolveInside(dir, name)
     const temp = resolveInside(
       dir,
-      `job.json.${randomBytes(6).toString("hex")}.tmp`,
+      `${name}.${randomBytes(6).toString("hex")}.tmp`,
     )
-    await fs.writeFile(temp, `${JSON.stringify(job, null, 2)}\n`, {
+    await fs.writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, {
       mode: FILE_MODE,
       flag: "wx",
     })
     await fs.rename(temp, file)
   }
+
+  const writeJob = (dir: string, job: RenderJob) =>
+    writeJsonAtomic(dir, "job.json", job)
 
   async function readJobFrom(dir: string, id: RenderJobId): Promise<RenderJob> {
     let parsed: unknown
@@ -339,7 +384,7 @@ export function createVideoStorage(
       })
     },
 
-    addImageAsset(jobId, upload) {
+    addImageAsset(jobId, upload, options = {}) {
       return withLock(jobId, async () => {
         const dir = await jobDir(jobId)
         const job = await readJobFrom(dir, parseJobId(jobId))
@@ -398,6 +443,7 @@ export function createVideoStorage(
         // "wx": never overwrite an existing file.
         await fs.writeFile(file, bytes, { mode: FILE_MODE, flag: "wx" })
         try {
+          if (options.verify) await options.verify(file, asset)
           await writeJob(dir, {
             ...job,
             assets: [...job.assets, asset],
@@ -423,6 +469,105 @@ export function createVideoStorage(
       return file
     },
 
+    writeProject(jobId, project) {
+      return withLock(jobId, async () => {
+        const dir = await jobDir(jobId)
+        const job = await readJobFrom(dir, parseJobId(jobId))
+        if (job.state !== "draft")
+          throw new StorageError(
+            "invalid-state",
+            "This video has already been sent for rendering.",
+          )
+        await writeJsonAtomic(dir, PROJECT_FILE, project)
+      })
+    },
+
+    async readProject(jobId) {
+      const dir = await jobDir(jobId)
+      const job = await readJobFrom(dir, parseJobId(jobId))
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(
+          await fs.readFile(resolveInside(dir, PROJECT_FILE), "utf8"),
+        )
+      } catch {
+        throw new StorageError(
+          "corrupt-metadata",
+          "This job's video project can't be read.",
+        )
+      }
+      const result = validateVideoProject(parsed)
+      // Every asset must be one this job actually stored, with the same facts.
+      if (
+        !result.ok ||
+        result.value.assets.some(
+          (asset) =>
+            JSON.stringify(job.assets.find((a) => a.id === asset.id)) !==
+            JSON.stringify(asset),
+        )
+      )
+        throw new StorageError(
+          "corrupt-metadata",
+          "This job's video project is invalid.",
+        )
+      return result.value
+    },
+
+    async workDir(jobId) {
+      const dir = await jobDir(jobId)
+      const work = resolveInside(dir, "work")
+      await assertRealPathInside(dir, work)
+      return work
+    },
+
+    commitOutput(jobId, workFileName) {
+      return withLock(jobId, async () => {
+        const dir = await jobDir(jobId)
+        const job = await readJobFrom(dir, parseJobId(jobId))
+        if (job.state !== "rendering")
+          throw new StorageError(
+            "invalid-state",
+            "Only a rendering job can produce output.",
+          )
+        const source = resolveInside(dir, "work", workFileName)
+        const stat = await assertRealPathInside(dir, source)
+        if (!stat.isFile())
+          throw new StorageError("not-found", "The rendered file is missing.")
+        const target = resolveInside(dir, "output", OUTPUT_FILE)
+        await fs.chmod(source, FILE_MODE)
+        await fs.rename(source, target)
+      })
+    },
+
+    async discardOutput(jobId) {
+      const dir = await jobDir(jobId)
+      await fs.rm(resolveInside(dir, "output", OUTPUT_FILE), { force: true })
+    },
+
+    async findJobs(states) {
+      let entries: import("node:fs").Dirent[]
+      try {
+        entries = await fs.readdir(jobsDir, { withFileTypes: true })
+      } catch (error) {
+        if (isErrno(error, "ENOENT")) return []
+        throw error
+      }
+      const found: RenderJobId[] = []
+      for (const entry of entries) {
+        if (!entry.isDirectory() || !isRenderJobId(entry.name)) continue
+        try {
+          const job = await readJobFrom(
+            resolveInside(jobsDir, entry.name),
+            entry.name,
+          )
+          if (states.includes(job.state)) found.push(job.id)
+        } catch (error) {
+          if (!(error instanceof StorageError)) throw error
+        }
+      }
+      return found
+    },
+
     async cleanupWork(jobId) {
       const dir = await jobDir(jobId)
       const work = resolveInside(dir, "work")
@@ -437,7 +582,7 @@ export function createVideoStorage(
       })
     },
 
-    async cleanupStaleJobs({ olderThanMs }) {
+    async cleanupStaleJobs({ olderThanMs, states }) {
       let entries: import("node:fs").Dirent[]
       try {
         entries = await fs.readdir(jobsDir, { withFileTypes: true })
@@ -457,6 +602,7 @@ export function createVideoStorage(
           try {
             const job = await readJobFrom(dir, id)
             if (job.state === "queued" || job.state === "rendering") return
+            if (states && !states.includes(job.state)) return
             updatedAt = Date.parse(job.updatedAt)
           } catch (error) {
             if (!(error instanceof StorageError)) throw error
@@ -517,8 +663,22 @@ function parseJob(input: unknown, expectedId: RenderJobId): RenderJob {
     updatedAt: job.updatedAt,
     assets,
     error: error && typeof error.message === "string" ? error : null,
-    output: output && output.fileName === OUTPUT_FILE ? output : null,
+    output: isRenderOutput(output) ? output : null,
   }
+}
+
+function isRenderOutput(value: unknown): value is RenderOutput {
+  if (typeof value !== "object" || value === null) return false
+  const o = value as Record<string, unknown>
+  return (
+    o.fileName === OUTPUT_FILE &&
+    ["sizeBytes", "durationSeconds", "width", "height", "fps", "renderSeconds"]
+      .map((key) => o[key])
+      .every((n) => typeof n === "number" && Number.isFinite(n) && n >= 0) &&
+    typeof o.videoCodec === "string" &&
+    typeof o.pixelFormat === "string" &&
+    typeof o.encoder === "string"
+  )
 }
 
 function isErrno(error: unknown, code: string) {

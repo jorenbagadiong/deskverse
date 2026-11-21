@@ -5,6 +5,7 @@ import path from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 
 import { createRenderJobId } from "@/lib/video/ids"
+import type { RenderOutput } from "@/lib/video/render-job"
 import { MEDIA_LIMITS } from "@/lib/video/validation"
 import { readImageDimensions, sniffImageType } from "@/server/video/image-sniff"
 import {
@@ -102,6 +103,19 @@ function webpVp8x(width: number, height: number) {
   )
   return b
 }
+
+const renderOutput = (sizeBytes: number): RenderOutput => ({
+  fileName: "video.mp4",
+  sizeBytes,
+  durationSeconds: 15,
+  width: 1080,
+  height: 1920,
+  fps: 30,
+  videoCodec: "h264",
+  pixelFormat: "yuv420p",
+  encoder: "libx264",
+  renderSeconds: 4.2,
+})
 
 const upload = (
   bytes: Uint8Array,
@@ -482,7 +496,7 @@ describe("local job storage", () => {
     await storage.transitionJob(job.id, "queued")
     await storage.transitionJob(job.id, "rendering")
     await storage.transitionJob(job.id, "completed", {
-      output: { fileName: "video.mp4", sizeBytes: 8 },
+      output: renderOutput(8),
     })
     expect(await storage.resolveCompletedOutput(job.id)).toEqual({
       path: output,
@@ -501,7 +515,7 @@ describe("local job storage", () => {
       for (const state of ["queued", "rendering"] as const)
         await storage.transitionJob(job.id, state)
       await storage.transitionJob(job.id, "completed", {
-        output: { fileName: "video.mp4", sizeBytes: 6 },
+        output: renderOutput(6),
       })
       await fs.symlink(
         outside,

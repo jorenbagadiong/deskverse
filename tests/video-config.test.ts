@@ -466,7 +466,7 @@ describe("storyboard and scene durations", () => {
 
 describe("whole project validation", () => {
   it("accepts a consistent project and rejects broken references", () => {
-    const ids = [createAssetId()]
+    const ids = [createAssetId(), createAssetId(), createAssetId()]
     const project = {
       product: product(),
       assets: ids.map(asset),
@@ -475,6 +475,15 @@ describe("whole project validation", () => {
     }
     expect(validateVideoProject(project).ok).toBe(true)
     expect(validateVideoProject({ ...project, assets: [] }).ok).toBe(false)
+    // DV-003B needs at least three images.
+    const two = ids.slice(0, 2)
+    expect(
+      validateVideoProject({
+        ...project,
+        assets: two.map(asset),
+        scenes: buildStoryboard(product(), two),
+      }).ok,
+    ).toBe(false)
     expect(
       validateVideoProject({
         ...project,
@@ -487,7 +496,10 @@ describe("whole project validation", () => {
     expect(
       validateVideoProject({
         ...project,
-        assets: [{ ...asset(ids[0]), id: "../../secret" }],
+        assets: [
+          { ...asset(ids[0]), id: "../../secret" },
+          ...ids.slice(1).map(asset),
+        ],
       }).ok,
     ).toBe(false)
   })

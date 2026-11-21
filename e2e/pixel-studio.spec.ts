@@ -1,3 +1,4 @@
+import { REQUIRED_FILTERS } from "../src/lib/video/capabilities"
 import { expect, test } from "./fixtures"
 import {
   fillValidStoryboard,
@@ -9,7 +10,7 @@ import {
   STUDIO_PATH,
 } from "./pixel-studio-helpers"
 
-/** DV-003A: Pixel Studio, the storyboard-only foundation of the video engine. */
+/** Pixel Studio UI (DV-003A/B) with FFmpeg and render endpoints mocked. */
 test.describe("Pixel Studio", () => {
   test("is reachable from the header and loads without errors", async ({
     page,
@@ -64,7 +65,11 @@ test.describe("Pixel Studio", () => {
     await expect(
       page.getByText("libx264 (of libx264, h264_nvenc)"),
     ).toBeVisible()
-    await expect(page.getByText("11/11 required")).toBeVisible()
+    await expect(
+      page.getByText(
+        `${REQUIRED_FILTERS.length}/${REQUIRED_FILTERS.length} required`,
+      ),
+    ).toBeVisible()
     await expect(page.getByText("GPL build")).toBeVisible()
     await expect(page.getByText("sudo apt install -y ffmpeg")).toHaveCount(0)
   })
@@ -229,33 +234,135 @@ test.describe("Pixel Studio", () => {
     ).toHaveCount(0)
   })
 
-  test("keeps Render unavailable in Phase A, even when everything else is ready", async ({
+  test("enables Render only when the storyboard is valid and FFmpeg is ready", async ({
     page,
   }) => {
     await openStudio(page, READY_REPORT)
     const render = page.getByRole("button", { name: "Render MP4" })
     await expect(render).toBeDisabled()
-    await expect(render).toHaveAccessibleDescription(
-      /Rendering isn't available yet/,
-    )
-    await expect(render).toHaveAccessibleDescription(/DV-003B/)
+    await expect(render).toHaveAccessibleDescription(/Complete the checklist/)
 
     await fillValidStoryboard(page)
-    await page.getByRole("button", { name: "Check storyboard" }).click()
-    await expect(
-      page.getByRole("status").filter({ hasText: "Storyboard complete" }),
-    ).toBeVisible()
     const requirements = page.getByRole("list", { name: "Render requirements" })
+    await expect(
+      requirements.getByText("3–6 product images: done"),
+    ).toBeAttached()
     await expect(
       requirements.getByText("Storyboard complete: done"),
     ).toBeAttached()
     await expect(
       requirements.getByText("FFmpeg ready on this computer: done"),
     ).toBeAttached()
-    await expect(
-      requirements.getByText("Render engine (DV-003B): not yet"),
-    ).toBeAttached()
+    await expect(render).toBeEnabled()
+    await expect(render).toHaveAccessibleDescription(/on this computer/)
+
+    // Two images aren't enough for DV-003B.
+    await page.getByRole("button", { name: "Remove detail.jpg" }).click()
     await expect(render).toBeDisabled()
+    await expect(
+      requirements.getByText("3–6 product images: not yet"),
+    ).toBeAttached()
+  })
+
+  test("keeps Render disabled while FFmpeg is missing", async ({ page }) => {
+    await openStudio(page, MISSING_REPORT)
+    await fillValidStoryboard(page)
+    await expect(
+      page.getByRole("button", { name: "Render MP4" }),
+    ).toBeDisabled()
+    await expect(
+      page
+        .getByRole("list", { name: "Render requirements" })
+        .getByText("FFmpeg ready on this computer: not yet"),
+    ).toBeAttached()
+  })
+
+  test("shows real render progress and the server's failure message", async ({
+    page,
+  }) => {
+    await openStudio(page, READY_REPORT)
+    const jobId = `job_${"a".repeat(32)}`
+    let polls = 0
+    const uploads: string[] = []
+    await page.route("**/api/studio/pixel/jobs", (route) =>
+      route.fulfill({ status: 201, json: { jobId } }),
+    )
+    await page.route(`**/api/studio/pixel/jobs/${jobId}/assets`, (route) => {
+      uploads.push(route.request().headers()["content-type"])
+      return route.fulfill({
+        status: 201,
+        json: {
+          asset: {
+            id: `asset_${String(uploads.length).repeat(32)}`,
+            displayName: "x",
+            mimeType: "image/jpeg",
+            sizeBytes: 1,
+            width: 1200,
+            height: 1600,
+          },
+        },
+      })
+    })
+    const status = (
+      state: string,
+      progress: unknown,
+      error: unknown = null,
+    ) => ({
+      jobId,
+      state,
+      progress,
+      error,
+      output: null,
+      videoUrl: null,
+      downloadUrl: null,
+    })
+    let renderBody: unknown
+    await page.route(`**/api/studio/pixel/jobs/${jobId}/render`, (route) => {
+      renderBody = route.request().postDataJSON()
+      return route.fulfill({
+        status: 202,
+        json: status("queued", { phase: "waiting", position: 1 }),
+      })
+    })
+    await page.route(`**/api/studio/pixel/jobs/${jobId}`, (route) => {
+      polls++
+      return route.fulfill({
+        json:
+          polls < 3
+            ? status("rendering", {
+                phase: "encoding",
+                fraction: 0.5,
+                encodedSeconds: 7.5,
+                totalSeconds: 15,
+              })
+            : status("failed", null, {
+                code: "render-failed",
+                message: "The libx264 encoder failed while encoding the video.",
+              }),
+      })
+    })
+
+    await fillValidStoryboard(page)
+    await page.getByRole("button", { name: "Render MP4" }).click()
+    await expect(page.getByText("Encoding H.264: 7.5 of 15.0 s")).toBeVisible()
+    await expect(
+      page.getByRole("progressbar", { name: "Render progress" }),
+    ).toHaveAttribute("aria-valuenow", "50")
+    // (Next.js also renders an empty role="alert" route announcer.)
+    await expect(
+      page.getByRole("alert").filter({ hasText: "Render failed" }),
+    ).toContainText(
+      "Render failed. The libx264 encoder failed while encoding the video.",
+    )
+    await expect(page.getByRole("button", { name: "Render MP4" })).toBeEnabled()
+
+    // The original image bytes were uploaded, then only text + IDs were sent.
+    expect(uploads).toEqual(["image/jpeg", "image/png", "image/jpeg"])
+    expect(Object.keys(renderBody as object).sort()).toEqual([
+      "assetIds",
+      "product",
+    ])
+    expect((renderBody as { assetIds: string[] }).assetIds).toHaveLength(3)
   })
 
   test("every control has an accessible name and is keyboard reachable", async ({

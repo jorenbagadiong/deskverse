@@ -1,11 +1,11 @@
 import "server-only"
 
-import { execFile } from "node:child_process"
+import { execFile, spawn } from "node:child_process"
 
 /**
  * The only way Deskverse starts external programs.
  *
- * - `execFile`, never `exec`: no shell, so arguments are passed verbatim and
+ * - `execFile` / `spawn` with `shell: false`, never `exec`: no shell, so arguments are passed verbatim and
  *   cannot be interpreted as shell syntax (no `;`, `|`, `$()`, globbing).
  * - Arguments come from server code only. Nothing a browser sends is ever
  *   appended to an argument list.
@@ -115,3 +115,108 @@ export function createRunner({
       }
     })
 }
+
+// ---------------------------------------------------------------------------
+// Long-running tools (rendering)
+// ---------------------------------------------------------------------------
+
+export interface SpawnOptions {
+  /** Working directory (the job's private work dir for renders). */
+  cwd: string
+  timeoutMs: number
+  /** Receives stdout text as it arrives (e.g. FFmpeg -progress output). */
+  onStdout?: (chunk: string) => void
+  /** Keep at most this much of stderr, for server-side diagnostics only. */
+  maxStderrBytes?: number
+}
+
+export type SpawnResult =
+  | { ok: true; stderrTail: string }
+  | {
+      ok: false
+      reason: RunFailureReason
+      exitCode: number | null
+      stderrTail: string
+    }
+
+export type Spawner = (
+  command: string,
+  args: readonly string[],
+  options: SpawnOptions,
+) => Promise<SpawnResult>
+
+/**
+ * Streams a long-running tool: stdin is closed ("ignore") so it can never
+ * wait for input, stdout is streamed to `onStdout`, stderr is capped, and
+ * the process is killed with SIGKILL at the deadline.
+ */
+export const spawnTool: Spawner = (
+  command,
+  args,
+  { cwd, timeoutMs, onStdout, maxStderrBytes = 64 * 1024 },
+) =>
+  new Promise<SpawnResult>((resolve) => {
+    let stderr = ""
+    let timedOut = false
+    let settled = false
+    const finish = (result: SpawnResult) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(result)
+    }
+
+    let child: ReturnType<typeof spawn>
+    try {
+      child = spawn(command, [...args], {
+        cwd,
+        shell: false,
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+        env: minimalEnvironment() as NodeJS.ProcessEnv,
+      })
+    } catch (error) {
+      resolve({
+        ok: false,
+        ...classifyRunError(error as ExecError),
+        stderrTail: "",
+      })
+      return
+    }
+
+    const timer = setTimeout(() => {
+      timedOut = true
+      child.kill("SIGKILL")
+    }, timeoutMs)
+
+    child.stdout?.setEncoding("utf8")
+    child.stdout?.on("data", (chunk: string) => onStdout?.(chunk))
+    child.stderr?.setEncoding("utf8")
+    child.stderr?.on("data", (chunk: string) => {
+      stderr = (stderr + chunk).slice(-maxStderrBytes)
+    })
+    child.on("error", (error) =>
+      finish({
+        ok: false,
+        ...classifyRunError(error as ExecError),
+        stderrTail: stderr,
+      }),
+    )
+    child.on("close", (code, signal) => {
+      if (timedOut)
+        finish({
+          ok: false,
+          reason: "timed-out",
+          exitCode: null,
+          stderrTail: stderr,
+        })
+      else if (code === 0) finish({ ok: true, stderrTail: stderr })
+      else
+        finish({
+          ok: false,
+          reason: "failed",
+          exitCode: code ?? (signal ? null : -1),
+          stderrTail: stderr,
+        })
+    })
+  })

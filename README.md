@@ -49,10 +49,12 @@ Safari). Without it, `/office` shows a 2D floor plan with the same controls.
 In WSL, run the browser on Windows as usual; the scene renders on your
 Windows GPU.
 
-**Pixel Studio** (`/studio/pixel`) uses FFmpeg installed on your computer.
-It's optional: everything else works without it, and the studio explains
-how to install it. In WSL: `sudo apt install -y ffmpeg` (see
+**Pixel Studio** (`/studio/pixel`) renders videos with FFmpeg installed on
+your computer. It's optional: everything else works without it, and the
+studio explains how to install it. In WSL: `sudo apt install -y ffmpeg` (see
 [video architecture §2](docs/video-architecture.md#2-installing-ffmpeg-windows-11--wsl2-ubuntu)).
+Because Pixel Studio accepts uploads and runs FFmpeg, start the server bound
+to this computer only: `yarn dev -H 127.0.0.1`.
 
 ### Windows (WSL 2)
 
@@ -88,18 +90,19 @@ move the repo into the Linux home directory.
 
 ## Development commands
 
-| Command             | What it does                                       |
-| ------------------- | -------------------------------------------------- |
-| `yarn dev`          | Start the dev server (Turbopack)                   |
-| `yarn build`        | Production build                                   |
-| `yarn start`        | Serve the production build locally                 |
-| `yarn lint`         | ESLint (Next.js core-web-vitals + TypeScript)      |
-| `yarn typecheck`    | Generate route types, then `tsc --noEmit`          |
-| `yarn format`       | Prettier write (sorts Tailwind classes too)        |
-| `yarn format:check` | Prettier check                                     |
-| `yarn test`         | Vitest unit tests (office, design, video engine)   |
-| `yarn test:e2e`     | Playwright browser tests (builds + serves locally) |
-| `yarn check`        | lint + typecheck + format check + tests            |
+| Command                 | What it does                                       |
+| ----------------------- | -------------------------------------------------- |
+| `yarn dev`              | Start the dev server (Turbopack)                   |
+| `yarn build`            | Production build                                   |
+| `yarn start`            | Serve the production build locally                 |
+| `yarn lint`             | ESLint (Next.js core-web-vitals + TypeScript)      |
+| `yarn typecheck`        | Generate route types, then `tsc --noEmit`          |
+| `yarn format`           | Prettier write (sorts Tailwind classes too)        |
+| `yarn format:check`     | Prettier check                                     |
+| `yarn test`             | Vitest unit tests (office, design, video engine)   |
+| `yarn test:integration` | Real FFmpeg render test (needs FFmpeg installed)   |
+| `yarn test:e2e`         | Playwright browser tests (builds + serves locally) |
+| `yarn check`            | lint + typecheck + format check + tests            |
 
 ## Project structure
 
@@ -110,8 +113,8 @@ src/
     page.tsx            Overview
     brand/page.tsx      Design-system showcase (/brand)
     office/page.tsx     Interactive 3D office (/office)
-    studio/pixel/       Pixel Studio, the video storyboard tool (/studio/pixel)
-    api/studio/pixel/   Localhost-only FFmpeg capability endpoint
+    studio/pixel/       Pixel Studio, the video tool (/studio/pixel)
+    api/studio/pixel/   Localhost-only capability, upload, render, status and video endpoints
     globals.css         Design tokens (light/dark) + Tailwind theme mapping
     icon.svg            Favicon
   components/
@@ -125,17 +128,19 @@ src/
         character/      Shared robot rig, heads, bodies, faces, poses (pure + tested)
         workstation/    Shared desk + seven job-specific prop sets
         shared/         Batching, geometry cache, procedural shapes, ambient scheduler
-    studio/pixel/       Pixel Studio form, image picker, storyboard, FFmpeg status
+    studio/pixel/       Pixel Studio form, image picker, storyboard, FFmpeg status, render panel
     theme/              Theme provider + switcher
     ui/                 shadcn/ui components
   config/               brand.ts, design-tokens.ts, employees.ts, employee-status.ts, office.ts
   hooks/                WebGL support + reduced-motion hooks
   lib/                  motion.ts (Anime.js conventions), office-simulation.ts, utils.ts
-    video/              Video format, types, IDs, validation, storyboard (client-safe)
-  server/               Server-only: safe process runner, FFmpeg detection, job storage
+    video/              Video format, types, IDs, validation, storyboard, API contract (client-safe)
+  server/               Server-only: process runner, local-only guards, FFmpeg detection,
+                        command builder, renderer, queue, private job storage
+assets/fonts/inter/     Inter Bold + Medium (SIL OFL 1.1) for video captions
 docs/                   brand-guidelines.md, animation-guidelines.md, 3d-office-architecture.md,
                         video-architecture.md
-tests/                  Vitest unit tests
+tests/                  Vitest unit tests (+ integration/: real FFmpeg)
 e2e/                    Playwright browser tests
 ```
 
@@ -222,8 +227,12 @@ room-to-room moves under reduced motion, a full 360° turn back to the identical
 (enter, leave, rejected request), the full-width layout, the 2D fallback,
 themes, reduced motion and DV-001 regressions. Pixel Studio tests cover
 navigation, form validation, image checks, the storyboard, accessible
-controls, FFmpeg missing/ready feedback (mocked, so FFmpeg isn't needed), the
-unavailable Render action, the endpoint's localhost guard and mobile layouts.
+controls, FFmpeg missing/ready feedback, render progress and failure messages
+(mocked) and mobile layouts. `e2e/pixel-render.spec.ts` uses the real server
+and FFmpeg: it uploads real images, renders, previews and downloads the MP4
+(then checks it with FFprobe), and confirms invalid requests are refused. It
+is skipped, with that reason, on machines without FFmpeg. E2E renders are
+written to a throwaway folder in the system temp directory.
 
 - Reuse a running server: `E2E_BASE_URL=http://localhost:3000 yarn test:e2e`
 - Use Playwright's Chromium instead of Chrome: `yarn playwright install chromium`,
@@ -238,7 +247,44 @@ failure by design. Everything else passes. Run the office tests where Chrome
 has a GPU (for example native Windows). Details and the exact list:
 [E2E environment notes](docs/e2e-environment.md).
 
-## DV-003A scope: Pixel video engine foundation 🚧
+## DV-003B scope: First real product video ✅
+
+Open http://localhost:3000/studio/pixel (with FFmpeg installed).
+
+1. Add 3–6 product images and the product name, headline, 1–5 benefits,
+   call to action and affiliate disclosure.
+2. Check the storyboard preview, then select **Render MP4**.
+3. Watch real progress: uploads, scenes composed, then FFmpeg's encoded
+   seconds.
+4. Preview the finished video in the page, then select **Download MP4**.
+
+What happens on your computer:
+
+- **Uploads** go only to the local server: size-limited while streaming,
+  identified by their bytes, re-checked with FFprobe and a test decode, and
+  stored privately under generated names in `~/.local/share/deskverse`.
+- **The server rebuilds the storyboard** from the validated text and the
+  job's own images. Client timings, captions, settings or FFmpeg options are
+  rejected.
+- **FFmpeg renders** each scene (blurred backdrop, the whole product image,
+  balanced captions within mobile safe areas, the disclosure on every scene,
+  in the bundled Inter font), then encodes H.264 `yuv420p` at 30 fps with
+  the H.264 encoder that passed a real test encode (libx264 when available).
+- **Every video is verified with FFprobe** (MP4, H.264, 1080×1920, 30 fps,
+  `yuv420p`, 15–30 s, no audio) before it can be previewed or downloaded.
+- **One render at a time**, with a bounded queue. Jobs interrupted by a
+  server restart are marked failed, never completed.
+
+On the development machine (16-core WSL2, CPU only), four 4K photos rendered
+into a 19-second, 1.45 MB video in about 9 seconds, with FFmpeg peaking at
+about 470 MiB. Run `yarn test:integration` for a real end-to-end render test.
+
+**Not in this phase:** audio (DV-003C), cancellation, retries, deleting jobs,
+transitions and motion (DV-003D), publishing and affiliate APIs. Details,
+security model, licensing and limitations:
+[video architecture](docs/video-architecture.md).
+
+## DV-003A scope: Pixel video engine foundation ✅
 
 Open http://localhost:3000/studio/pixel.
 
@@ -258,15 +304,12 @@ from your own product images and captions. When rendering arrives, native
   unsafe file types and oversized images.
 - **Studio UI:** product name, images, headline, 1–5 benefit captions, call
   to action and affiliate disclosure, with a live storyboard preview, format
-  summary and FFmpeg status. **Render is disabled** with an explanation until
-  DV-003B.
+  summary and FFmpeg status.
 - **Private storage foundation** in your user data folder (outside the repo
   and `public/`): isolated job folders, generated IDs, byte-level image
   checks, path-traversal and symlink protection, and cleanup.
 
-**Not in this phase:** rendering, uploads to the server, audio, publishing
-and affiliate APIs. Details, licensing notes and the DV-003B plan:
-[video architecture](docs/video-architecture.md).
+Rendering, uploads and downloads followed in DV-003B (above).
 
 ## Future milestones
 

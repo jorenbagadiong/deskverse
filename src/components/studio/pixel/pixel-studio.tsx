@@ -12,6 +12,7 @@ import {
 import { RenderPanel } from "@/components/studio/pixel/render-panel"
 import { StoryboardPreview } from "@/components/studio/pixel/storyboard-preview"
 import { TextField } from "@/components/studio/pixel/text-field"
+import { useRenderJob } from "@/components/studio/pixel/use-render-job"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -82,7 +83,7 @@ export function PixelStudio() {
     if (images.length < MEDIA_LIMITS.minCount)
       list.splice(list[0]?.path === "name" ? 1 : 0, 0, {
         path: "images",
-        message: "Add at least one product image.",
+        message: `Add at least ${MEDIA_LIMITS.minCount} product images (${images.length} added).`,
       })
     return list
   }, [productResult, images.length])
@@ -95,6 +96,14 @@ export function PixelStudio() {
       current.has(path) ? current : new Set(current).add(path),
     )
   const complete = issues.length === 0
+  const render = useRenderJob()
+  const canRender = complete && ffmpegReady && productResult.ok
+
+  function startRender() {
+    if (!canRender || !productResult.ok || render.busy) return
+    // The server re-validates the text and rebuilds the storyboard itself.
+    void render.start(productResult.value, images)
+  }
 
   const fieldIdFor = (path: string) => {
     const benefit = /^benefits\.(\d+)$/.exec(path)
@@ -356,8 +365,10 @@ export function PixelStudio() {
               <p>
                 <strong className="font-semibold">Storyboard complete:</strong>{" "}
                 {scenes.length} scenes,{" "}
-                {formatDuration(storyboardFrames(scenes))}. It&apos;s ready for
-                the render engine in DV-003B.
+                {formatDuration(storyboardFrames(scenes))}.{" "}
+                {ffmpegReady
+                  ? "Select Render MP4 to make the video."
+                  : "Install FFmpeg to render it."}
               </p>
             </div>
           ) : (
@@ -446,13 +457,23 @@ export function PixelStudio() {
           <CardHeader>
             <h2 className="text-title">Render</h2>
             <CardDescription>
-              Turns the storyboard into a 9:16 MP4.
+              Turns the storyboard into a 9:16 MP4 with FFmpeg on this computer.
             </CardDescription>
           </CardHeader>
           <CardContent>
             <RenderPanel
-              storyboardComplete={complete}
-              ffmpegReady={ffmpegReady}
+              requirements={[
+                {
+                  label: `${MEDIA_LIMITS.minCount}–${MEDIA_LIMITS.maxCount} product images`,
+                  met: images.length >= MEDIA_LIMITS.minCount,
+                },
+                { label: "Storyboard complete", met: complete },
+                { label: "FFmpeg ready on this computer", met: ffmpegReady },
+              ]}
+              canRender={canRender}
+              busy={render.busy}
+              view={render.view}
+              onRender={startRender}
             />
           </CardContent>
         </Card>
