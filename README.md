@@ -90,19 +90,19 @@ move the repo into the Linux home directory.
 
 ## Development commands
 
-| Command                 | What it does                                       |
-| ----------------------- | -------------------------------------------------- |
-| `yarn dev`              | Start the dev server (Turbopack)                   |
-| `yarn build`            | Production build                                   |
-| `yarn start`            | Serve the production build locally                 |
-| `yarn lint`             | ESLint (Next.js core-web-vitals + TypeScript)      |
-| `yarn typecheck`        | Generate route types, then `tsc --noEmit`          |
-| `yarn format`           | Prettier write (sorts Tailwind classes too)        |
-| `yarn format:check`     | Prettier check                                     |
-| `yarn test`             | Vitest unit tests (office, design, video engine)   |
-| `yarn test:integration` | Real FFmpeg render test (needs FFmpeg installed)   |
-| `yarn test:e2e`         | Playwright browser tests (builds + serves locally) |
-| `yarn check`            | lint + typecheck + format check + tests            |
+| Command                 | What it does                                           |
+| ----------------------- | ------------------------------------------------------ |
+| `yarn dev`              | Start the dev server (Turbopack)                       |
+| `yarn build`            | Production build                                       |
+| `yarn start`            | Serve the production build locally                     |
+| `yarn lint`             | ESLint (Next.js core-web-vitals + TypeScript)          |
+| `yarn typecheck`        | Generate route types, then `tsc --noEmit`              |
+| `yarn format`           | Prettier write (sorts Tailwind classes too)            |
+| `yarn format:check`     | Prettier check                                         |
+| `yarn test`             | Vitest unit tests (office, design, video engine)       |
+| `yarn test:integration` | Real FFmpeg render tests, video + audio (needs FFmpeg) |
+| `yarn test:e2e`         | Playwright browser tests (builds + serves locally)     |
+| `yarn check`            | lint + typecheck + format check + tests                |
 
 ## Project structure
 
@@ -230,8 +230,10 @@ navigation, form validation, image checks, the storyboard, accessible
 controls, FFmpeg missing/ready feedback, render progress and failure messages
 (mocked) and mobile layouts. `e2e/pixel-render.spec.ts` uses the real server
 and FFmpeg: it uploads real images, renders, previews and downloads the MP4
-(then checks it with FFprobe), and confirms invalid requests are refused. It
-is skipped, with that reason, on machines without FFmpeg. E2E renders are
+(then checks it with FFprobe), and confirms invalid requests are refused.
+`e2e/pixel-audio.spec.ts` covers the Audio card (mocked) and a real
+voiceover + music render, download and AAC check. Real-FFmpeg tests are
+skipped, with that reason, on machines without FFmpeg (or without AAC). E2E renders are
 written to a throwaway folder in the system temp directory.
 
 - Reuse a running server: `E2E_BASE_URL=http://localhost:3000 yarn test:e2e`
@@ -246,6 +248,45 @@ software WebGL and logs a deprecation warning, which the suite treats as a
 failure by design. Everything else passes. Run the office tests where Chrome
 has a GPU (for example native Windows). Details and the exact list:
 [E2E environment notes](docs/e2e-environment.md).
+
+## DV-003C scope: Voiceover & background music ✅
+
+Pixel Studio's **Audio** card adds optional sound from your own files: **No
+audio** (default, unchanged), **Voiceover**, **Background music** or
+**Voiceover + music**.
+
+- **Files:** MP3, WAV or M4A, up to 30 MB, mono or stereo. Identified by
+  their bytes, checked with FFprobe (one audio stream; no video, cover art or
+  extra streams) and fully decoded before they're accepted, then stored
+  privately with your images. A voiceover can be at most as long as the
+  video (+0.25 s); music up to 10 minutes.
+- **Timing:** narration starts with the first scene and is followed by
+  silence; narration longer than the video is refused rather than cut off.
+  Music starts at 0:00, loops if it's shorter, and fades out over the last
+  1.5 s. Audio is cut to the exact video length, so it can never change it.
+- **Levels:** two-pass loudness normalization to −16 LUFS for speech (and
+  for music alone). Under narration, music sits at a chosen level (low,
+  medium, high), is ducked further while you speak, and a limiter prevents
+  clipping.
+- **Output:** one AAC-LC, 48 kHz, stereo track (192 kb/s target) muxed with
+  the already-encoded H.264 video, which is copied, not re-encoded. FFprobe
+  verifies both streams and their lengths, and the audio is fully decoded,
+  before you can preview or download the video.
+- **If FFmpeg can't do audio** (no working AAC encoder or missing filters),
+  the audio options are disabled with the reason; silent videos still work.
+
+**Licensing:** use only audio you own or are licensed to use commercially.
+Deskverse doesn't fetch or check music; the studio shows this notice
+whenever audio is chosen.
+
+Measured on the development machine: adding audio costs 1.0–2.5 s per video
+(silent 8.8 s, voiceover 9.8 s, music 10.4 s, both 11.3 s) with no change in
+peak memory, and the mixes land at −16.1 to −16.3 LUFS. Details:
+[video architecture §5](docs/video-architecture.md#5-audio-voiceover-and-background-music-dv-003c).
+
+**Not in this phase:** cancellation, retries, the persistent queue,
+transitions and audio editing (trimming, offsets, crossfaded loops), planned
+for DV-003D.
 
 ## DV-003B scope: First real product video ✅
 
@@ -279,8 +320,9 @@ On the development machine (16-core WSL2, CPU only), four 4K photos rendered
 into a 19-second, 1.45 MB video in about 9 seconds, with FFmpeg peaking at
 about 470 MiB. Run `yarn test:integration` for a real end-to-end render test.
 
-**Not in this phase:** audio (DV-003C), cancellation, retries, deleting jobs,
-transitions and motion (DV-003D), publishing and affiliate APIs. Details,
+**Not in this phase:** audio (added in DV-003C, above), cancellation,
+retries, deleting jobs, transitions and motion (DV-003D), publishing and
+affiliate APIs. Details,
 security model, licensing and limitations:
 [video architecture](docs/video-architecture.md).
 

@@ -65,6 +65,7 @@ const READY: FfmpegCapabilityReport = {
   h264Encoders: [{ name: "libx264", hardware: false, works: true }],
   selectedH264Encoder: "libx264",
   aacEncoder: "aac",
+  audio: { ready: true, missingFilters: [], reason: null },
   license: "gpl",
   issues: [],
 }
@@ -80,6 +81,7 @@ const OUTPUT: RenderOutput = {
   pixelFormat: "yuv420p",
   encoder: "libx264",
   renderSeconds: 1,
+  audio: null,
 }
 
 let base: string

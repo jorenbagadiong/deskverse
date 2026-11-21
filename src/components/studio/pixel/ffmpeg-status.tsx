@@ -88,7 +88,9 @@ function isReport(value: unknown): value is FfmpegCapabilityReport {
     typeof report.ffprobe === "object" &&
     Array.isArray(report.issues) &&
     Array.isArray(report.filters) &&
-    Array.isArray(report.h264Encoders)
+    Array.isArray(report.h264Encoders) &&
+    typeof report.audio === "object" &&
+    report.audio !== null
   )
 }
 
@@ -118,8 +120,8 @@ async function fetchReport(refresh: boolean): Promise<ViewState> {
 export function FfmpegStatus({
   onStatus,
 }: {
-  /** Reports the detected status upward (e.g. for the render panel). */
-  onStatus?: (status: Tone) => void
+  /** Reports the detected status (and the full report, when there is one) upward. */
+  onStatus?: (status: Tone, report: FfmpegCapabilityReport | null) => void
 }) {
   const [state, setState] = useState<ViewState>({ kind: "checking" })
   // Latest callback without re-running the fetch effect when it changes.
@@ -130,7 +132,10 @@ export function FfmpegStatus({
 
   const apply = useCallback((next: ViewState) => {
     setState(next)
-    onStatusRef.current?.(next.kind === "report" ? next.report.status : "error")
+    onStatusRef.current?.(
+      next.kind === "report" ? next.report.status : "error",
+      next.kind === "report" ? next.report : null,
+    )
   }, [])
 
   // Check once on mount; ignore the answer if the page has moved on.
@@ -242,17 +247,29 @@ export function FfmpegStatus({
               </span>
             ) : null}
           </dd>
-          <dt className="text-muted-foreground">AAC encoder</dt>
+          <dt className="text-muted-foreground">Audio</dt>
           <dd className="font-medium">
-            {report.aacEncoder ?? "None"}{" "}
-            <span className="font-normal text-muted-foreground">
-              (audio in DV-003C)
-            </span>
+            {report.audio.ready ? (
+              <>
+                AAC via {report.aacEncoder}{" "}
+                <span className="font-normal text-muted-foreground">
+                  (test encode passed)
+                </span>
+              </>
+            ) : (
+              <span className="font-normal text-muted-foreground">
+                Silent only. {report.audio.reason}
+              </span>
+            )}
           </dd>
           <dt className="text-muted-foreground">Filters</dt>
           <dd className="font-medium">
-            {report.filters.filter((f) => f.required && f.available).length}/
-            {REQUIRED_FILTERS.length} required
+            {
+              report.filters.filter(
+                (f) => f.purpose === "video" && f.required && f.available,
+              ).length
+            }
+            /{REQUIRED_FILTERS.length} required
           </dd>
           <dt className="text-muted-foreground">License</dt>
           <dd className="font-medium">{LICENSE[report.license]}</dd>

@@ -14,7 +14,7 @@ import { getRenderService } from "@/server/video/render-queue"
 import { jobStatus } from "@/server/video/upload-verify"
 
 /**
- * POST /api/studio/pixel/jobs/:jobId/render with `{ product, assetIds }`.
+ * POST /api/studio/pixel/jobs/:jobId/render with `{ product, assetIds, audio? }`.
  *
  * Rebuilds the storyboard on the server from validated text and this job's
  * own uploads, stores it, and queues the render. Answers immediately with the
@@ -63,6 +63,17 @@ export async function POST(
           issues: project.issues,
         },
         422,
+      )
+    if (
+      project.value.audio &&
+      project.value.audio.mode !== "none" &&
+      !capabilities.audio.ready
+    )
+      return jsonError(
+        503,
+        "audio-unavailable",
+        capabilities.audio.reason ??
+          "Audio isn't available with this FFmpeg build. Choose No audio.",
       )
     await storage.writeProject(jobId, project.value)
     const queued = await queue.enqueue(jobId)

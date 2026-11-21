@@ -113,9 +113,18 @@ describe("video format", () => {
       { ...DEFAULT_VIDEO_SETTINGS, fps: 60 },
       { ...DEFAULT_VIDEO_SETTINGS, videoCodec: "hevc" },
       { ...DEFAULT_VIDEO_SETTINGS, container: "mov" },
-      { ...DEFAULT_VIDEO_SETTINGS, audio: "aac" },
+      { ...DEFAULT_VIDEO_SETTINGS, audio: "mp3" },
+      { ...DEFAULT_VIDEO_SETTINGS, audio: "opus" },
     ])
       expect(validateVideoSettings(bad).ok, JSON.stringify(bad)).toBe(false)
+  })
+
+  it("accepts only the fixed AAC output as an audio setting", () => {
+    const aac = validateVideoSettings({
+      ...DEFAULT_VIDEO_SETTINGS,
+      audio: "aac",
+    })
+    expect(aac.ok && aac.value.audio).toBe("aac")
   })
 
   it("rejects FFmpeg arguments smuggled in as extra settings", () => {

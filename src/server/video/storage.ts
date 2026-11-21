@@ -22,6 +22,9 @@ import {
 } from "@/lib/video/render-job"
 import {
   IMAGE_EXTENSIONS,
+  type AudioAsset,
+  type AudioContainer,
+  type AudioRole,
   type MediaAsset,
   type VideoProject,
 } from "@/lib/video/types"
@@ -32,7 +35,16 @@ import {
   validateMediaAsset,
   validateMediaMetadata,
   validateVideoProject,
+  AUDIO_LIMITS,
+  checkAudioFacts,
+  isAudioMimeType,
+  ROLE_LABEL,
+  validateAudioAsset,
 } from "@/lib/video/validation"
+import {
+  AUDIO_FILE_EXTENSION,
+  sniffAudioContainer,
+} from "@/server/video/audio-sniff"
 import { readImageDimensions, sniffImageType } from "@/server/video/image-sniff"
 
 /**
@@ -43,7 +55,7 @@ import { readImageDimensions, sniffImageType } from "@/server/video/image-sniff"
  *   <data dir>/video/jobs/<jobId>/
  *     job.json                 metadata (RenderJob)
  *     project.json             the server-built VideoProject the renderer uses
- *     assets/<assetId>.<ext>   uploaded images, renamed to generated IDs
+ *     assets/<assetId>.<ext>   uploaded images and audio, renamed to generated IDs
  *     work/                    temporary render files, safe to wipe
  *     output/video.mp4         the finished render
  *
@@ -202,6 +214,29 @@ export type UploadVerifier = (
   asset: MediaAsset,
 ) => Promise<void>
 
+export interface AudioUpload {
+  bytes: Uint8Array
+  /** What the browser claimed; only checked against the audio allowlist. */
+  declaredType: string
+  fileName: string
+  role: AudioRole
+}
+
+/** What FFprobe established about a stored audio file. */
+export interface AudioFacts {
+  codec: string
+  durationSeconds: number
+  sampleRate: number
+  channels: number
+}
+
+/** Probes and test-decodes a stored audio file; throws StorageError("invalid-upload"). */
+export type AudioInspector = (
+  filePath: string,
+  container: AudioContainer,
+  displayName: string,
+) => Promise<AudioFacts>
+
 export interface CompletedOutput {
   /** Absolute path for server-side streaming only. Never send it to a browser. */
   path: string
@@ -222,6 +257,19 @@ export interface VideoStorage {
     upload: ImageUpload,
     options?: { verify?: UploadVerifier },
   ): Promise<MediaAsset>
+  /**
+   * Stores one voiceover or music file (DV-003C). The container is
+   * identified by its bytes; `inspect` (FFprobe + decode) must describe it,
+   * and the description is checked against the audio limits before the file
+   * is recorded. One file per role.
+   */
+  addAudioAsset(
+    jobId: string,
+    upload: AudioUpload,
+    options: { inspect: AudioInspector },
+  ): Promise<AudioAsset>
+  /** Server-side path of a stored audio file, for the renderer. */
+  audioAssetPath(jobId: string, assetId: string): Promise<string>
   /** Stores the server-built project (project.json) for the renderer. */
   writeProject(jobId: string, project: VideoProject): Promise<void>
   /** Reads and re-validates project.json against the job's own assets. */
@@ -351,6 +399,7 @@ export function createVideoStorage(
         createdAt: timestamp,
         updatedAt: timestamp,
         assets: [],
+        audioAssets: [],
         error: null,
         output: null,
       }
@@ -420,8 +469,11 @@ export function createVideoStorage(
             "invalid-upload",
             `“${name}” has no readable dimensions.`,
           )
+        // The server identifies files by their bytes; the user's file name
+        // (possibly missing or extensionless) is display-only, so the limits
+        // are checked against a name derived from the sniffed type.
         const metadata = validateMediaMetadata({
-          fileName: upload.fileName,
+          fileName: `${name}.${IMAGE_EXTENSIONS[actualType][0]}`,
           mimeType: actualType,
           sizeBytes: bytes.byteLength,
           width: dimensions.width,
@@ -455,6 +507,94 @@ export function createVideoStorage(
         }
         return asset
       })
+    },
+
+    addAudioAsset(jobId, upload, { inspect }) {
+      return withLock(jobId, async () => {
+        const dir = await jobDir(jobId)
+        const job = await readJobFrom(dir, parseJobId(jobId))
+        if (job.state !== "draft")
+          throw new StorageError(
+            "invalid-state",
+            "Audio can only be added before rendering starts.",
+          )
+        const name = sanitizeDisplayName(upload.fileName)
+        const label = ROLE_LABEL[upload.role]
+        if (job.audioAssets.some((a) => a.role === upload.role))
+          throw new StorageError(
+            "too-many-assets",
+            `This video already has a ${label.toLowerCase()} file.`,
+          )
+        const { bytes } = upload
+        if (bytes.byteLength === 0)
+          throw new StorageError("invalid-upload", `“${name}” is empty.`)
+        if (bytes.byteLength > AUDIO_LIMITS.maxBytes)
+          throw new StorageError(
+            "invalid-upload",
+            `“${name}” is larger than ${formatBytes(AUDIO_LIMITS.maxBytes)}.`,
+          )
+        const container = sniffAudioContainer(bytes)
+        if (container === null || !isAudioMimeType(upload.declaredType))
+          throw new StorageError(
+            "invalid-upload",
+            `“${name}” isn't an MP3, WAV or M4A audio file.`,
+          )
+
+        const id = createAssetId()
+        const file = resolveInside(
+          dir,
+          "assets",
+          `${id}.${AUDIO_FILE_EXTENSION[container]}`,
+        )
+        await fs.writeFile(file, bytes, { mode: FILE_MODE, flag: "wx" })
+        try {
+          const facts = await inspect(file, container, name)
+          const problem = checkAudioFacts(facts, upload.role, name)
+          if (problem) throw new StorageError("invalid-upload", problem)
+          const candidate = validateAudioAsset({
+            id,
+            kind: "audio",
+            role: upload.role,
+            container,
+            codec: facts.codec,
+            sizeBytes: bytes.byteLength,
+            durationSeconds: Math.round(facts.durationSeconds * 1000) / 1000,
+            sampleRate: facts.sampleRate,
+            channels: facts.channels,
+            displayName: name,
+          })
+          if (!candidate.ok)
+            throw new StorageError(
+              "invalid-upload",
+              candidate.issues[0].message,
+            )
+          await writeJob(dir, {
+            ...job,
+            audioAssets: [...job.audioAssets, candidate.value],
+            updatedAt: now().toISOString(),
+          })
+          return candidate.value
+        } catch (error) {
+          await fs.rm(file, { force: true })
+          throw error
+        }
+      })
+    },
+
+    async audioAssetPath(jobId, assetId) {
+      if (!isAssetId(assetId))
+        throw new StorageError("invalid-id", "Unknown audio file.")
+      const dir = await jobDir(jobId)
+      const job = await readJobFrom(dir, parseJobId(jobId))
+      const asset = job.audioAssets.find((a) => a.id === assetId)
+      if (!asset) throw new StorageError("not-found", "Unknown audio file.")
+      const file = resolveInside(
+        dir,
+        "assets",
+        `${asset.id}.${AUDIO_FILE_EXTENSION[asset.container]}`,
+      )
+      await assertRealPathInside(dir, file)
+      return file
     },
 
     async assetPath(jobId, assetId) {
@@ -497,13 +637,25 @@ export function createVideoStorage(
         )
       }
       const result = validateVideoProject(parsed)
-      // Every asset must be one this job actually stored, with the same facts.
+      // Every image and audio file must be one this job actually stored,
+      // with the same facts.
+      const same = (stored: unknown, used: unknown) =>
+        JSON.stringify(stored) === JSON.stringify(used)
       if (
         !result.ok ||
         result.value.assets.some(
           (asset) =>
-            JSON.stringify(job.assets.find((a) => a.id === asset.id)) !==
-            JSON.stringify(asset),
+            !same(
+              job.assets.find((a) => a.id === asset.id),
+              asset,
+            ),
+        ) ||
+        (result.value.audioAssets ?? []).some(
+          (asset) =>
+            !same(
+              job.audioAssets.find((a) => a.id === asset.id),
+              asset,
+            ),
         )
       )
         throw new StorageError(
@@ -654,6 +806,16 @@ function parseJob(input: unknown, expectedId: RenderJobId): RenderJob {
     if (!result.ok) throw corrupt()
     return result.value
   })
+  // Jobs written before DV-003C have no audioAssets: they are silent.
+  if (job.audioAssets !== undefined && !Array.isArray(job.audioAssets))
+    throw corrupt()
+  const audioAssets = ((job.audioAssets as unknown[] | undefined) ?? []).map(
+    (raw) => {
+      const result = validateAudioAsset(raw)
+      if (!result.ok) throw corrupt()
+      return result.value
+    },
+  )
   const error = job.error as RenderJob["error"]
   const output = job.output as RenderJob["output"]
   return {
@@ -662,8 +824,12 @@ function parseJob(input: unknown, expectedId: RenderJobId): RenderJob {
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,
     assets,
+    audioAssets,
     error: error && typeof error.message === "string" ? error : null,
-    output: isRenderOutput(output) ? output : null,
+    // DV-003B outputs have no audio field: they were silent.
+    output: isRenderOutput(output)
+      ? { ...output, audio: output.audio ?? null }
+      : null,
   }
 }
 
@@ -677,7 +843,11 @@ function isRenderOutput(value: unknown): value is RenderOutput {
       .every((n) => typeof n === "number" && Number.isFinite(n) && n >= 0) &&
     typeof o.videoCodec === "string" &&
     typeof o.pixelFormat === "string" &&
-    typeof o.encoder === "string"
+    typeof o.encoder === "string" &&
+    (o.audio === undefined ||
+      o.audio === null ||
+      (typeof o.audio === "object" &&
+        (o.audio as Record<string, unknown>).codec === "aac"))
   )
 }
 

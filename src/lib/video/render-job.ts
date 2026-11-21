@@ -1,5 +1,5 @@
 import type { RenderJobId } from "@/lib/video/ids"
-import type { MediaAsset } from "@/lib/video/types"
+import type { AudioAsset, MediaAsset } from "@/lib/video/types"
 
 /**
  * Render-job lifecycle, driven by the one-at-a-time render queue (DV-003B).
@@ -56,6 +56,8 @@ export type RenderJobErrorCode =
   | "timed-out"
   | "output-missing"
   | "verification-failed"
+  | "audio-unavailable"
+  | "audio-failed"
   | "interrupted"
 
 export interface RenderJobError {
@@ -72,6 +74,8 @@ export interface RenderJob {
   updatedAt: string
   /** Images stored in the job's `assets/` directory, in upload order. */
   assets: MediaAsset[]
+  /** Optional voiceover/music (DV-003C); missing in older job.json = []. */
+  audioAssets: AudioAsset[]
   error: RenderJobError | null
   /** Set once a render completes and FFprobe has verified it. Never a path. */
   output: RenderOutput | null
@@ -89,6 +93,16 @@ export interface RenderOutput {
   pixelFormat: string
   /** The H.264 encoder that produced it, e.g. "libx264". */
   encoder: string
+  /** The verified audio stream, or null for a silent video. */
+  audio: {
+    codec: "aac"
+    profile: string
+    sampleRate: number
+    channels: number
+    /** Average bitrate FFprobe reports (the encoder targets 192 kb/s). */
+    bitRate: number | null
+    durationSeconds: number
+  } | null
   /** Wall-clock render time, for the user and for performance notes. */
   renderSeconds: number
 }
@@ -104,5 +118,12 @@ export type RenderProgress =
       fraction: number
       encodedSeconds: number
       totalSeconds: number
+    }
+  | {
+      /** Mixing voiceover/music and muxing it with the copied video stream. */
+      phase: "audio"
+      step: "measuring" | "mixing"
+      /** FFmpeg's out_time over the video duration while mixing, 0–1. */
+      fraction: number | null
     }
   | { phase: "verifying" }

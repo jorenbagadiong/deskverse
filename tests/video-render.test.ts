@@ -415,6 +415,7 @@ describe("FFprobe parsing", () => {
         videoCodec: "h264",
         pixelFormat: "yuv420p",
         frames: 450,
+        audio: null,
       },
     })
   })

@@ -15,8 +15,18 @@ import {
 } from "@/lib/video/format"
 import { isAssetId, type AssetId } from "@/lib/video/ids"
 import {
+  AUDIO_CONTAINERS,
+  AUDIO_MODES,
+  AUDIO_ROLES,
   IMAGE_EXTENSIONS,
   IMAGE_MIME_TYPES,
+  MUSIC_LEVELS,
+  type AudioAsset,
+  type AudioConfig,
+  type AudioContainer,
+  type AudioMode,
+  type AudioRole,
+  type MusicLevel,
   type Caption,
   type CaptionPosition,
   type CaptionRole,
@@ -571,6 +581,284 @@ function validateCaption(
 }
 
 // ---------------------------------------------------------------------------
+// Audio (DV-003C)
+// ---------------------------------------------------------------------------
+
+/**
+ * Narration may run this much past the end of the video (trailing silence
+ * or a breath); it is trimmed exactly at the video boundary. Anything longer
+ * is rejected so speech is never cut off silently.
+ */
+export const VOICEOVER_TOLERANCE_SECONDS = 0.25
+
+export const AUDIO_LIMITS = {
+  /** A few minutes of WAV, or a long MP3. */
+  maxBytes: 30 * 1024 * 1024,
+  minSeconds: 0.5,
+  /** The longest possible video plus the tolerance. */
+  maxVoiceoverSeconds:
+    VIDEO_FORMAT.maxDurationSeconds + VOICEOVER_TOLERANCE_SECONDS,
+  /** Music loops or is trimmed; only up to one video length is used. */
+  maxMusicSeconds: 10 * 60,
+  channels: [1, 2] as readonly number[],
+  sampleRates: [
+    8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000, 88200, 96000,
+  ] as readonly number[],
+} as const
+
+/** File extensions offered in the picker (the server identifies files by bytes). */
+export const AUDIO_EXTENSIONS: Record<AudioContainer, readonly string[]> = {
+  mp3: ["mp3"],
+  wav: ["wav"],
+  m4a: ["m4a"],
+}
+
+/** Browser-reported types we accept as a hint; never trusted for decoding. */
+export const AUDIO_MIME_TYPES = [
+  "audio/mpeg",
+  "audio/mp3",
+  "audio/wav",
+  "audio/x-wav",
+  "audio/wave",
+  "audio/vnd.wave",
+  "audio/mp4",
+  "audio/x-m4a",
+  "audio/m4a",
+] as const
+
+export function isAudioMimeType(value: unknown): boolean {
+  return (
+    typeof value === "string" &&
+    (AUDIO_MIME_TYPES as readonly string[]).includes(value.toLowerCase())
+  )
+}
+
+export const ROLE_LABEL: Record<AudioRole, string> = {
+  voiceover: "Voiceover",
+  music: "Background music",
+}
+
+/**
+ * Browser-side pre-check of a chosen audio file (name, size, hinted type).
+ * Duration and format are re-established on the server with FFprobe.
+ */
+export function validateAudioFile(
+  file: { name: string; size: number; type: string },
+  role: AudioRole,
+): Validation<{ container: AudioContainer }> {
+  const name = sanitizeDisplayName(file.name)
+  const extension = extensionOf(file.name)
+  const container = (AUDIO_CONTAINERS as readonly string[]).find((c) =>
+    AUDIO_EXTENSIONS[c as AudioContainer].includes(extension),
+  ) as AudioContainer | undefined
+  if (!container || (file.type !== "" && !isAudioMimeType(file.type)))
+    return fail(
+      role,
+      `“${name}” isn't a supported audio file. Use MP3, WAV or M4A.`,
+    )
+  if (file.size <= 0) return fail(role, `“${name}” is empty.`)
+  if (file.size > AUDIO_LIMITS.maxBytes)
+    return fail(
+      role,
+      `“${name}” is ${formatBytes(file.size)}. Audio files must be ${formatBytes(AUDIO_LIMITS.maxBytes)} or smaller.`,
+    )
+  return { ok: true, value: { container } }
+}
+
+/** Checks probed audio facts against the limits (used by the server). */
+export function checkAudioFacts(
+  facts: { durationSeconds: number; sampleRate: number; channels: number },
+  role: AudioRole,
+  name: string,
+): string | null {
+  if (!AUDIO_LIMITS.channels.includes(facts.channels))
+    return `“${name}” has ${facts.channels} channels. Use mono or stereo audio.`
+  if (!AUDIO_LIMITS.sampleRates.includes(facts.sampleRate))
+    return `“${name}” uses an unusual sample rate (${facts.sampleRate} Hz). Use 44.1 or 48 kHz audio.`
+  if (!(facts.durationSeconds >= AUDIO_LIMITS.minSeconds))
+    return `“${name}” is too short (at least ${AUDIO_LIMITS.minSeconds} s).`
+  const max =
+    role === "voiceover"
+      ? AUDIO_LIMITS.maxVoiceoverSeconds
+      : AUDIO_LIMITS.maxMusicSeconds
+  if (facts.durationSeconds > max)
+    return role === "voiceover"
+      ? `“${name}” is ${facts.durationSeconds.toFixed(1)} s long. A voiceover can be at most ${VIDEO_FORMAT.maxDurationSeconds} s (the longest video).`
+      : `“${name}” is longer than ${AUDIO_LIMITS.maxMusicSeconds / 60} minutes. Trim it first.`
+  return null
+}
+
+const AUDIO_ASSET_KEYS = [
+  "id",
+  "kind",
+  "role",
+  "container",
+  "codec",
+  "sizeBytes",
+  "durationSeconds",
+  "sampleRate",
+  "channels",
+  "displayName",
+] as const
+
+export function validateAudioAsset(
+  input: unknown,
+  basePath = "",
+): Validation<AudioAsset> {
+  const object = readStrictObject(input, AUDIO_ASSET_KEYS, basePath, "Audio")
+  if (!object.ok) return object
+  const a = object.value
+  const at = (key: string) => join(basePath, key)
+  if (!isAssetId(a.id)) return fail(at("id"), "Unknown audio ID.")
+  if (a.kind !== "audio") return fail(at("kind"), "Not an audio file.")
+  if (!(AUDIO_ROLES as readonly unknown[]).includes(a.role))
+    return fail(at("role"), "Audio must be a voiceover or music.")
+  if (!(AUDIO_CONTAINERS as readonly unknown[]).includes(a.container))
+    return fail(at("container"), "Unsupported audio format.")
+  if (typeof a.codec !== "string" || !/^[a-z0-9_]{1,32}$/.test(a.codec))
+    return fail(at("codec"), "Unknown audio codec.")
+  if (typeof a.displayName !== "string")
+    return fail(at("displayName"), "Audio name must be text.")
+  if (!isPositiveInteger(a.sizeBytes) || a.sizeBytes > AUDIO_LIMITS.maxBytes)
+    return fail(at("sizeBytes"), "Audio file size is out of range.")
+  if (
+    typeof a.durationSeconds !== "number" ||
+    typeof a.sampleRate !== "number" ||
+    typeof a.channels !== "number"
+  )
+    return fail(at("durationSeconds"), "Audio details are missing.")
+  const role = a.role as AudioRole
+  const problem = checkAudioFacts(
+    {
+      durationSeconds: a.durationSeconds,
+      sampleRate: a.sampleRate,
+      channels: a.channels,
+    },
+    role,
+    sanitizeDisplayName(a.displayName),
+  )
+  if (problem) return fail(at("durationSeconds"), problem)
+  return {
+    ok: true,
+    value: {
+      id: a.id,
+      kind: "audio",
+      role,
+      container: a.container as AudioContainer,
+      codec: a.codec,
+      sizeBytes: a.sizeBytes,
+      durationSeconds: a.durationSeconds,
+      sampleRate: a.sampleRate,
+      channels: a.channels as 1 | 2,
+      displayName: sanitizeDisplayName(a.displayName),
+    },
+  }
+}
+
+/** Which audio roles each mode needs. */
+export const MODE_NEEDS: Record<
+  AudioMode,
+  { voiceover: boolean; music: boolean }
+> = {
+  none: { voiceover: false, music: false },
+  voiceover: { voiceover: true, music: false },
+  music: { voiceover: false, music: true },
+  "voiceover-and-music": { voiceover: true, music: true },
+}
+
+const AUDIO_CONFIG_KEYS = [
+  "mode",
+  "voiceoverAssetId",
+  "musicAssetId",
+  "musicLevel",
+] as const
+
+/**
+ * Validates the audio choices against the job's uploaded audio files: the
+ * mode decides which files are required (and forbids the others), and every
+ * ID must be an uploaded file of the matching role.
+ */
+export function validateAudioConfig(
+  input: unknown,
+  audioAssets: readonly AudioAsset[],
+  basePath = "audio",
+): Validation<AudioConfig> {
+  const object = readStrictObject(
+    input,
+    AUDIO_CONFIG_KEYS,
+    basePath,
+    "Audio settings",
+  )
+  if (!object.ok) return object
+  const { mode, voiceoverAssetId, musicAssetId, musicLevel } = object.value
+  const at = (key: string) => join(basePath, key)
+  if (!(AUDIO_MODES as readonly unknown[]).includes(mode))
+    return fail(at("mode"), "Choose an audio option.")
+  if (!(MUSIC_LEVELS as readonly unknown[]).includes(musicLevel))
+    return fail(at("musicLevel"), "Choose a music level: low, medium or high.")
+  const needs = MODE_NEEDS[mode as AudioMode]
+  const issues: ValidationIssue[] = []
+  const check = (
+    role: AudioRole,
+    id: unknown,
+    needed: boolean,
+    key: string,
+  ) => {
+    if (!needed) {
+      if (id !== null && id !== undefined)
+        issues.push({
+          path: at(key),
+          message: `${ROLE_LABEL[role]} isn't used with this audio option.`,
+        })
+      return
+    }
+    if (!isAssetId(id))
+      return issues.push({
+        path: at(key),
+        message: `Add a ${ROLE_LABEL[role].toLowerCase()} file.`,
+      })
+    const asset = audioAssets.find((a) => a.id === id)
+    if (!asset)
+      return issues.push({
+        path: at(key),
+        message: `That ${ROLE_LABEL[role].toLowerCase()} file wasn't uploaded to this video.`,
+      })
+    if (asset.role !== role)
+      issues.push({
+        path: at(key),
+        message: `That file was uploaded as ${ROLE_LABEL[asset.role].toLowerCase()}, not ${ROLE_LABEL[role].toLowerCase()}.`,
+      })
+  }
+  check("voiceover", voiceoverAssetId, needs.voiceover, "voiceoverAssetId")
+  check("music", musicAssetId, needs.music, "musicAssetId")
+  if (issues.length > 0) return { ok: false, issues }
+  return {
+    ok: true,
+    value: {
+      mode: mode as AudioMode,
+      voiceoverAssetId: needs.voiceover ? (voiceoverAssetId as AssetId) : null,
+      musicAssetId: needs.music ? (musicAssetId as AssetId) : null,
+      musicLevel: musicLevel as MusicLevel,
+    },
+  }
+}
+
+/** Rejects narration longer than the video (plus the small tolerance). */
+export function validateVoiceoverFits(
+  voiceoverSeconds: number,
+  videoFrames: number,
+  path = "audio.voiceoverAssetId",
+): Validation<number> {
+  const videoSeconds = videoFrames / VIDEO_FORMAT.fps
+  if (voiceoverSeconds > videoSeconds + VOICEOVER_TOLERANCE_SECONDS)
+    return fail(
+      path,
+      `The voiceover is ${voiceoverSeconds.toFixed(1)} s but the video is ${videoSeconds.toFixed(1)} s. Shorten the narration, or add benefit scenes to lengthen the video (each adds about 4 s).`,
+    )
+  return { ok: true, value: voiceoverSeconds }
+}
+
+// ---------------------------------------------------------------------------
 // Settings & project
 // ---------------------------------------------------------------------------
 
@@ -579,7 +867,8 @@ const SETTINGS_KEYS = Object.keys(
 ) as (keyof VideoSettings)[]
 
 /**
- * Settings are fixed: the only valid value is exactly DEFAULT_VIDEO_SETTINGS.
+ * Settings are fixed: every value must equal DEFAULT_VIDEO_SETTINGS, except
+ * `audio`, which is "none" (silent) or "aac" (the fixed AUDIO_OUTPUT format).
  * Anything else (another size, codec, or an extra key such as "ffmpegArgs")
  * is rejected rather than silently ignored.
  */
@@ -596,6 +885,15 @@ export function validateVideoSettings(
   if (!object.ok) return object
   const issues: ValidationIssue[] = []
   for (const key of SETTINGS_KEYS) {
+    if (key === "audio") {
+      if (object.value.audio !== "none" && object.value.audio !== "aac")
+        issues.push({
+          path: join(basePath, key),
+          message:
+            'Video settings are fixed in this version: audio must be "none" or "aac".',
+        })
+      continue
+    }
     if (object.value[key] !== DEFAULT_VIDEO_SETTINGS[key])
       issues.push({
         path: join(basePath, key),
@@ -603,10 +901,24 @@ export function validateVideoSettings(
       })
   }
   if (issues.length > 0) return { ok: false, issues }
-  return { ok: true, value: { ...DEFAULT_VIDEO_SETTINGS } }
+  return {
+    ok: true,
+    value: {
+      ...DEFAULT_VIDEO_SETTINGS,
+      audio: object.value.audio as VideoSettings["audio"],
+    },
+  }
 }
 
-const PROJECT_KEYS = ["product", "assets", "scenes", "settings"] as const
+const PROJECT_KEYS = [
+  "product",
+  "assets",
+  "scenes",
+  "settings",
+  // Optional (DV-003C); absent in silent DV-003B projects.
+  "audio",
+  "audioAssets",
+] as const
 
 export function validateVideoProject(input: unknown): Validation<VideoProject> {
   const object = readStrictObject(input, PROJECT_KEYS, "", "Project")
@@ -650,6 +962,68 @@ export function validateVideoProject(input: unknown): Validation<VideoProject> {
   const settings = validateVideoSettings(object.value.settings)
   if (!settings.ok) issues.push(...settings.issues)
 
+  // Audio: both fields absent (silent, as in DV-003B) or both present.
+  const audioAssets: AudioAsset[] = []
+  let audio: AudioConfig | undefined
+  const rawAudio = object.value.audio
+  const rawAudioAssets = object.value.audioAssets
+  if (rawAudio === undefined && rawAudioAssets === undefined) {
+    if (settings.ok && settings.value.audio !== "none")
+      issues.push({
+        path: "settings.audio",
+        message: "A silent project can't use audio settings.",
+      })
+  } else if (!Array.isArray(rawAudioAssets) || rawAudioAssets.length > 2) {
+    issues.push({
+      path: "audioAssets",
+      message: "Audio files must be a list of at most two.",
+    })
+  } else {
+    rawAudioAssets.forEach((raw, index) => {
+      const asset = validateAudioAsset(raw, `audioAssets.${index}`)
+      if (!asset.ok) return issues.push(...asset.issues)
+      if (
+        audioAssets.some(
+          (a) => a.id === asset.value.id || a.role === asset.value.role,
+        )
+      )
+        return issues.push({
+          path: `audioAssets.${index}`,
+          message: "Duplicate audio file.",
+        })
+      audioAssets.push(asset.value)
+    })
+    const config = validateAudioConfig(rawAudio, audioAssets)
+    if (!config.ok) issues.push(...config.issues)
+    else {
+      audio = config.value
+      const used = [audio.voiceoverAssetId, audio.musicAssetId].filter(Boolean)
+      if (audioAssets.some((a) => !used.includes(a.id)))
+        issues.push({
+          path: "audioAssets",
+          message: "The project lists an audio file it doesn't use.",
+        })
+      if (
+        settings.ok &&
+        settings.value.audio !== (audio.mode === "none" ? "none" : "aac")
+      )
+        issues.push({
+          path: "settings.audio",
+          message: "Audio settings don't match the audio option.",
+        })
+      const voiceover = audioAssets.find(
+        (a) => a.id === audio!.voiceoverAssetId,
+      )
+      if (voiceover && scenes.ok) {
+        const fits = validateVoiceoverFits(
+          voiceover.durationSeconds,
+          scenes.value.reduce((n, scene) => n + scene.durationFrames, 0),
+        )
+        if (!fits.ok) issues.push(...fits.issues)
+      }
+    }
+  }
+
   if (!product.ok || !scenes.ok || !settings.ok || issues.length > 0)
     return { ok: false, issues }
   return {
@@ -659,6 +1033,7 @@ export function validateVideoProject(input: unknown): Validation<VideoProject> {
       assets,
       scenes: scenes.value,
       settings: settings.value,
+      ...(audio ? { audio, audioAssets } : {}),
     },
   }
 }

@@ -30,7 +30,9 @@ export interface ExecutableStatus {
 export interface FilterStatus {
   name: string
   available: boolean
+  /** Required for its purpose: video filters gate all rendering, audio filters only audio. */
   required: boolean
+  purpose: "video" | "audio"
 }
 
 export interface EncoderInfo {
@@ -59,6 +61,7 @@ export type CapabilityIssueCode =
   | "no-libx264"
   | "hardware-encoder-only"
   | "no-aac-encoder"
+  | "audio-unavailable"
   | "old-version"
   | "nonfree-build"
 
@@ -88,8 +91,18 @@ export interface FfmpegCapabilityReport {
    * other software, hardware), that passed a real test encode.
    */
   selectedH264Encoder: string | null
-  /** Informational until audio arrives in DV-003C. */
+  /** The AAC encoder that passed a real test encode (native "aac" preferred). */
   aacEncoder: string | null
+  /**
+   * Whether voiceover/music can be rendered. Never affects silent rendering:
+   * `status` can be "ready" while audio isn't.
+   */
+  audio: {
+    ready: boolean
+    missingFilters: string[]
+    /** Why audio is unavailable, in plain language; null when ready. */
+    reason: string | null
+  }
   license: FfmpegLicense
   issues: CapabilityIssue[]
 }
@@ -111,6 +124,22 @@ export const REQUIRED_FILTERS = [
   "setsar",
   "concat",
   "fade",
+] as const
+
+/** Filters the DV-003C audio stage uses (see src/server/video/audio-command.ts). */
+export const AUDIO_FILTERS = [
+  "aresample",
+  "aformat",
+  "atrim",
+  "asetpts",
+  "apad",
+  "loudnorm",
+  "aloop",
+  "afade",
+  "asplit",
+  "sidechaincompress",
+  "amix",
+  "alimiter",
 ] as const
 
 /** Not used yet: crossfades between scenes are planned for DV-003D. */

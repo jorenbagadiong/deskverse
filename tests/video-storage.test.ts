@@ -115,6 +115,7 @@ const renderOutput = (sizeBytes: number): RenderOutput => ({
   pixelFormat: "yuv420p",
   encoder: "libx264",
   renderSeconds: 4.2,
+  audio: null,
 })
 
 const upload = (
@@ -397,6 +398,20 @@ describe("local job storage", () => {
     )
     // Nothing was written outside the storage root.
     await expect(fs.access(path.join(base, "..", "evil.png"))).rejects.toThrow()
+  })
+
+  it("doesn't depend on the client's file name or extension (display only)", async () => {
+    const job = await storage.createJob()
+    for (const fileName of ["image", "", "photo.jpeg", "no-extension"]) {
+      const asset = await storage.addImageAsset(
+        job.id,
+        upload(png(1080, 1920), "image/png", fileName),
+      )
+      expect(asset.mimeType).toBe("image/png")
+      expect(
+        await fs.readdir(path.join(base, "video", "jobs", job.id, "assets")),
+      ).toContain(`${asset.id}.png`)
+    }
   })
 
   it("rejects files whose bytes don't match a supported image type", async () => {

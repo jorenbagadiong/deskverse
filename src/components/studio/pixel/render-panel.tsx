@@ -51,6 +51,13 @@ function describe(progress: RenderProgress | null, state: string) {
         text: `Encoding H.264: ${progress.encodedSeconds.toFixed(1)} of ${progress.totalSeconds.toFixed(1)} s`,
         percent: Math.round(progress.fraction * 100),
       }
+    case "audio":
+      return progress.step === "measuring" || progress.fraction === null
+        ? { text: "Measuring audio loudness…", percent: null }
+        : {
+            text: "Mixing audio (the video stream is copied, not re-encoded)",
+            percent: Math.round(progress.fraction * 100),
+          }
     case "verifying":
       return { text: "Verifying the MP4 with FFprobe…", percent: null }
   }
@@ -106,7 +113,10 @@ export function RenderPanel({
   let activity: { text: string; percent: number | null } | null = null
   if (view.kind === "uploading")
     activity = {
-      text: `Uploading images: ${view.uploaded} of ${view.total}`,
+      text:
+        view.what === "audio"
+          ? `Uploading audio: ${view.uploaded} of ${view.total} checked`
+          : `Uploading images: ${view.uploaded} of ${view.total}`,
       percent: Math.round((view.uploaded / view.total) * 100),
     }
   else if (view.kind === "starting")
@@ -229,6 +239,12 @@ export function RenderPanel({
             <dt className="text-muted-foreground">File size</dt>
             <dd className="font-medium">
               {formatBytes(status.output.sizeBytes)}
+            </dd>
+            <dt className="text-muted-foreground">Audio</dt>
+            <dd className="font-medium">
+              {status.output.audio
+                ? `AAC-${status.output.audio.profile}, ${status.output.audio.sampleRate / 1000} kHz, ${status.output.audio.channels === 2 ? "stereo" : `${status.output.audio.channels} ch`}${status.output.audio.bitRate ? `, ${Math.round(status.output.audio.bitRate / 1000)} kb/s` : ""}`
+                : "None (silent)"}
             </dd>
             <dt className="text-muted-foreground">Encoder</dt>
             <dd className="font-medium">

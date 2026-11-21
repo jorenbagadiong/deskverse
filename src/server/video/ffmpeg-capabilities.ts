@@ -3,6 +3,7 @@ import "server-only"
 import path from "node:path"
 
 import {
+  AUDIO_FILTERS,
   OPTIONAL_FILTERS,
   REQUIRED_FILTERS,
   type CapabilityIssue,
@@ -14,6 +15,7 @@ import {
   type FilterStatus,
 } from "@/lib/video/capabilities"
 import { VIDEO_FORMAT } from "@/lib/video/format"
+import { AAC_PREFERENCE, testAacEncodeArgs } from "@/server/video/audio-command"
 import { encoderOptions } from "@/server/video/ffmpeg-command"
 import {
   createRunner,
@@ -171,18 +173,32 @@ export async function verifyEncoders(
   return results
 }
 
-const AAC_PREFERENCE = ["aac", "libfdk_aac", "aac_at", "aac_mf"]
+/** Listed AAC encoders, best first (native "aac" preferred). */
+export function rankAacEncoders(encoders: readonly ParsedEncoder[]): string[] {
+  const rank = (name: string) =>
+    (AAC_PREFERENCE as readonly string[]).indexOf(name) + 1 || 99
+  return encoders
+    .filter((e) => e.type === "audio" && e.codec === "aac")
+    .map((e) => e.name)
+    .sort((a, b) => rank(a) - rank(b))
+}
 
+/** The best listed AAC encoder (not yet tested). */
 export function pickAacEncoder(
   encoders: readonly ParsedEncoder[],
 ): string | null {
-  const aac = encoders.filter((e) => e.type === "audio" && e.codec === "aac")
-  aac.sort(
-    (a, b) =>
-      (AAC_PREFERENCE.indexOf(a.name) + 1 || 99) -
-      (AAC_PREFERENCE.indexOf(b.name) + 1 || 99),
-  )
-  return aac[0]?.name ?? null
+  return rankAacEncoders(encoders)[0] ?? null
+}
+
+/** Test-encodes AAC candidates in order; returns the first that works. */
+export async function verifyAacEncoder(
+  run: Runner,
+  command: string,
+  candidates: readonly string[],
+): Promise<string | null> {
+  for (const name of candidates)
+    if ((await run(command, testAacEncodeArgs(name))).ok) return name
+  return null
 }
 
 // ---------------------------------------------------------------------------
@@ -350,6 +366,11 @@ export async function detectFfmpegCapabilities({
   let h264Encoders: EncoderInfo[] = []
   let aacEncoder: string | null = null
   let license: FfmpegLicense = "unknown"
+  let audio: FfmpegCapabilityReport["audio"] = {
+    ready: false,
+    missingFilters: [],
+    reason: "FFmpeg isn't available, so audio can't be added.",
+  }
 
   if (ffmpeg.command) {
     const [encoderResult, filterResult] = await Promise.all([
@@ -367,11 +388,19 @@ export async function detectFfmpegCapabilities({
         name,
         available: available.has(name),
         required: true,
+        purpose: "video" as const,
       })),
       ...OPTIONAL_FILTERS.map((name) => ({
         name,
         available: available.has(name),
         required: false,
+        purpose: "video" as const,
+      })),
+      ...AUDIO_FILTERS.map((name) => ({
+        name,
+        available: available.has(name),
+        required: true,
+        purpose: "audio" as const,
       })),
     ]
     h264Encoders = await verifyEncoders(
@@ -379,11 +408,28 @@ export async function detectFfmpegCapabilities({
       ffmpeg.command,
       rankH264Encoders(encoders),
     )
-    aacEncoder = pickAacEncoder(encoders)
+    // Listed isn't proof: the AAC encoder must pass a real test encode.
+    const aacCandidates = rankAacEncoders(encoders)
+    aacEncoder = await verifyAacEncoder(run, ffmpeg.command, aacCandidates)
 
     const missingRequired = filters
-      .filter((f) => f.required && !f.available)
+      .filter((f) => f.purpose === "video" && f.required && !f.available)
       .map((f) => f.name)
+    const missingAudio = filters
+      .filter((f) => f.purpose === "audio" && !f.available)
+      .map((f) => f.name)
+    audio = {
+      ready: aacEncoder !== null && missingAudio.length === 0,
+      missingFilters: missingAudio,
+      reason:
+        aacEncoder === null
+          ? aacCandidates.length === 0
+            ? "This FFmpeg build has no AAC encoder, so videos can only be silent."
+            : `The AAC encoder (${aacCandidates.join(", ")}) failed a test encode, so videos can only be silent.`
+          : missingAudio.length > 0
+            ? `This FFmpeg build is missing audio filters (${missingAudio.join(", ")}), so videos can only be silent.`
+            : null,
+    }
     if (missingRequired.length > 0)
       issues.push({
         code: "missing-filters",
@@ -425,12 +471,18 @@ export async function detectFfmpegCapabilities({
       )
     }
 
+    // Audio problems never block silent rendering: warnings only.
     if (aacEncoder === null)
       issues.push({
         code: "no-aac-encoder",
         severity: "warning",
-        message:
-          "No AAC audio encoder was found. Videos are silent until audio arrives in DV-003C, so this doesn't block rendering yet.",
+        message: `${audio.reason} Silent videos still render normally.`,
+      })
+    else if (missingAudio.length > 0)
+      issues.push({
+        code: "audio-unavailable",
+        severity: "warning",
+        message: `${audio.reason} Silent videos still render normally.`,
       })
 
     const major = parseMajorVersion(ffmpeg.status.version)
@@ -462,6 +514,7 @@ export async function detectFfmpegCapabilities({
     h264Encoders,
     selectedH264Encoder: h264Encoders.find((e) => e.works)?.name ?? null,
     aacEncoder,
+    audio,
     license,
     issues,
   }

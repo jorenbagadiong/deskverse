@@ -3,10 +3,11 @@ import "server-only"
 import { isAssetId } from "@/lib/video/ids"
 import type { RenderJob } from "@/lib/video/render-job"
 import { buildStoryboard } from "@/lib/video/storyboard"
-import type { VideoProject } from "@/lib/video/types"
+import type { AudioAsset, AudioConfig, VideoProject } from "@/lib/video/types"
 import {
   DEFAULT_VIDEO_SETTINGS,
   MEDIA_LIMITS,
+  validateAudioConfig,
   validateProduct,
   validateVideoProject,
   type Validation,
@@ -24,12 +25,14 @@ import {
  *
  * The browser's storyboard, timings, captions, asset metadata and any FFmpeg
  * option are never accepted: the request may contain exactly
- * `{ product, assetIds }`. Scenes are rebuilt here with the same template and
+ * `{ product, assetIds, audio? }`, where `audio` only names an audio mode,
+ * uploaded audio IDs of this job and a music level. Scenes are rebuilt here with the same template and
  * fixed format, every image must belong to *this* job, and the result is
  * re-validated as a whole (durations, 15–30 s, references).
  */
 
-const REQUEST_KEYS = ["product", "assetIds"] as const
+/** `audio` is optional (DV-003C); without it the video is silent. */
+const REQUEST_KEYS = ["product", "assetIds", "audio"] as const
 
 export function buildTrustedProject(
   job: RenderJob,
@@ -83,12 +86,30 @@ export function buildTrustedProject(
   const glyphs = glyphIssues(product.value, fonts)
   if (glyphs.length > 0) return { ok: false, issues: glyphs }
 
-  // Rebuild the storyboard server-side and validate the whole project.
+  // Audio: validated against this job's own uploaded audio files.
+  let audio: { audio: AudioConfig; audioAssets: AudioAsset[] } | null = null
+  if (request.audio !== undefined) {
+    const config = validateAudioConfig(request.audio, job.audioAssets, "audio")
+    if (!config.ok) return config
+    if (config.value.mode !== "none")
+      audio = {
+        audio: config.value,
+        audioAssets: job.audioAssets.filter(
+          (a) =>
+            a.id === config.value.voiceoverAssetId ||
+            a.id === config.value.musicAssetId,
+        ),
+      }
+  }
+
+  // Rebuild the storyboard server-side and validate the whole project
+  // (including that narration fits the video).
   return validateVideoProject({
     product: product.value,
     assets,
     scenes: buildStoryboard(product.value, assetIds),
-    settings: DEFAULT_VIDEO_SETTINGS,
+    settings: { ...DEFAULT_VIDEO_SETTINGS, audio: audio ? "aac" : "none" },
+    ...(audio ?? {}),
   })
 }
 

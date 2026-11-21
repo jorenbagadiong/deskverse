@@ -7,14 +7,15 @@ team's video creator.
 
 > **What this is not.** Pixel Studio does not generate AI footage, voices or
 > images. FFmpeg _assembles media you supply_: it scales and frames your
-> photos, draws your captions and joins the scenes into one MP4. Every pixel
-> in the output comes from your images and your text.
+> photos, draws your captions, mixes in your own voiceover and music, and
+> joins everything into one MP4. Every pixel and every sound in the output
+> comes from your images, your text and your audio files.
 
 | Phase       | Scope                                                                                     | Status  |
 | ----------- | ----------------------------------------------------------------------------------------- | ------- |
 | **DV-003A** | Environment detection, strict types, validation, storyboard UI, storage foundation        | ✅ Done |
 | **DV-003B** | Real rendering: uploads, server-built projects, FFmpeg renderer, queue, preview, download | ✅ Done |
-| **DV-003C** | Audio: music bed and/or voice-over, AAC encoding                                          | Planned |
+| **DV-003C** | Optional voiceover and background music, mixed and encoded as AAC                         | ✅ Done |
 | **DV-003D** | Persistent queue, cancellation, retries, transitions and motion                           | Planned |
 
 ## 1. FFmpeg and FFprobe
@@ -99,8 +100,14 @@ commands and parses their output:
   `scale`, `crop`, `gblur`, `colorchannelmixer`, `overlay`, `drawtext`,
   `format`, `loop`, `settb`, `setpts`, `setsar`, `concat`, `fade`.
   **Optional:** `xfade` (crossfades, planned for DV-003D).
-- **AAC** is reported, but a missing AAC encoder only warns, because audio
-  arrives in DV-003C.
+- **Audio (DV-003C)** is checked separately and never blocks silent videos:
+  the audio filters (`aresample`, `aformat`, `atrim`, `asetpts`, `apad`,
+  `loudnorm`, `aloop`, `afade`, `asplit`, `sidechaincompress`, `amix`,
+  `alimiter`) must exist, and an AAC encoder must pass a real half-second
+  test encode (native `aac` first, then `libfdk_aac`, `aac_at`, `aac_mf`).
+  Otherwise the report says `audio.ready: false` with a plain reason, the
+  audio options are disabled in the studio, and silent rendering stays
+  available.
 
 | Status        | Meaning                                                                                       |
 | ------------- | --------------------------------------------------------------------------------------------- |
@@ -130,7 +137,10 @@ Render MP4 ─► POST /jobs ────────────► new draft j
               (raw bytes, one per        byte sniffing, header dimensions,
                request)                  FFprobe codec/size check, test decode,
                                          stored as assets/<assetId>.<ext> (0600)
-           ─► POST /jobs/:id/render ─► { product, assetIds } only; storyboard
+           ─► POST /jobs/:id/audio   ─► optional voiceover / music (DV-003C): byte
+              ?role=… (raw bytes)        sniffing, FFprobe streams/codec, full decode,
+                                         duration/channel/rate limits
+           ─► POST /jobs/:id/render ─► { product, assetIds, audio? } only; storyboard
               (JSON)                     rebuilt server-side, project.json saved,
                                          job queued → 202 + status
 poll GET /jobs/:id every second ◄──── state + real progress
@@ -141,8 +151,11 @@ poll GET /jobs/:id every second ◄──── state + real progress
                                          4. compose one still PNG per scene
                                          5. encode H.264 (-progress pipe:1)
                                          6. FFprobe verification
-                                         7. work/render.mp4 → output/video.mp4
-                                         8. job completed (or failed), work/ wiped
+                                         7. audio projects only: measure loudness,
+                                            mix + mux AAC with the copied H.264,
+                                            verify again (one AAC track)
+                                         8. work/…mp4 → output/video.mp4
+                                         9. job completed (or failed), work/ wiped
 <video src=/jobs/:id/video>  ◄──────── verified MP4 only, byte ranges
 Download MP4 (?download=1)   ◄──────── Content-Disposition: attachment
 ```
@@ -201,7 +214,10 @@ problems.
 
 - MP4 container (format `mp4` and an ISO brand such as `isom`, not QuickTime)
 - exactly one video stream, H.264, 1080 × 1920, `yuv420p`, 30/1 fps
-- no audio track
+- silent videos: no audio track. Audio videos: exactly one AAC-LC, 48 kHz,
+  stereo track lasting the video's length (±0.1 s), plus a full decode of
+  that track (metadata alone doesn't prove it plays)
+- no other streams (subtitles, data)
 - duration within 15–30 s and within 0.1 s of the storyboard
 - frame count equal to the storyboard's
 - non-empty file
@@ -221,19 +237,111 @@ problems.
   killed with `SIGKILL` at the deadline. FFmpeg never waits for input (stdin
   is closed and `-nostdin` is set).
 
-## 5. Video output target
+## 5. Audio: voiceover and background music (DV-003C)
+
+Four choices, picked in the studio's **Audio** card: **No audio** (the
+default and exactly the DV-003B pipeline), **Voiceover**, **Background
+music**, or **Voiceover + music**.
+
+### Supported files and limits
+
+| Format | Container check (bytes)         | Accepted codecs (FFprobe)                                    |
+| ------ | ------------------------------- | ------------------------------------------------------------ |
+| MP3    | ID3 tag or MPEG Layer III frame | `mp3`                                                        |
+| WAV    | `RIFF…WAVE`                     | `pcm_s16le`, `pcm_s24le`, `pcm_s32le`, `pcm_f32le`, `pcm_u8` |
+| M4A    | `ftyp` with an MP4-family brand | `aac`, `alac`                                                |
+
+- At most 30 MB per file, one voiceover and one music file per video.
+- Mono or stereo only; sample rates 8–96 kHz (common rates only).
+- Duration: at least 0.5 s; a voiceover at most 30.25 s (the longest video
+  plus the tolerance); music at most 10 minutes.
+- Rejected: corrupt files (a full decode must finish without errors), files
+  with video, embedded cover art, subtitles, data or attachment streams,
+  more than one audio track, unknown codecs, and anything whose bytes aren't
+  MP3/WAV/M4A, whatever its name or browser-reported type. Each file is
+  opened with the demuxer its bytes identified (`-f mp3|wav|mov`), never by
+  guessing.
+- Files are stored privately like images (`assets/<assetId>.<ext>`, 0600)
+  under generated names; nothing is fetched from URLs.
+
+### Timing rules
+
+The video is N frames at 30 fps, so the audio is made **exactly N × 1600
+samples at 48 kHz**: `apad` pads and `atrim` cuts at that boundary. No audio
+file can lengthen or shorten the video.
+
+- **Voiceover** starts at 0:00 with the first scene. Shorter narration is
+  followed by silence to the end. Narration may run at most **0.25 s** past
+  the end (it's trimmed exactly there); anything longer is **rejected**
+  before rendering, with the actual lengths, instead of being cut off.
+- **Music** starts at 0:00. A track shorter than the video loops (a finite
+  number of repeats: `ceil(video / track)`, then trimmed); a longer one is
+  trimmed. It fades in over 50 ms and out over the last 1.5 s. Loop seams
+  are plain cuts, so loops sound best with tracks made to loop.
+
+### Levels and mixing
+
+Loudness is measured, not guessed: a first `loudnorm` pass analyses exactly
+the audio that will be used, and the second pass applies a **linear** gain
+from those measurements (two-pass EBU R128 normalization). Silent or
+unmeasurable files are rejected rather than amplified.
+
+| Source                  | Target (integrated)                          |
+| ----------------------- | -------------------------------------------- |
+| Voiceover               | −16 LUFS, true peak ≤ −1.5 dBTP              |
+| Music alone             | −16 LUFS                                     |
+| Music under a voiceover | low −30 LUFS (default), medium −26, high −23 |
+
+With both, the music is additionally **ducked** while the narrator speaks
+(`sidechaincompress`: threshold ≈ −30 dBFS, ratio 6, 20 ms attack, 400 ms
+release), mixed with the voice without renormalization (`amix
+normalize=0`), and the result passes a delay-compensated limiter at about
+−1.5 dBFS (`alimiter latency=1`) and a 50 ms end fade against clicks.
+
+### Encoding and muxing
+
+The audio stage runs **after** the silent video is encoded and verified. It
+copies the H.264 stream (`-c:v copy`, no second video encode) and encodes
+only the audio: AAC-LC, 48 kHz, stereo, `-b:a 192k` with the AAC encoder that
+passed its test encode. The native encoder treats 192 kb/s as a target; on
+sparse content such as narration with pauses the average is lower (measured
+63–197 kb/s). Every number in the audio filter graph is computed and
+validated on the server; user files are only `-i file:` arguments.
+
+### Verification and failure
+
+The final MP4 must have one H.264 and one AAC-LC 48 kHz stereo stream, both
+lasting the storyboard's duration (±0.1 s), and its audio must decode fully.
+If measuring, mixing or verification fails, the job is marked failed with a
+plain message and nothing is published. A missing AAC encoder fails an audio
+job before any encoding starts.
+
+### Measured results (FFmpeg 6.1.1, native `aac`)
+
+From the real integration tests (generated sine-tone speech and music, so no
+rights issues) and the four-mode benchmark:
+
+- Voiceover onset in the output: 2.002 s for narration starting at 2.000 s.
+- Speech loudness: −15.8 LUFS (target −16); music-only: −16.2 LUFS; full
+  benchmark mixes: −16.1 to −16.3 LUFS integrated, peaks −10 to −11.6 dBFS.
+- Voiceover + music: the speech band is 23 dB above the ducked music while
+  talking; ducking lowers the music by about 8.5 dB during speech.
+- Looped music keeps its level (0.04 dB drift); the last 0.15 s is more than
+  20 dB quieter (fade-out).
+
+## 6. Video output target
 
 Fixed in `src/lib/video/format.ts`. Clients can't change it.
 
-| Property     | Value                                                        |
-| ------------ | ------------------------------------------------------------ |
-| Resolution   | 1080 × 1920 px                                               |
-| Aspect ratio | 9:16 (vertical)                                              |
-| Frame rate   | 30 fps (constant)                                            |
-| Container    | MP4 with `+faststart` (playback starts before download ends) |
-| Video codec  | H.264 (High profile with libx264), `yuv420p`                 |
-| Duration     | 15–30 seconds                                                |
-| Audio        | None until DV-003C                                           |
+| Property     | Value                                                                            |
+| ------------ | -------------------------------------------------------------------------------- |
+| Resolution   | 1080 × 1920 px                                                                   |
+| Aspect ratio | 9:16 (vertical)                                                                  |
+| Frame rate   | 30 fps (constant)                                                                |
+| Container    | MP4 with `+faststart` (playback starts before download ends)                     |
+| Video codec  | H.264 (High profile with libx264), `yuv420p`                                     |
+| Duration     | 15–30 seconds                                                                    |
+| Audio        | None by default; with audio: AAC-LC, 48 kHz, stereo, 192 kb/s target, one stream |
 
 ### Storyboard template
 
@@ -254,9 +362,12 @@ into 15–30 s, with each scene kept within 2–8 s.
 `src/lib/video/validation.ts` is shared by the form and the server; the
 server is the real gate.
 
-- **Render requests** may contain exactly `{ product, assetIds }`. Scenes,
-  timings, settings, captions, asset metadata, paths and FFmpeg options are
-  rejected ("decided by the server").
+- **Render requests** may contain exactly `{ product, assetIds, audio? }`.
+  `audio` holds only a mode, uploaded audio IDs of this job and a music
+  level. Scenes, timings, settings, captions, asset metadata, paths, filter
+  graphs and FFmpeg options are rejected ("decided by the server").
+- **Audio** IDs must belong to the job being rendered and match their role;
+  the mode decides which files are required and forbids the others.
 - **Strict objects** everywhere: unknown keys are errors.
 - **Text:** NFC-normalized, whitespace collapsed to one line, lengths in
   characters (product name 60, headline 70, benefit 80, CTA 40, disclosure
@@ -269,7 +380,7 @@ server is the real gate.
 - **Scenes:** 3–8, hook first and CTA last, 2–8 s each in whole frames,
   15–30 s total.
 
-## 6. Local file storage
+## 7. Local file storage
 
 `src/server/video/storage.ts` (server-only). Data lives **outside the
 repository** in the per-user application data folder:
@@ -287,9 +398,9 @@ folder in the system temp directory.
 
 ```
 <data>/video/jobs/<jobId>/
-  job.json                 state, assets, error, verified output facts
+  job.json                 state, images, audio files, error, verified output facts
   project.json             the server-built project the renderer uses
-  assets/<assetId>.<ext>   uploaded images, renamed to generated IDs
+  assets/<assetId>.<ext>   uploaded images and audio, renamed to generated IDs
   work/                    scratch space for one render, always emptied afterwards
   output/video.mp4         the finished, verified render
 ```
@@ -311,17 +422,18 @@ folder in the system temp directory.
   after verification), and only if the file is a regular file inside
   storage. Its path is never sent to the browser.
 
-## 7. Security model
+## 8. Security model
 
-| Boundary          | Rule                                                                                                                                                                                                                                         |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Browser → server  | The browser sends _data_: image bytes, product text and image IDs. Never commands, flags, filters, paths, timings or codec options.                                                                                                          |
-| Server → FFmpeg   | `spawn`/`execFile` with `shell: false` and argument arrays built by server code. `-nostdin`, closed stdin, `-protocol_whitelist file`, `file:` inputs/outputs, timeouts, output caps, minimal environment.                                   |
-| Captions → FFmpeg | Text goes to per-job UTF-8 files drawn with `drawtext=textfile=…:expansion=none`, so `%{…}`, quotes, colons and brackets are drawn literally. Filter graphs contain only generated, escaped values.                                          |
-| Errors            | Users see plain messages. Raw FFmpeg output (which may contain paths) only goes to the server log.                                                                                                                                           |
-| Files             | Generated names, containment checks, symlink refusal, byte sniffing plus FFprobe and decode checks, size limits, data outside the repo.                                                                                                      |
-| Network           | Every endpoint (capabilities, jobs, uploads, render, status, video) checks `Host` (DNS rebinding), `X-Forwarded-*`, `Origin` and `Sec-Fetch-Site`. The render request must be JSON.                                                          |
-| Hosting           | Rendering is **disabled** (503) when a hosting platform is detected (`VERCEL`, `NETLIFY`, `RENDER`, `FLY_APP_NAME`, `RAILWAY_ENVIRONMENT`, `K_SERVICE`, `AWS_LAMBDA_FUNCTION_NAME`, `DYNO`) or `DESKVERSE_DISABLE_LOCAL_RENDERING=1` is set. |
+| Boundary          | Rule                                                                                                                                                                                                                                             |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Browser → server  | The browser sends _data_: image bytes, product text and image IDs. Never commands, flags, filters, paths, timings or codec options.                                                                                                              |
+| Server → FFmpeg   | `spawn`/`execFile` with `shell: false` and argument arrays built by server code. `-nostdin`, closed stdin, `-protocol_whitelist file`, `file:` inputs/outputs, timeouts, output caps, minimal environment.                                       |
+| Audio → FFmpeg    | Stored audio files are argv inputs with a forced demuxer (`-f mp3\|wav\|mov -i file:…`). The client chooses only a mode, IDs and one of three levels; every gain, sample count and timestamp in the graph is computed and validated server-side. |
+| Captions → FFmpeg | Text goes to per-job UTF-8 files drawn with `drawtext=textfile=…:expansion=none`, so `%{…}`, quotes, colons and brackets are drawn literally. Filter graphs contain only generated, escaped values.                                              |
+| Errors            | Users see plain messages. Raw FFmpeg output (which may contain paths) only goes to the server log.                                                                                                                                               |
+| Files             | Generated names, containment checks, symlink refusal, byte sniffing plus FFprobe and decode checks, size limits, data outside the repo.                                                                                                          |
+| Network           | Every endpoint (capabilities, jobs, uploads, render, status, video) checks `Host` (DNS rebinding), `X-Forwarded-*`, `Origin` and `Sec-Fetch-Site`. The render request must be JSON.                                                              |
+| Hosting           | Rendering is **disabled** (503) when a hosting platform is detected (`VERCEL`, `NETLIFY`, `RENDER`, `FLY_APP_NAME`, `RAILWAY_ENVIRONMENT`, `K_SERVICE`, `AWS_LAMBDA_FUNCTION_NAME`, `DYNO`) or `DESKVERSE_DISABLE_LOCAL_RENDERING=1` is set.     |
 
 **These checks are not authentication.** Headers can be forged by a program
 that reaches the port directly. `next dev` / `next start` listen on all
@@ -337,7 +449,7 @@ WSL's localhost forwarding still lets your Windows browser reach
 public. The hosting gate is a safety net, not a substitute for keeping it
 local.
 
-## 8. Licensing and redistribution
+## 9. Licensing and redistribution
 
 _General information, not legal advice._
 
@@ -360,16 +472,22 @@ _General information, not legal advice._
   distribute. The font files may not be sold on their own, and modified
   versions must be renamed. Deskverse ships the unmodified static
   `Inter-Bold.ttf` and `Inter-Medium.ttf` from the official 4.1 release.
-- **Your media:** you need the rights to every image you use. Affiliate
-  programs often restrict how product images may be used, so check your
-  program's terms.
+- **AAC:** the native FFmpeg `aac` encoder is part of FFmpeg's LGPL code and
+  is what Deskverse prefers. `libfdk_aac` is non-free (not redistributable).
+- **Your media:** you need the rights to every image **and every audio file**
+  you use. Commercial affiliate videos need music licensed for commercial
+  use (many "free" tracks are personal-use only) and voice recordings you
+  made or may use. Deskverse doesn't fetch, check or license audio; the
+  studio shows this notice whenever audio is chosen.
+- **Images:** affiliate programs often restrict how product images may be
+  used, so check your program's terms.
 - **Disclosure:** advertising rules (e.g. the US FTC Endorsement Guides) and
   platform policies require a clear disclosure when you can earn a
   commission. Pixel Studio requires disclosure text and burns it into every
   scene. Also use each platform's branded-content or paid-partnership
   setting.
 
-## 9. Measured performance
+## 10. Measured performance
 
 One full render on the development machine (WSL2, Ubuntu 24.04, 16 cores,
 9.6 GB RAM, FFmpeg 6.1.1, libx264, no GPU), from four real JPEG photos
@@ -391,9 +509,30 @@ parallel and reached 1.4–1.7 GB. The single-frame inputs plus `loop` filter,
 longer grows with the number of scenes. Rendering on CPU is expected; slow
 isn't failing, and the encode timeout is 10 minutes.
 
-## 10. Limitations (DV-003B)
+**With audio (DV-003C),** same machine and photos, 19 s video:
 
-- One fixed template, simple cuts, no motion or transitions, no audio.
+| Mode              | Render | FFmpeg peak |    File | Audio (average)       |
+| ----------------- | -----: | ----------: | ------: | --------------------- |
+| Silent (baseline) |  8.8 s |     458 MiB | 1.45 MB | none                  |
+| Voiceover         |  9.8 s |     471 MiB | 1.61 MB | AAC-LC 63 kb/s stereo |
+| Music             | 10.4 s |     458 MiB | 1.93 MB | AAC-LC 197 kb/s       |
+| Voiceover + music | 11.3 s |     469 MiB | 1.89 MB | AAC-LC 180 kb/s       |
+
+Video and audio streams last exactly 19.000 s in every mode, and the H.264
+bitstream is byte-identical to the silent render (copied, never re-encoded).
+All four files decode without errors. In Firefox, the three audio videos
+play with an audio track and audible output (the silent one has no audio
+track); Firefox reports 19.02 s because of AAC encoder padding, within the
+0.1 s tolerance.
+
+## 11. Limitations
+
+- One fixed template, simple cuts, no motion or transitions.
+- Audio: no trimming, offsets, crossfaded loops or per-scene sync points;
+  narration always starts at 0:00. Music loop seams are hard cuts. MP3s with
+  embedded cover art must be exported without artwork first. Loudness
+  targets are met by two-pass normalization and measured in tests, but they
+  aren't a broadcast-compliance certification.
 - Captions support the characters in Inter (Latin, Greek, Cyrillic and common
   symbols). Emoji and CJK are rejected rather than drawn.
 - JPEG EXIF orientation isn't applied. A phone photo stored sideways with a
@@ -406,17 +545,15 @@ isn't failing, and the encode timeout is 10 minutes.
   Firefox, Safari). Playwright's bundled Chromium can't decode H.264, so the
   E2E suite checks the file itself and playback only where supported.
 
-## 11. Remaining work
-
-**DV-003C (audio):** an optional music bed and/or voice-over supplied by the
-user, AAC encoding (the AAC check already exists), loudness normalization,
-and output verification extended to one AAC stream.
+## 12. Remaining work
 
 **DV-003D (queue and polish):** a persistent queue, cancel and retry in the
 UI, deleting jobs and outputs, crossfades (`xfade`), gentle motion on stills,
-EXIF orientation, and more templates.
+EXIF orientation, and more templates. Audio follow-ups: trimming and offsets
+for narration, crossfaded music loops, per-scene timing cues, and accepting
+MP3s with cover art by ignoring the picture.
 
-## 12. Code map
+## 13. Code map
 
 ```
 assets/fonts/inter/            Inter Bold + Medium (OFL 1.1) for captions
@@ -425,7 +562,7 @@ src/lib/video/                 shared, client-safe
   types.ts                     ProductInfo, MediaAsset, VideoScene, Caption, VideoSettings, VideoProject
   ids.ts                       RenderJobId / AssetId: generation + strict patterns
   render-job.ts                job states, transitions, RenderOutput, RenderProgress
-  render-api.ts                HTTP contract: endpoints, request/status shapes
+  render-api.ts                HTTP contract: endpoints, request/status shapes (incl. audio)
   validation.ts                all input validation
   storyboard.ts                storyboard template + duration fitting
   capabilities.ts              capability report types, required filters
@@ -437,7 +574,9 @@ src/server/                    server-only (import "server-only")
   http/render-errors.ts        error → HTTP response mapping
   video/ffmpeg-capabilities.ts detection, parsing, encoder test encodes, cache
   video/ffmpeg-command.ts      layout, caption wrapping, escaping, argument arrays
-  video/ffprobe.ts             probe arguments, upload/output verification, progress parser
+  video/ffprobe.ts             probe arguments, image/audio/output verification, progress parser
+  video/audio-command.ts       loudness measurement, audio mix/mux arguments, AAC options
+  video/audio-sniff.ts         byte-level MP3/WAV/M4A identification
   video/font-metrics.ts        TrueType cmap/hmtx parsing, glyph coverage, widths
   video/project.ts             trusted project reconstruction
   video/render-service.ts      one render: compose → encode → verify → publish
@@ -448,6 +587,6 @@ src/server/                    server-only (import "server-only")
 src/app/api/studio/pixel/      capabilities, jobs, assets, render, status, video routes
 src/components/studio/pixel/   studio UI, render panel, use-render-job hook
 tests/*.test.ts                unit tests (FFmpeg mocked)
-tests/integration/             real-FFmpeg integration test (yarn test:integration)
+tests/integration/             real-FFmpeg integration tests: video and the four audio modes
 e2e/pixel-*.spec.ts            Playwright: UI (mocked FFmpeg) and real rendering
 ```

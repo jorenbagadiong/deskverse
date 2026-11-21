@@ -9,6 +9,11 @@ import {
   ImagePicker,
   type StudioImage,
 } from "@/components/studio/pixel/image-picker"
+import {
+  AudioSection,
+  NO_AUDIO,
+  type StudioAudio,
+} from "@/components/studio/pixel/audio-section"
 import { RenderPanel } from "@/components/studio/pixel/render-panel"
 import { StoryboardPreview } from "@/components/studio/pixel/storyboard-preview"
 import { TextField } from "@/components/studio/pixel/text-field"
@@ -27,9 +32,11 @@ import {
   BENEFIT_COUNT,
   DEFAULT_DISCLOSURE,
   MEDIA_LIMITS,
+  MODE_NEEDS,
   normalizeText,
   TEXT_LIMITS,
   validateProduct,
+  validateVoiceoverFits,
   type ValidationIssue,
 } from "@/lib/video/validation"
 
@@ -46,6 +53,9 @@ const FIELD_IDS: Record<string, string> = {
   callToAction: "call-to-action",
   disclosure: "affiliate-disclosure",
   images: IMAGES_FIELD,
+  "audio.mode": "audio-mode",
+  "audio.voiceover": "audio-voiceover",
+  "audio.music": "audio-music",
 }
 
 const benefitFieldId = (row: BenefitRow) => `benefit-${row.key}`
@@ -60,6 +70,11 @@ export function PixelStudio() {
   const [touched, setTouched] = useState<ReadonlySet<string>>(new Set())
   const [attempts, setAttempts] = useState(0)
   const [ffmpegReady, setFfmpegReady] = useState(false)
+  const [audio, setAudio] = useState<StudioAudio>(NO_AUDIO)
+  const [audioAvailability, setAudioAvailability] = useState<{
+    ready: boolean
+    reason: string | null
+  }>({ ready: false, reason: null })
   const nextBenefitKey = useRef(2)
   const summaryRef = useRef<HTMLDivElement>(null)
   const pendingFocus = useRef<string | null>(null)
@@ -77,43 +92,6 @@ export function PixelStudio() {
       }),
     [name, headline, benefits, callToAction, disclosure],
   )
-  const issues: ValidationIssue[] = useMemo(() => {
-    const list = productResult.ok ? [] : [...productResult.issues]
-    // Keep the summary in form order: the image picker follows the name.
-    if (images.length < MEDIA_LIMITS.minCount)
-      list.splice(list[0]?.path === "name" ? 1 : 0, 0, {
-        path: "images",
-        message: `Add at least ${MEDIA_LIMITS.minCount} product images (${images.length} added).`,
-      })
-    return list
-  }, [productResult, images.length])
-  const errorFor = (path: string) =>
-    attempts > 0 || touched.has(path)
-      ? issues.find((issue) => issue.path === path)?.message
-      : undefined
-  const touch = (path: string) =>
-    setTouched((current) =>
-      current.has(path) ? current : new Set(current).add(path),
-    )
-  const complete = issues.length === 0
-  const render = useRenderJob()
-  const canRender = complete && ffmpegReady && productResult.ok
-
-  function startRender() {
-    if (!canRender || !productResult.ok || render.busy) return
-    // The server re-validates the text and rebuilds the storyboard itself.
-    void render.start(productResult.value, images)
-  }
-
-  const fieldIdFor = (path: string) => {
-    const benefit = /^benefits\.(\d+)$/.exec(path)
-    if (benefit) {
-      const row = benefits[Number(benefit[1])]
-      return row ? benefitFieldId(row) : FIELD_IDS.benefits
-    }
-    return FIELD_IDS[path] ?? FIELD_IDS.name
-  }
-
   // --- Storyboard (placeholders fill empty fields so the preview always shows) --
 
   const scenes = useMemo(
@@ -132,6 +110,69 @@ export function PixelStudio() {
       ),
     [name, headline, benefits, callToAction, disclosure, images],
   )
+  const issues: ValidationIssue[] = useMemo(() => {
+    const list = productResult.ok ? [] : [...productResult.issues]
+    // Keep the summary in form order: the image picker follows the name.
+    if (images.length < MEDIA_LIMITS.minCount)
+      list.splice(list[0]?.path === "name" ? 1 : 0, 0, {
+        path: "images",
+        message: `Add at least ${MEDIA_LIMITS.minCount} product images (${images.length} added).`,
+      })
+    // Audio (DV-003C): files the chosen mode needs, and narration that fits.
+    const needs = MODE_NEEDS[audio.mode]
+    if (audio.mode !== "none" && !audioAvailability.ready)
+      list.push({
+        path: "audio.mode",
+        message: `Audio can't be added on this computer: ${audioAvailability.reason ?? "FFmpeg isn't ready yet."} Choose No audio.`,
+      })
+    if (needs.voiceover && !audio.voiceover)
+      list.push({
+        path: "audio.voiceover",
+        message: "Add a voiceover file, or choose a different audio option.",
+      })
+    if (needs.music && !audio.music)
+      list.push({
+        path: "audio.music",
+        message:
+          "Add a background music file, or choose a different audio option.",
+      })
+    if (needs.voiceover && audio.voiceover?.durationSeconds != null) {
+      const fits = validateVoiceoverFits(
+        audio.voiceover.durationSeconds,
+        storyboardFrames(scenes),
+        "audio.voiceover",
+      )
+      if (!fits.ok) list.push(...fits.issues)
+    }
+    return list
+  }, [productResult, images.length, audio, audioAvailability, scenes])
+  const errorFor = (path: string) =>
+    attempts > 0 || touched.has(path)
+      ? issues.find((issue) => issue.path === path)?.message
+      : undefined
+  const touch = (path: string) =>
+    setTouched((current) =>
+      current.has(path) ? current : new Set(current).add(path),
+    )
+  const complete = issues.length === 0
+  const render = useRenderJob()
+  const canRender = complete && ffmpegReady && productResult.ok
+
+  function startRender() {
+    if (!canRender || !productResult.ok || render.busy) return
+    // The server re-validates the text and rebuilds the storyboard itself.
+    void render.start(productResult.value, images, audio)
+  }
+
+  const fieldIdFor = (path: string) => {
+    const benefit = /^benefits\.(\d+)$/.exec(path)
+    if (benefit) {
+      const row = benefits[Number(benefit[1])]
+      return row ? benefitFieldId(row) : FIELD_IDS.benefits
+    }
+    return FIELD_IDS[path] ?? FIELD_IDS.name
+  }
+
   const imageUrls = useMemo(
     () => new Map(images.map((image) => [image.id as string, image.url])),
     [images],
@@ -144,9 +185,15 @@ export function PixelStudio() {
   useEffect(() => {
     imagesRef.current = images
   }, [images])
+  const audioRef = useRef(audio)
+  useEffect(() => {
+    audioRef.current = audio
+  }, [audio])
   useEffect(
     () => () => {
       for (const image of imagesRef.current) URL.revokeObjectURL(image.url)
+      for (const file of [audioRef.current.voiceover, audioRef.current.music])
+        if (file) URL.revokeObjectURL(file.url)
     },
     [],
   )
@@ -330,6 +377,30 @@ export function PixelStudio() {
 
         <Card>
           <CardHeader>
+            <h2 className="text-title">Audio</h2>
+            <CardDescription>
+              Optional voiceover and background music from your own files. Mixed
+              into the video on this computer.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <AudioSection
+              audio={audio}
+              onChange={(next) => {
+                setAudio(next)
+                touch("audio.voiceover")
+                touch("audio.music")
+              }}
+              available={audioAvailability.ready}
+              unavailableReason={audioAvailability.reason}
+              videoSeconds={storyboardFrames(scenes) / 30}
+              errorFor={errorFor}
+            />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
             <h2 className="text-title">Disclosure</h2>
             <CardDescription>
               Shown at the top of every scene. Affiliate content must tell
@@ -434,7 +505,7 @@ export function PixelStudio() {
               <CardDescription>Fixed for this version.</CardDescription>
             </CardHeader>
             <CardContent>
-              <FormatSummary />
+              <FormatSummary withAudio={audio.mode !== "none"} />
             </CardContent>
           </Card>
 
@@ -447,7 +518,18 @@ export function PixelStudio() {
             </CardHeader>
             <CardContent>
               <FfmpegStatus
-                onStatus={(status) => setFfmpegReady(status === "ready")}
+                onStatus={(status, report) => {
+                  setFfmpegReady(status === "ready")
+                  setAudioAvailability({
+                    ready: status === "ready" && report?.audio.ready === true,
+                    reason:
+                      report === null
+                        ? "FFmpeg couldn't be checked."
+                        : status !== "ready"
+                          ? "FFmpeg isn't ready."
+                          : report.audio.reason,
+                  })
+                }}
               />
             </CardContent>
           </Card>
@@ -469,6 +551,14 @@ export function PixelStudio() {
                 },
                 { label: "Storyboard complete", met: complete },
                 { label: "FFmpeg ready on this computer", met: ffmpegReady },
+                ...(audio.mode !== "none"
+                  ? [
+                      {
+                        label: "Audio files ready",
+                        met: !issues.some((i) => i.path.startsWith("audio.")),
+                      },
+                    ]
+                  : []),
               ]}
               canRender={canRender}
               busy={render.busy}

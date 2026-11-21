@@ -1,11 +1,12 @@
 import "server-only"
 
 import {
-  MIN_TOTAL_FRAMES,
+  AUDIO_OUTPUT,
   MAX_TOTAL_FRAMES,
+  MIN_TOTAL_FRAMES,
   VIDEO_FORMAT,
 } from "@/lib/video/format"
-import type { ImageMimeType } from "@/lib/video/types"
+import type { AudioContainer, ImageMimeType } from "@/lib/video/types"
 
 /**
  * FFprobe/FFmpeg checks, split into argument builders (fixed arrays) and pure
@@ -88,6 +89,152 @@ export function parseImageProbe(
 }
 
 // ---------------------------------------------------------------------------
+// Uploaded audio (DV-003C)
+// ---------------------------------------------------------------------------
+
+/** The demuxer each sniffed container must open with (no format guessing). */
+export const AUDIO_DEMUXER: Record<AudioContainer, string> = {
+  mp3: "mp3",
+  wav: "wav",
+  m4a: "mov",
+}
+
+/** Decoders accepted per container (FFprobe codec names). */
+const AUDIO_CODECS: Record<AudioContainer, readonly string[]> = {
+  mp3: ["mp3"],
+  wav: ["pcm_s16le", "pcm_s24le", "pcm_s32le", "pcm_f32le", "pcm_u8"],
+  m4a: ["aac", "alac"],
+}
+
+export function audioProbeArgs(filePath: string, container: AudioContainer) {
+  return [
+    ...QUIET,
+    "-protocol_whitelist",
+    "file",
+    "-f",
+    AUDIO_DEMUXER[container],
+    "-show_entries",
+    "stream=index,codec_type,codec_name,sample_rate,channels,duration:stream_disposition=attached_pic:format=format_name,duration",
+    "-of",
+    "json",
+    `file:${filePath}`,
+  ]
+}
+
+/** Decodes the whole audio stream and discards it: proves it decodes. */
+export function audioDecodeArgs(filePath: string, container: AudioContainer) {
+  return [
+    "-nostdin",
+    ...QUIET,
+    "-protocol_whitelist",
+    "file",
+    "-xerror",
+    "-f",
+    AUDIO_DEMUXER[container],
+    "-i",
+    `file:${filePath}`,
+    "-map",
+    "0:a:0",
+    "-f",
+    "null",
+    "-",
+  ]
+}
+
+export interface ProbedAudio {
+  codec: string
+  durationSeconds: number
+  sampleRate: number
+  channels: number
+}
+
+/**
+ * Checks an uploaded audio file's probe: the right container, exactly one
+ * audio stream with an accepted codec, and nothing else (no video, cover
+ * art, subtitles, data or attachments).
+ */
+export function parseAudioProbe(
+  stdout: string,
+  container: AudioContainer,
+): ProbeCheck<ProbedAudio> {
+  let json: {
+    streams?: (Record<string, unknown> & {
+      disposition?: Record<string, unknown>
+    })[]
+    format?: Record<string, unknown>
+  }
+  try {
+    json = JSON.parse(stdout)
+  } catch {
+    return { ok: false, reason: "FFprobe couldn't read it." }
+  }
+  const streams = json.streams ?? []
+  const formatNames = String(json.format?.format_name ?? "").split(",")
+  if (!formatNames.includes(AUDIO_DEMUXER[container]))
+    return {
+      ok: false,
+      reason: "its contents don't match an MP3, WAV or M4A file.",
+    }
+  const pictures = streams.filter((s) => s.codec_type === "video")
+  if (pictures.some((s) => s.disposition?.attached_pic === 1))
+    return {
+      ok: false,
+      reason:
+        "it contains embedded cover art. Export the audio without artwork and try again.",
+    }
+  if (pictures.length > 0)
+    return {
+      ok: false,
+      reason: "it contains video. Upload an audio-only file.",
+    }
+  const others = streams.filter((s) => s.codec_type !== "audio")
+  if (others.length > 0)
+    return {
+      ok: false,
+      reason: `it contains an extra ${String(others[0].codec_type)} stream. Upload a plain audio file.`,
+    }
+  const audio = streams.filter((s) => s.codec_type === "audio")
+  if (audio.length === 0) return { ok: false, reason: "it has no audio." }
+  if (audio.length > 1)
+    return { ok: false, reason: "it has more than one audio track." }
+  const a = audio[0]
+  const codec = String(a.codec_name)
+  if (!AUDIO_CODECS[container].includes(codec))
+    return {
+      ok: false,
+      reason: `its audio codec (${codec}) isn't supported in this format.`,
+    }
+  const durationSeconds = Number(a.duration ?? json.format?.duration)
+  const sampleRate = Number(a.sample_rate)
+  const channels = Number(a.channels)
+  if (
+    !Number.isFinite(durationSeconds) ||
+    !Number.isFinite(sampleRate) ||
+    !Number.isInteger(channels)
+  )
+    return { ok: false, reason: "its duration or format couldn't be read." }
+  return { ok: true, value: { codec, durationSeconds, sampleRate, channels } }
+}
+
+/** Decodes the finished video's audio track fully (playback check). */
+export function outputAudioDecodeArgs(filePath: string) {
+  return [
+    "-nostdin",
+    ...QUIET,
+    "-protocol_whitelist",
+    "file",
+    "-xerror",
+    "-i",
+    `file:${filePath}`,
+    "-map",
+    "0:a:0",
+    "-f",
+    "null",
+    "-",
+  ]
+}
+
+// ---------------------------------------------------------------------------
 // Finished video
 // ---------------------------------------------------------------------------
 
@@ -97,7 +244,7 @@ export function outputProbeArgs(filePath: string) {
     "-protocol_whitelist",
     "file",
     "-show_entries",
-    "format=format_name,duration,size:format_tags=major_brand:stream=index,codec_type,codec_name,width,height,pix_fmt,r_frame_rate,avg_frame_rate,nb_frames",
+    "format=format_name,duration,size:format_tags=major_brand:stream=index,codec_type,codec_name,profile,width,height,pix_fmt,r_frame_rate,avg_frame_rate,nb_frames,sample_rate,channels,duration,bit_rate",
     "-of",
     "json",
     `file:${filePath}`,
@@ -113,7 +260,19 @@ export interface VerifiedOutput {
   videoCodec: string
   pixelFormat: string
   frames: number | null
+  /** The verified AAC stream, or null for a silent video. */
+  audio: {
+    codec: "aac"
+    profile: string
+    sampleRate: number
+    channels: number
+    bitRate: number | null
+    durationSeconds: number
+  } | null
 }
+
+/** Video and audio stream lengths may differ from the storyboard by this much. */
+export const DURATION_TOLERANCE_SECONDS = 0.1
 
 /** ISO base media brands written by FFmpeg's mp4 muxer (not QuickTime "qt  "). */
 const MP4_BRANDS = new Set([
@@ -141,6 +300,7 @@ function rate(value: unknown) {
 export function verifyOutputProbe(
   stdout: string,
   expectedFrames: number,
+  { expectAudio = false }: { expectAudio?: boolean } = {},
 ): { ok: true; value: VerifiedOutput } | { ok: false; problems: string[] } {
   let json: {
     format?: Record<string, unknown> & { tags?: Record<string, unknown> }
@@ -169,7 +329,14 @@ export function verifyOutputProbe(
   if (!(sizeBytes > 0)) problems.push("the file is empty")
   if (video.length !== 1)
     problems.push(`expected 1 video stream, found ${video.length}`)
-  if (audio.length > 0) problems.push("unexpected audio track")
+  if (!expectAudio && audio.length > 0) problems.push("unexpected audio track")
+  if (expectAudio && audio.length !== 1)
+    problems.push(`expected 1 audio stream, found ${audio.length}`)
+  const others = streams.filter(
+    (s) => s.codec_type !== "video" && s.codec_type !== "audio",
+  )
+  if (others.length > 0)
+    problems.push(`unexpected ${String(others[0].codec_type)} stream`)
 
   const v = video[0] ?? {}
   if (v.codec_name !== VIDEO_FORMAT.videoCodec)
@@ -197,7 +364,7 @@ export function verifyOutputProbe(
       duration > MAX_TOTAL_FRAMES / VIDEO_FORMAT.fps + 0.05
     )
       problems.push(`duration ${duration.toFixed(2)} s is outside 15–30 s`)
-    if (Math.abs(duration - expectedSeconds) > 0.1)
+    if (Math.abs(duration - expectedSeconds) > DURATION_TOLERANCE_SECONDS)
       problems.push(
         `duration ${duration.toFixed(2)} s doesn't match the storyboard's ${expectedSeconds.toFixed(2)} s`,
       )
@@ -206,10 +373,43 @@ export function verifyOutputProbe(
   if (frames !== null && frames !== expectedFrames)
     problems.push(`${frames} frames instead of ${expectedFrames}`)
 
+  let verifiedAudio: VerifiedOutput["audio"] = null
+  if (expectAudio && audio.length === 1) {
+    const a = audio[0]
+    if (a.codec_name !== AUDIO_OUTPUT.codec)
+      problems.push(`audio codec is ${String(a.codec_name)}, not AAC`)
+    if (a.profile !== AUDIO_OUTPUT.profile)
+      problems.push(`AAC profile is ${String(a.profile)}, not LC`)
+    if (Number(a.sample_rate) !== AUDIO_OUTPUT.sampleRate)
+      problems.push(
+        `audio sample rate is ${String(a.sample_rate)} Hz, not 48000`,
+      )
+    if (a.channels !== AUDIO_OUTPUT.channels)
+      problems.push(`audio has ${String(a.channels)} channels, not stereo`)
+    const audioSeconds = Number(a.duration)
+    if (
+      !Number.isFinite(audioSeconds) ||
+      Math.abs(audioSeconds - expectedSeconds) > DURATION_TOLERANCE_SECONDS
+    )
+      problems.push(
+        `audio lasts ${Number.isFinite(audioSeconds) ? audioSeconds.toFixed(2) : "?"} s, not the video's ${expectedSeconds.toFixed(2)} s`,
+      )
+    const bitRate = Number(a.bit_rate)
+    verifiedAudio = {
+      codec: "aac",
+      profile: String(a.profile),
+      sampleRate: AUDIO_OUTPUT.sampleRate,
+      channels: AUDIO_OUTPUT.channels,
+      bitRate: Number.isFinite(bitRate) && bitRate > 0 ? bitRate : null,
+      durationSeconds: Math.round(audioSeconds * 1000) / 1000,
+    }
+  }
+
   if (problems.length > 0) return { ok: false, problems }
   return {
     ok: true,
     value: {
+      audio: verifiedAudio,
       durationSeconds: Math.round(duration * 1000) / 1000,
       sizeBytes,
       width: VIDEO_FORMAT.width,

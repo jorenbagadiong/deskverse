@@ -382,6 +382,8 @@ test.describe("Pixel Studio", () => {
             (labelledBy && document.getElementById(labelledBy)?.textContent) ||
             (el.id &&
               document.querySelector(`label[for="${el.id}"]`)?.textContent) ||
+            // Implicit label: a control inside its <label> (HTML spec).
+            el.closest("label")?.textContent ||
             el.textContent
           return !name?.trim()
         })

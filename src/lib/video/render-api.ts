@@ -5,7 +5,13 @@ import type {
   RenderOutput,
   RenderProgress,
 } from "@/lib/video/render-job"
-import type { ImageMimeType, ProductInfo } from "@/lib/video/types"
+import type {
+  AudioConfig,
+  AudioContainer,
+  AudioRole,
+  ImageMimeType,
+  ProductInfo,
+} from "@/lib/video/types"
 
 /**
  * The HTTP contract between Pixel Studio and the local render endpoints.
@@ -13,6 +19,7 @@ import type { ImageMimeType, ProductInfo } from "@/lib/video/types"
  *
  *   POST /api/studio/pixel/jobs                       → { jobId }            create a draft
  *   POST /api/studio/pixel/jobs/:jobId/assets         raw image bytes        upload one image
+ *   POST /api/studio/pixel/jobs/:jobId/audio?role=voiceover|music  raw audio  upload audio (DV-003C)
  *   POST /api/studio/pixel/jobs/:jobId/render         RenderRequest (JSON)   queue the render
  *   GET  /api/studio/pixel/jobs/:jobId                → RenderJobStatus      poll
  *   GET  /api/studio/pixel/jobs/:jobId/video[?download=1]                    verified MP4 only
@@ -23,6 +30,8 @@ export const jobEndpoint = (id: string) =>
   `${JOBS_ENDPOINT}/${encodeURIComponent(id)}`
 export const assetsEndpoint = (id: string) => `${jobEndpoint(id)}/assets`
 export const renderEndpoint = (id: string) => `${jobEndpoint(id)}/render`
+export const audioEndpoint = (id: string, role: AudioRole) =>
+  `${jobEndpoint(id)}/audio?role=${role}`
 export const videoEndpoint = (id: string, download = false) =>
   `${jobEndpoint(id)}/video${download ? "?download=1" : ""}`
 
@@ -34,6 +43,19 @@ export interface RenderRequest {
   product: ProductInfo
   /** Uploaded image IDs of this job, in storyboard order (first = hero). */
   assetIds: AssetId[]
+  /** Optional (DV-003C): omitted or mode "none" renders a silent video. */
+  audio?: AudioConfig
+}
+
+export interface UploadedAudio {
+  id: AssetId
+  role: AudioRole
+  displayName: string
+  container: AudioContainer
+  sizeBytes: number
+  durationSeconds: number
+  sampleRate: number
+  channels: number
 }
 
 export interface UploadedAsset {

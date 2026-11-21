@@ -2,9 +2,14 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 
+import type {
+  StudioAudio,
+  StudioAudioFile,
+} from "@/components/studio/pixel/audio-section"
 import type { StudioImage } from "@/components/studio/pixel/image-picker"
 import {
   assetsEndpoint,
+  audioEndpoint,
   FILE_NAME_HEADER,
   jobEndpoint,
   JOBS_ENDPOINT,
@@ -13,17 +18,31 @@ import {
   type RenderJobStatus,
   type RenderRequest,
   type UploadedAsset,
+  type UploadedAudio,
 } from "@/lib/video/render-api"
-import type { ProductInfo } from "@/lib/video/types"
+import type { AudioRole, ProductInfo } from "@/lib/video/types"
+import { MODE_NEEDS } from "@/lib/video/validation"
 
 export type RenderView =
   | { kind: "idle" }
-  | { kind: "uploading"; uploaded: number; total: number }
+  | {
+      kind: "uploading"
+      uploaded: number
+      total: number
+      what: "images" | "audio"
+    }
   | { kind: "starting" }
   | { kind: "tracking"; status: RenderJobStatus }
   | { kind: "error"; message: string }
 
 const POLL_MS = 1000
+
+/** Browsers sometimes report no type for audio; send a standard one by container. */
+const AUDIO_TYPE: Record<StudioAudioFile["container"], string> = {
+  mp3: "audio/mpeg",
+  wav: "audio/wav",
+  m4a: "audio/mp4",
+}
 
 class ApiFailure extends Error {}
 
@@ -65,11 +84,20 @@ export function useRenderJob() {
   }, [])
 
   const start = useCallback(
-    async (product: ProductInfo, images: readonly StudioImage[]) => {
+    async (
+      product: ProductInfo,
+      images: readonly StudioImage[],
+      audio?: StudioAudio,
+    ) => {
       const run = ++generation.current
       const live = () => generation.current === run
       try {
-        setView({ kind: "uploading", uploaded: 0, total: images.length })
+        setView({
+          kind: "uploading",
+          uploaded: 0,
+          total: images.length,
+          what: "images",
+        })
         const { jobId } = await call<{ jobId: string }>(JOBS_ENDPOINT, {
           method: "POST",
         })
@@ -93,12 +121,57 @@ export function useRenderJob() {
             kind: "uploading",
             uploaded: index + 1,
             total: images.length,
+            what: "images",
           })
+        }
+
+        // Audio (DV-003C): the original files, one request per role.
+        const needs = audio ? MODE_NEEDS[audio.mode] : null
+        const files = (
+          [
+            ["voiceover", needs?.voiceover ? audio?.voiceover : null],
+            ["music", needs?.music ? audio?.music : null],
+          ] as [AudioRole, StudioAudioFile | null | undefined][]
+        ).filter((entry): entry is [AudioRole, StudioAudioFile] => !!entry[1])
+        const audioIds: Partial<Record<AudioRole, UploadedAudio["id"]>> = {}
+        for (const [index, [role, file]] of files.entries()) {
+          if (!live()) return
+          setView({
+            kind: "uploading",
+            uploaded: index,
+            total: files.length,
+            what: "audio",
+          })
+          const { audio: uploaded } = await call<{ audio: UploadedAudio }>(
+            audioEndpoint(jobId, role),
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": file.file.type || AUDIO_TYPE[file.container],
+                [FILE_NAME_HEADER]: encodeURIComponent(file.file.name),
+              },
+              body: file.file,
+            },
+          )
+          audioIds[role] = uploaded.id
         }
 
         if (!live()) return
         setView({ kind: "starting" })
-        const request: RenderRequest = { product, assetIds }
+        const request: RenderRequest = {
+          product,
+          assetIds,
+          ...(audio && audio.mode !== "none"
+            ? {
+                audio: {
+                  mode: audio.mode,
+                  voiceoverAssetId: audioIds.voiceover ?? null,
+                  musicAssetId: audioIds.music ?? null,
+                  musicLevel: audio.musicLevel,
+                },
+              }
+            : {}),
+        }
         let status = await call<RenderJobStatus>(renderEndpoint(jobId), {
           method: "POST",
           headers: { "Content-Type": "application/json" },

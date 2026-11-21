@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { REQUIRED_FILTERS } from "@/lib/video/capabilities"
+import { AUDIO_FILTERS, REQUIRED_FILTERS } from "@/lib/video/capabilities"
 import { checkLocalRequest, isLoopbackHost } from "@/server/http/local-request"
 import {
   classifyRunError,
@@ -70,6 +70,7 @@ const FILTERS = [
   ...REQUIRED_FILTERS.map((f) =>
     filterLine(f, f === "concat" ? "N->N" : "V->V"),
   ),
+  ...AUDIO_FILTERS.map((f) => filterLine(f, "A->A")),
   filterLine("xfade", "VV->V"),
   filterLine("color", "|->V"),
 ].join("\n")
@@ -95,8 +96,10 @@ const healthy: Machine = {
 function fakeRunner(machine: Machine, calls: string[] = []): Runner {
   return async (command, args) => {
     if (args.at(-1) === "-" && args.includes("null")) {
-      const encoder = args[args.indexOf("-c:v") + 1]
-      const key = `encode ${encoder}`
+      // Audio test encodes use -c:a and are keyed "encode-aac <encoder>".
+      const audio = args.includes("-c:a")
+      const encoder = args[args.indexOf(audio ? "-c:a" : "-c:v") + 1]
+      const key = `${audio ? "encode-aac" : "encode"} ${encoder}`
       calls.push(key)
       return machine[key] ?? ok("")
     }
@@ -216,7 +219,7 @@ describe("FFmpeg output parsing", () => {
     expect(filters.has("color")).toBe(true)
     expect(filters.has("=")).toBe(false)
     expect(filters.size).toBe(
-      new Set([...REQUIRED_FILTERS, "xfade", "color"]).size,
+      new Set([...REQUIRED_FILTERS, ...AUDIO_FILTERS, "xfade", "color"]).size,
     )
   })
 })
@@ -352,6 +355,7 @@ describe("capability detection", () => {
       name: "xfade",
       available: false,
       required: false,
+      purpose: "video",
     })
   })
 
@@ -413,8 +417,9 @@ describe("capability detection", () => {
     const calls: string[] = []
     await detectFfmpegCapabilities({ run: fakeRunner(healthy, calls), env: {} })
     expect(calls.sort()).toEqual([
-      // One real test encode: libx264 worked, so nothing else is tried.
+      // One real test encode each: libx264 and aac worked, nothing else tried.
       "encode libx264",
+      "encode-aac aac",
       "ffmpeg -hide_banner -encoders",
       "ffmpeg -hide_banner -filters",
       "ffmpeg -hide_banner -version",
@@ -436,7 +441,7 @@ describe("capability detection", () => {
       { name: "h264_vaapi", hardware: true, works: null },
     ])
     expect(report.issues.map((i) => i.code)).toEqual(["hardware-encoder-only"])
-    expect(calls.filter((c) => c.startsWith("encode"))).toEqual([
+    expect(calls.filter((c) => c.startsWith("encode "))).toEqual([
       "encode libx264",
       "encode h264_nvenc",
     ])
@@ -476,6 +481,77 @@ describe("capability detection", () => {
     expect(report.ffmpeg.problem).toBe("invalid-configuration")
     expect(report.issues[0].code).toBe("invalid-configuration")
     expect(calls.some((c) => c.startsWith("/bin/sh"))).toBe(false)
+  })
+})
+
+describe("audio capability detection (DV-003C)", () => {
+  it("is ready for audio when AAC passes a real test encode and the filters exist", async () => {
+    const report = await detect(healthy)
+    expect(report.aacEncoder).toBe("aac")
+    expect(report.audio).toEqual({
+      ready: true,
+      missingFilters: [],
+      reason: null,
+    })
+    expect(
+      report.filters.filter((f) => f.purpose === "audio").map((f) => f.name),
+    ).toEqual([...AUDIO_FILTERS])
+  })
+
+  it("doesn't trust a listed AAC encoder that fails, and keeps silent rendering ready", async () => {
+    const report = await detect({ ...healthy, "encode-aac aac": encodeFails })
+    expect(report.status).toBe("ready")
+    expect(report.selectedH264Encoder).toBe("libx264")
+    expect(report.aacEncoder).toBeNull()
+    expect(report.audio.ready).toBe(false)
+    expect(report.audio.reason).toMatch(/failed a test encode/)
+    expect(report.issues).toEqual([
+      expect.objectContaining({
+        code: "no-aac-encoder",
+        severity: "warning",
+        message: expect.stringMatching(/Silent videos still render/),
+      }),
+    ])
+  })
+
+  it("falls back to another AAC encoder when the native one fails", async () => {
+    const report = await detect({
+      ...healthy,
+      "ffmpeg -hide_banner -encoders": ok(
+        ` ------\n V....D libx264  libx264 H.264 (codec h264)\n A....D aac  AAC (Advanced Audio Coding)\n A....D libfdk_aac  Fraunhofer FDK AAC (codec aac)\n`,
+      ),
+      "encode-aac aac": encodeFails,
+    })
+    expect(report.aacEncoder).toBe("libfdk_aac")
+    expect(report.audio.ready).toBe(true)
+  })
+
+  it("disables only audio when audio filters are missing", async () => {
+    const report = await detect({
+      ...healthy,
+      "ffmpeg -hide_banner -filters": ok(
+        FILTERS.split("\n")
+          .filter((line) => !/ (loudnorm|sidechaincompress) /.test(line))
+          .join("\n"),
+      ),
+    })
+    expect(report.status).toBe("ready")
+    expect(report.audio).toEqual({
+      ready: false,
+      missingFilters: ["loudnorm", "sidechaincompress"],
+      reason: expect.stringMatching(
+        /missing audio filters \(loudnorm, sidechaincompress\)/,
+      ),
+    })
+    expect(report.issues.map((i) => [i.code, i.severity])).toEqual([
+      ["audio-unavailable", "warning"],
+    ])
+  })
+
+  it("reports audio as unavailable when FFmpeg is missing", async () => {
+    const report = await detect({})
+    expect(report.audio.ready).toBe(false)
+    expect(report.audio.reason).toMatch(/FFmpeg isn't available/)
   })
 })
 

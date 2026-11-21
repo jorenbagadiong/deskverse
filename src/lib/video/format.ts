@@ -16,11 +16,26 @@ export const VIDEO_FORMAT = {
   pixelFormat: "yuv420p",
   minDurationSeconds: 15,
   maxDurationSeconds: 30,
-  /** Audio (voice-over, music) is deferred until DV-003C. */
+  /** Default: silent. Optional voiceover/music since DV-003C (AUDIO_OUTPUT). */
   audio: "none",
 } as const
 
 export type VideoFormat = typeof VIDEO_FORMAT
+
+/**
+ * The one audio output format (DV-003C), used whenever a video has audio:
+ * AAC-LC, 48 kHz, stereo, 192 kb/s target, at most one audio stream.
+ */
+export const AUDIO_OUTPUT = {
+  codec: "aac",
+  profile: "LC",
+  sampleRate: 48_000,
+  channels: 2,
+  bitrate: 192_000,
+} as const
+
+/** 48 000 Hz / 30 fps: audio samples per video frame (exact). */
+export const SAMPLES_PER_FRAME = AUDIO_OUTPUT.sampleRate / VIDEO_FORMAT.fps
 
 /** Per-scene bounds: long enough to read a caption, short enough to keep pace. */
 export const SCENE_DURATION = {

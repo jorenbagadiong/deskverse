@@ -3,6 +3,7 @@ import type { Page } from "@playwright/test"
 import { deflateSync, crc32 } from "node:zlib"
 
 import {
+  AUDIO_FILTERS,
   REQUIRED_FILTERS,
   type FfmpegCapabilityReport,
 } from "../src/lib/video/capabilities"
@@ -16,24 +17,37 @@ import {
 export const STUDIO_PATH = "/studio/pixel"
 const ENDPOINT = "**/api/studio/pixel/capabilities**"
 
-const filters = REQUIRED_FILTERS.map((name) => ({
-  name: name as string,
-  available: true,
-  required: true,
-}))
+const filters = [
+  ...REQUIRED_FILTERS.map((name) => ({
+    name: name as string,
+    available: true,
+    required: true,
+    purpose: "video" as const,
+  })),
+  ...AUDIO_FILTERS.map((name) => ({
+    name: name as string,
+    available: true,
+    required: true,
+    purpose: "audio" as const,
+  })),
+]
 
 export const READY_REPORT: FfmpegCapabilityReport = {
   status: "ready",
   checkedAt: "2026-11-21T00:00:00.000Z",
   ffmpeg: { available: true, version: "6.1.1-3ubuntu5", problem: null },
   ffprobe: { available: true, version: "6.1.1-3ubuntu5", problem: null },
-  filters: [...filters, { name: "xfade", available: true, required: false }],
+  filters: [
+    ...filters,
+    { name: "xfade", available: true, required: false, purpose: "video" },
+  ],
   h264Encoders: [
     { name: "libx264", hardware: false, works: true },
     { name: "h264_nvenc", hardware: true, works: null },
   ],
   selectedH264Encoder: "libx264",
   aacEncoder: "aac",
+  audio: { ready: true, missingFilters: [], reason: null },
   license: "gpl",
   issues: [],
 }
@@ -47,6 +61,11 @@ export const MISSING_REPORT: FfmpegCapabilityReport = {
   h264Encoders: [],
   selectedH264Encoder: null,
   aacEncoder: null,
+  audio: {
+    ready: false,
+    missingFilters: [],
+    reason: "FFmpeg isn't available, so audio can't be added.",
+  },
   license: "unknown",
   issues: [
     {
@@ -200,4 +219,54 @@ export async function fillValidStoryboard(page: Page) {
     },
   ])
   await page.getByRole("img", { name: /Product image 3/ }).waitFor()
+}
+
+/** A real 16-bit PCM WAV sine tone built in Node (no rights issues). */
+export function makeWavNode(
+  seconds: number,
+  {
+    frequency = 300,
+    sampleRate = 44100,
+    channels = 1,
+    amplitude = 0.3,
+    silenceBefore = 0,
+  } = {},
+) {
+  const frames = Math.round(seconds * sampleRate)
+  const data = Buffer.alloc(frames * channels * 2)
+  for (let i = 0; i < frames; i++) {
+    const t = i / sampleRate
+    const value =
+      t < silenceBefore
+        ? 0
+        : Math.round(amplitude * 32767 * Math.sin(2 * Math.PI * frequency * t))
+    for (let c = 0; c < channels; c++)
+      data.writeInt16LE(value, (i * channels + c) * 2)
+  }
+  const header = Buffer.alloc(44)
+  header.write("RIFF", 0, "ascii")
+  header.writeUInt32LE(36 + data.length, 4)
+  header.write("WAVEfmt ", 8, "ascii")
+  header.writeUInt32LE(16, 16)
+  header.writeUInt16LE(1, 20) // PCM
+  header.writeUInt16LE(channels, 22)
+  header.writeUInt32LE(sampleRate, 24)
+  header.writeUInt32LE(sampleRate * channels * 2, 28)
+  header.writeUInt16LE(channels * 2, 32)
+  header.writeUInt16LE(16, 34)
+  header.write("data", 36, "ascii")
+  header.writeUInt32LE(data.length, 40)
+  return Buffer.concat([header, data])
+}
+
+/** A report where video works but audio doesn't (no working AAC encoder). */
+export const SILENT_ONLY_REPORT: FfmpegCapabilityReport = {
+  ...READY_REPORT,
+  aacEncoder: null,
+  audio: {
+    ready: false,
+    missingFilters: [],
+    reason:
+      "The AAC encoder (aac) failed a test encode, so videos can only be silent.",
+  },
 }

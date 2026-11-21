@@ -1,8 +1,10 @@
 import { expect, noHorizontalOverflow, test } from "./fixtures"
 import {
   fillValidStoryboard,
+  makeWavNode,
   MISSING_REPORT,
   openStudio,
+  READY_REPORT,
 } from "./pixel-studio-helpers"
 
 /** DV-003A Pixel Studio at phone widths (375px and 360px projects). */
@@ -48,5 +50,26 @@ test.describe("Pixel Studio (mobile)", () => {
     expect(await noHorizontalOverflow(page)).toBeLessThanOrEqual(0)
     const frame = await page.getByTestId("scene-frame").first().boundingBox()
     expect(frame!.width / frame!.height).toBeCloseTo(9 / 16, 2)
+  })
+
+  test("audio section fits with a chosen voiceover and its preview", async ({
+    page,
+  }) => {
+    await openStudio(page, READY_REPORT)
+    await page.getByRole("radio", { name: /^Voiceover \+ music/ }).tap()
+    await page.getByLabel("Voiceover file", { exact: true }).setInputFiles({
+      name: "voice.wav",
+      mimeType: "audio/wav",
+      buffer: makeWavNode(4),
+    })
+    await expect(page.getByLabel("Preview voiceover file")).toBeVisible()
+    await expect(
+      page.getByRole("radio", { name: "Low (recommended)" }),
+    ).toBeVisible()
+    expect(await noHorizontalOverflow(page)).toBeLessThanOrEqual(0)
+    const player = await page.getByLabel("Preview voiceover file").boundingBox()
+    expect(player!.x + player!.width).toBeLessThanOrEqual(
+      page.viewportSize()!.width,
+    )
   })
 })
