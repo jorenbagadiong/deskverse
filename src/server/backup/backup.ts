@@ -879,6 +879,19 @@ export async function restoreBackup({
     target,
   )
 
+  // Orchestrator leases (DV-004C) belong to worker processes of the old
+  // database. Mark them all expired, so no old worker identity can resume
+  // ownership; new workers recover those tasks by the normal lease rules.
+  await withClient(target, "deskverse-restore", async (client) => {
+    const exists = await client.query<{ present: boolean }>(
+      "SELECT to_regclass('public.worker_tasks') IS NOT NULL AS present",
+    )
+    if (exists.rows[0].present)
+      await client.query(
+        "UPDATE worker_tasks SET lease_expires_at = now() WHERE status = 'running'",
+      )
+  })
+
   // Media: copy, then check every checksum of the copies.
   await fs.mkdir(dataRoot, { recursive: true, mode: DIR_MODE })
   const allFiles = [

@@ -36,6 +36,8 @@ import {
  *   POST /restart            restart the app (same database and media)
  *   POST /database/offline   cut and refuse database connections
  *   POST /database/online    accept them again
+ *   POST /worker/stop        stop the orchestrator worker (SIGTERM)
+ *   POST /worker/start       (re)start it
  */
 
 const APP_PORT = Number(process.env.E2E_APP_PORT ?? 3211)
@@ -151,6 +153,8 @@ async function startApp() {
         DATABASE_URL: urlFor(db),
         DATABASE_TEST_URL: "",
         DESKVERSE_DATA_DIR: dataDir,
+        // Deterministic verification runs (DV-004C): this scratch database only.
+        DESKVERSE_ORCHESTRATOR_VERIFICATION: "1",
       },
     },
   )
@@ -167,6 +171,52 @@ async function startApp() {
     await new Promise((r) => setTimeout(r, 250))
   }
   throw new Error("the app didn't start")
+}
+
+/**
+ * A real orchestrator worker process (DV-004C) on the same scratch
+ * database, also through the proxy, so outages reach it too.
+ */
+let worker: ChildProcess | null = null
+function startWorker() {
+  const db: DatabaseConfig = { ...base, database: name, port: PROXY_PORT }
+  worker = spawn(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      "--import",
+      "./scripts/server-only-hook.mjs",
+      "scripts/worker/start.ts",
+    ],
+    {
+      stdio: "inherit",
+      env: {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        DATABASE_URL: urlFor(db),
+        DATABASE_TEST_URL: "",
+        DESKVERSE_ORCHESTRATOR_VERIFICATION: "1",
+        DESKVERSE_WORKER_LEASE_MS: "2000",
+        DESKVERSE_WORKER_POLL_MS: "100",
+        DESKVERSE_ORCHESTRATOR_RETRY_BASE_MS: "200",
+        DESKVERSE_ORCHESTRATOR_RETRY_MAX_MS: "1000",
+        DESKVERSE_WORKER_SHUTDOWN_GRACE_MS: "1000",
+        NODE_ENV: "production",
+      },
+    },
+  )
+}
+
+async function stopWorker() {
+  const running = worker
+  worker = null
+  if (!running || running.exitCode !== null) return
+  await new Promise<void>((resolve) => {
+    running.once("exit", () => resolve())
+    running.kill("SIGTERM")
+    setTimeout(() => running.kill("SIGKILL"), 5_000).unref()
+  })
 }
 
 async function stopApp() {
@@ -193,6 +243,7 @@ function cleanup() {
 
 async function doCleanup() {
   control?.close()
+  await stopWorker()
   await stopApp()
   setOffline(true)
   proxy?.close()
@@ -238,6 +289,10 @@ async function main() {
         else if (action === "/restart") {
           await stopApp()
           await startApp()
+        } else if (action === "/worker/stop") await stopWorker()
+        else if (action === "/worker/start") {
+          await stopWorker()
+          startWorker()
         } else return done(404, { error: "unknown action" })
         done(200, { ok: true, offline })
       } catch (error) {
@@ -250,6 +305,7 @@ async function main() {
   )
   await startProxy()
   await startApp()
+  startWorker()
   console.log(
     `[e2e] app on http://127.0.0.1:${APP_PORT}, control on 127.0.0.1:${CONTROL_PORT}`,
   )

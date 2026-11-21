@@ -10,8 +10,10 @@ DV-004B is **ticket management only**:
 - Nothing is researched, written, rendered, reviewed, scheduled or
   published.
 - Reference links are stored, never opened.
-- A **Ready** ticket is only _eligible_ for future processing (DV-004C
-  onwards).
+- A **Ready** ticket is only _eligible_ for future processing. The
+  orchestrator (DV-004C, [orchestrator.md](orchestrator.md)) can run it once
+  real handlers exist; until then its Workflow section says automation
+  isn't available.
 
 ## Contents
 
@@ -290,4 +292,14 @@ a killed run are removed at the next start.
   server's byte-range streaming there and marks playback "not tested".
 - **Reconciliation is manual** (`yarn tickets:reconcile`); it doesn't run
   on a schedule.
-- **Next: DV-004C, the Durable Campaign Orchestrator.**
+- **Workflow runs (DV-004C)** freeze a copy of the ticket's products when
+  they start. While a run is unfinished:
+  - removing one of its products or files answers **409** with an
+    explanation;
+  - so does archiving the ticket;
+  - edits are still allowed (the run keeps its frozen copy).
+
+  Finished runs release them. See
+  [orchestrator.md §9](orchestrator.md#9-frozen-inputs-and-media-retention).
+
+- **Next: DV-005A, Scout.**

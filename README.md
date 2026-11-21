@@ -100,28 +100,31 @@ move the repo into the Linux home directory.
 
 ## Development commands
 
-| Command                  | What it does                                           |
-| ------------------------ | ------------------------------------------------------ |
-| `yarn dev`               | Start the dev server (Turbopack)                       |
-| `yarn build`             | Production build                                       |
-| `yarn start`             | Serve the production build locally                     |
-| `yarn lint`              | ESLint (Next.js core-web-vitals + TypeScript)          |
-| `yarn typecheck`         | Generate route types, then `tsc --noEmit`              |
-| `yarn format`            | Prettier write (sorts Tailwind classes too)            |
-| `yarn format:check`      | Prettier check                                         |
-| `yarn test`              | Vitest unit tests (office, design, video engine)       |
-| `yarn test:integration`  | Real FFmpeg render tests, video + audio (needs FFmpeg) |
-| `yarn test:db`           | Real PostgreSQL tests on the test database only        |
-| `yarn test:e2e`          | Playwright browser tests (builds + serves locally)     |
-| `yarn test:e2e:db`       | Affiliate Ticket browser tests on a scratch database   |
-| `yarn check`             | lint + typecheck + format check + tests                |
-| `yarn db:migrate`        | Apply versioned migrations to `DATABASE_URL`           |
-| `yarn db:check`          | Read-only database status                              |
-| `yarn db:generate`       | Create a new migration from `src/server/db/schema.ts`  |
-| `yarn db:backup`         | Offline backup: database + Pixel job files + manifest  |
-| `yarn db:backup:verify`  | Re-check a backup's checksums                          |
-| `yarn db:restore`        | Restore into an empty database and a new data folder   |
-| `yarn tickets:reconcile` | Check ticket media against the database (`--apply`)    |
+| Command                    | What it does                                           |
+| -------------------------- | ------------------------------------------------------ |
+| `yarn dev`                 | Start the dev server (Turbopack)                       |
+| `yarn build`               | Production build                                       |
+| `yarn start`               | Serve the production build locally                     |
+| `yarn lint`                | ESLint (Next.js core-web-vitals + TypeScript)          |
+| `yarn typecheck`           | Generate route types, then `tsc --noEmit`              |
+| `yarn format`              | Prettier write (sorts Tailwind classes too)            |
+| `yarn format:check`        | Prettier check                                         |
+| `yarn test`                | Vitest unit tests (office, design, video engine)       |
+| `yarn test:integration`    | Real FFmpeg render tests, video + audio (needs FFmpeg) |
+| `yarn test:db`             | Real PostgreSQL tests on the test database only        |
+| `yarn test:e2e`            | Playwright browser tests (builds + serves locally)     |
+| `yarn test:e2e:db`         | Affiliate Ticket browser tests on a scratch database   |
+| `yarn check`               | lint + typecheck + format check + tests                |
+| `yarn db:migrate`          | Apply versioned migrations to `DATABASE_URL`           |
+| `yarn db:check`            | Read-only database status                              |
+| `yarn db:generate`         | Create a new migration from `src/server/db/schema.ts`  |
+| `yarn db:backup`           | Offline backup: database + Pixel job files + manifest  |
+| `yarn db:backup:verify`    | Re-check a backup's checksums                          |
+| `yarn db:restore`          | Restore into an empty database and a new data folder   |
+| `yarn tickets:reconcile`   | Check ticket media against the database (`--apply`)    |
+| `yarn worker:start`        | Run the orchestrator worker (a separate process)       |
+| `yarn worker:check`        | Read-only worker, database and handler status          |
+| `yarn orchestrator:verify` | 10-product crash verification on a scratch database    |
 
 ## Project structure
 
@@ -165,12 +168,13 @@ src/
     db/                 PostgreSQL config, pool, Drizzle schema, migrations, health, test guards
     backup/             Offline backup, verify and restore (format 2: + ticket media)
     tickets/            Ticket repository (transactions + events), media storage and checks
+    orchestrator/       Runs, frozen inputs, task graph, claims/leases, worker, handlers (DV-004C)
 drizzle/                Versioned SQL migrations (committed)
 scripts/                yarn db:* and tickets:* commands, setup-local.sh, e2e/ database test server
 assets/fonts/inter/     Inter Bold + Medium (SIL OFL 1.1) for video captions
 docs/                   ROADMAP.md, brand-guidelines.md, animation-guidelines.md,
                         3d-office-architecture.md, video-architecture.md, database-architecture.md,
-                        affiliate-tickets.md
+                        affiliate-tickets.md, orchestrator.md
 tests/                  Vitest unit tests (+ integration/: real FFmpeg, db/: real PostgreSQL)
 e2e/                    Playwright browser tests
 ```
@@ -279,6 +283,43 @@ software WebGL and logs a deprecation warning, which the suite treats as a
 failure by design. Everything else passes. Run the office tests where Chrome
 has a GPU (for example native Windows). Details and the exact list:
 [E2E environment notes](docs/e2e-environment.md).
+
+## DV-004C scope: Durable campaign orchestrator ✅
+
+The background engine that will run Affiliate Tickets through Scout →
+Quill → Pixel → Vera, built and proven **without** any real AI work yet.
+
+- **A separate worker process** (`yarn worker:start`) does the work. The
+  web app only plans runs, records pause/resume/cancel/retry requests and
+  shows persisted status.
+- **Everything durable lives in PostgreSQL** (migration
+  `0002_campaign_orchestrator`): runs, immutable per-product input
+  snapshots, the task graph, attempts, leases, results and events.
+- **Safe under concurrency and crashes:**
+  - atomic claims;
+  - leases with fencing tokens, so a late worker can't overwrite a newer
+    result;
+  - one committed result per task;
+  - bounded retries with backoff;
+  - dependency blocking that stops only the failing product;
+  - recovery after a crash or `SIGKILL`;
+  - one render-class task at a time across all workers.
+- **Inputs are frozen** when a run starts. Edits don't change a running
+  run, and a product or file an unfinished run uses can't be removed (409,
+  explained in the page).
+- **Workflow** section on each ticket: it says plainly that **automation
+  isn't available yet** (Scout, Quill, Pixel and Vera arrive in
+  DV-005/006), and shows run status and valid controls.
+- **Proved with deterministic verification runs:**
+  - they run only on isolated test databases and are labelled test-only;
+  - the 10-product crash verification (`yarn orchestrator:verify`) checks
+    recovery, ordering, limits and no duplicate results across real worker
+    processes.
+- **Pixel Studio is unchanged** and still works without PostgreSQL. No
+  ticket rendering path exists yet; DV-005C needs a render gate shared with
+  Pixel Studio first.
+
+Details: [orchestrator](docs/orchestrator.md).
 
 ## DV-004B scope: Affiliate Ticket management ✅
 
@@ -559,9 +600,8 @@ Rendering, uploads and downloads followed in DV-003B (above).
 ## Future milestones
 
 The plan from here is the Affiliate Ticket workflow in
-[docs/ROADMAP.md](docs/ROADMAP.md). Next is **DV-004C: Durable Campaign
-Orchestrator** (task dependencies, worker assignment, retries and restart
-recovery; Pixel renders one video at a time).
+[docs/ROADMAP.md](docs/ROADMAP.md). Next is **DV-005A: Scout** (research),
+the first real handler for the orchestrator.
 Earlier ideas:
 
 - **Remaining AI team.** Quill, Vera, Relay and Ledger join the office using

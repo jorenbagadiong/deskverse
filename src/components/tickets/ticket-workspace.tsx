@@ -22,6 +22,7 @@ import {
   StatusBadge,
 } from "@/components/tickets/fields"
 import { ProductEditor } from "@/components/tickets/product-editor"
+import { WorkflowSection } from "@/components/tickets/workflow-section"
 import {
   draftFromTicket,
   fieldsFromDraft,
@@ -537,6 +538,8 @@ export function TicketWorkspace({ ticketId }: { ticketId: string }) {
           </ol>
         )}
       </section>
+
+      <WorkflowSection ticket={ticket} />
 
       <section
         aria-labelledby="activity-title"

@@ -78,6 +78,7 @@ export type TicketErrorCode =
   | "not-ready"
   | "invalid-transition"
   | "limit"
+  | "in-use"
 
 export class TicketError extends Error {
   constructor(
@@ -309,6 +310,40 @@ function assertVersion(row: TicketRow, version: number) {
     )
 }
 
+/**
+ * DV-004C media retention: while a run that isn't finished holds frozen
+ * inputs for a product, the product, its media and the ticket's archive
+ * state are protected. Checked under the ticket lock, which run planning
+ * also takes, so a snapshot and a removal can't race.
+ */
+const ACTIVE_RUN = sql.raw(
+  `'queued', 'running', 'pausing', 'paused', 'cancelling'`,
+)
+
+async function assertNotInActiveRun(
+  tx: Tx,
+  scope: { ticketId?: string; productId?: string; assetId?: string },
+) {
+  const condition = scope.assetId
+    ? sql`s.data->'product'->'assets' @> jsonb_build_array(jsonb_build_object('id', ${scope.assetId}::text))`
+    : scope.productId
+      ? sql`s.product_id = ${scope.productId}`
+      : sql`r.ticket_id = ${scope.ticketId}`
+  const rows = await tx.execute(
+    sql`SELECT 1 FROM campaign_runs r LEFT JOIN run_product_snapshots s ON s.run_id = r.id
+         WHERE r.status IN (${ACTIVE_RUN}) AND ${condition} LIMIT 1`,
+  )
+  if (rows.rows.length > 0)
+    throw new TicketError(
+      "in-use",
+      scope.assetId
+        ? "This file is part of a workflow run that hasn't finished, so it can't be removed yet. Wait for the run to finish, or cancel it."
+        : scope.productId
+          ? "This product is part of a workflow run that hasn't finished, so it can't be removed yet. Wait for the run to finish, or cancel it."
+          : "This ticket has a workflow run that hasn't finished. Wait for it, or cancel it, before archiving.",
+    )
+}
+
 async function addEvents(tx: Tx, ticketId: string, events: NewEvent[]) {
   if (events.length === 0) return
   await tx.insert(ticketEvents).values(
@@ -431,6 +466,7 @@ export async function changeStatus(
           ? "Restore an archived ticket to Draft first."
           : `A ${from} ticket can't become ${to}.`,
       )
+    if (to === "archived") await assertNotInActiveRun(tx, { ticketId })
     if (to === "ready") {
       const products = await tx
         .select({
@@ -675,6 +711,7 @@ export async function removeProduct(
     const row = await lockTicket(tx, ticketId)
     assertEditable(row)
     await lockProduct(tx, ticketId, productId)
+    await assertNotInActiveRun(tx, { productId })
     const removedAssets = await tx
       .select()
       .from(ticketAssets)
@@ -792,6 +829,7 @@ export async function removeAssetRecord(
     const row = await lockTicket(tx, ticketId)
     assertEditable(row)
     await lockProduct(tx, ticketId, productId)
+    await assertNotInActiveRun(tx, { assetId })
     const [removed] = await tx
       .delete(ticketAssets)
       .where(

@@ -15,6 +15,7 @@ import { createRunner } from "@/server/process/run-executable"
 import { MediaRejected } from "@/server/tickets/media-verify"
 import type { MediaTools } from "@/server/tickets/media-verify"
 import { TicketMediaError } from "@/server/tickets/media"
+import { OrchestratorError } from "@/server/orchestrator/store"
 import { TicketError } from "@/server/tickets/repository"
 import {
   getFfmpegCapabilities,
@@ -130,6 +131,7 @@ const TICKET_STATUS: Record<TicketError["code"], number> = {
   "not-ready": 409,
   "invalid-transition": 409,
   limit: 409,
+  "in-use": 409,
 }
 
 /** Maps any error to a safe JSON response. */
@@ -142,6 +144,16 @@ export function errorResponse(error: unknown): Response {
       error.code,
       error.message,
       error.issues,
+    )
+  if (error instanceof OrchestratorError)
+    return body(
+      error.code === "not-found"
+        ? 404
+        : error.code === "unavailable"
+          ? 503
+          : 409,
+      error.code === "unavailable" ? "capability-unavailable" : error.code,
+      error.message,
     )
   if (error instanceof MediaRejected)
     return body(400, "invalid-media", `${error.message} Nothing was saved.`)

@@ -6,7 +6,8 @@ your own computer:
 - **DV-004A** set up the foundation: installation, configuration,
   migrations, a health check, tests and backups.
 - **DV-004B** added the ticket tables, the ticket media folder and backup
-  format 2. The tickets themselves are documented in
+  format 2.
+- **DV-004C** added the orchestrator tables ([orchestrator.md](orchestrator.md)). The tickets themselves are documented in
   [affiliate-tickets.md](affiliate-tickets.md).
 
 **PostgreSQL isn't needed for Pixel Studio or the office.** They work exactly
@@ -206,15 +207,17 @@ How it works:
 
 Schema:
 
-| Migration                          | Adds                                                                                                                                                             |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `0000_init` (DV-004A)              | `app_metadata (key text PK, value jsonb, created_at, updated_at)` + the `database.initialized` row                                                               |
-| `0001_affiliate_tickets` (DV-004B) | `affiliate_tickets`, `ticket_products`, `ticket_references`, `ticket_assets`, `ticket_events` (see [affiliate-tickets.md §3](affiliate-tickets.md#3-data-model)) |
+| Migration                              | Adds                                                                                                                                                                                                                                                                                      |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0000_init` (DV-004A)                  | `app_metadata (key text PK, value jsonb, created_at, updated_at)` + the `database.initialized` row                                                                                                                                                                                        |
+| `0001_affiliate_tickets` (DV-004B)     | `affiliate_tickets`, `ticket_products`, `ticket_references`, `ticket_assets`, `ticket_events` (see [affiliate-tickets.md §3](affiliate-tickets.md#3-data-model))                                                                                                                          |
+| `0002_campaign_orchestrator` (DV-004C) | `campaign_runs`, `run_product_snapshots`, `worker_tasks`, `task_dependencies`, `task_attempts`, `task_results`, `run_events`, plus triggers keeping snapshots, results and dependencies immutable and refusing dependency cycles (see [orchestrator.md §2](orchestrator.md#2-data-model)) |
 
 `0001` was applied to a fresh scratch database by `yarn test:db` before it
 was applied to the development database. It creates tables only; nothing
-existing is changed. There are still no worker-task, deliverable, approval
-or scheduling tables.
+existing is changed. `0002` was likewise tested on scratch databases (fresh, and on top of
+restored DV-004A/DV-004B backups) before the development database. There
+are no deliverable, approval or scheduling tables yet.
 
 ## 6. Health check
 
@@ -391,6 +394,12 @@ On a fresh machine:
 2. Run `yarn db:restore … --target DATABASE_URL --data-dir
 ~/.local/share/deskverse`. The data folder must not exist yet.
 
+**Orchestrator leases (DV-004C):** after `pg_restore`, every `running` task's
+lease is marked expired. Old worker identities can't resume ownership; new
+workers recover those tasks under the normal rules. Runs, snapshots, tasks
+and results are restored like any other table; the backup format is
+unchanged.
+
 Compatibility:
 
 - `pg_restore` must be the same major version as the dump or newer; the
@@ -484,6 +493,6 @@ another connection is open.
   it only through WSL's localhost forwarding, which isn't needed or
   documented here.
 
-**DV-004B (Affiliate Ticket Management) is built on this foundation.** The
-next milestone is **DV-004C, the Durable Campaign Orchestrator**. See
+**DV-004B (Affiliate Tickets) and DV-004C (the orchestrator) are built on
+this foundation.** The next milestone is **DV-005A, Scout**. See
 [ROADMAP.md](ROADMAP.md).

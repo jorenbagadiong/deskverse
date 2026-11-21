@@ -15,6 +15,13 @@
       "when": 1795272863876,
       "tag": "0001_affiliate_tickets",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1795277773714,
+      "tag": "0002_campaign_orchestrator",
+      "breakpoints": true
     }
   ]
 }

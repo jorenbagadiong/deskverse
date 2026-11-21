@@ -34,6 +34,12 @@ const globalForDb = globalThis as typeof globalThis & {
   __deskverseDb?: Handle
 }
 
+/** The same pool, for code that issues SQL directly (the orchestrator). */
+export function getPool(): pg.Pool {
+  getDatabase()
+  return globalForDb.__deskverseDb!.pool
+}
+
 /** Throws DatabaseUnavailableError (with a safe message) when unconfigured. */
 export function getDatabase(): DeskverseDatabase {
   if (!globalForDb.__deskverseDb) {

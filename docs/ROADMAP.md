@@ -2,7 +2,7 @@
 
 **Version 1.1:** Affiliate Ticket architecture (approved 2026-11-21)
 **Environment:** your own computer, Windows 11 + WSL2 Ubuntu
-**Current milestone:** DV-004B, Affiliate Ticket Management (complete); next is DV-004C
+**Current milestone:** DV-004C, Durable Campaign Orchestrator (complete); next is DV-005A
 
 ## 1. Vision
 
@@ -65,19 +65,20 @@ approval required · one approved video per day._
 
 ## 4. Completed milestones
 
-| Milestone              | Description                    | Status                                                           |
-| ---------------------- | ------------------------------ | ---------------------------------------------------------------- |
-| DV-001                 | Brand and design system        | Complete                                                         |
-| DV-002 / DV-002B       | Interactive 3D office          | Implemented; further phases planned                              |
-| DV-003A                | Pixel Studio foundation        | Complete                                                         |
-| DV-003B                | Real FFmpeg video rendering    | Complete                                                         |
-| DV-003C                | Voiceover and music            | Complete                                                         |
-| DV-003D1               | Render management and recovery | Complete                                                         |
-| DV-003D2               | Cinematic effects and EXIF     | Complete                                                         |
-| DV-003D3               | Audio refinements              | Complete                                                         |
-| WebP compatibility fix | WebP upload validation         | Complete                                                         |
-| DV-004A                | Local PostgreSQL foundation    | Complete (see [database architecture](database-architecture.md)) |
-| DV-004B                | Affiliate Ticket management    | Complete (see [Affiliate Tickets](affiliate-tickets.md))         |
+| Milestone              | Description                    | Status                                                                                                |
+| ---------------------- | ------------------------------ | ----------------------------------------------------------------------------------------------------- |
+| DV-001                 | Brand and design system        | Complete                                                                                              |
+| DV-002 / DV-002B       | Interactive 3D office          | Implemented; further phases planned                                                                   |
+| DV-003A                | Pixel Studio foundation        | Complete                                                                                              |
+| DV-003B                | Real FFmpeg video rendering    | Complete                                                                                              |
+| DV-003C                | Voiceover and music            | Complete                                                                                              |
+| DV-003D1               | Render management and recovery | Complete                                                                                              |
+| DV-003D2               | Cinematic effects and EXIF     | Complete                                                                                              |
+| DV-003D3               | Audio refinements              | Complete                                                                                              |
+| WebP compatibility fix | WebP upload validation         | Complete                                                                                              |
+| DV-004A                | Local PostgreSQL foundation    | Complete (see [database architecture](database-architecture.md))                                      |
+| DV-004B                | Affiliate Ticket management    | Complete (see [Affiliate Tickets](affiliate-tickets.md))                                              |
+| DV-004C                | Durable campaign orchestrator  | Complete: infrastructure, verified with deterministic test runs (see [orchestrator](orchestrator.md)) |
 
 DV-001 to DV-003 are separate from the Affiliate Ticket system they support; DV-004A onwards build it.
 
@@ -103,7 +104,7 @@ reopen all the saved information.
 
 ### Phase 2: Automated workflow
 
-**DV-004C: Durable Campaign Orchestrator** ← next. Task dependencies, worker
+**DV-004C: Durable Campaign Orchestrator** (complete; infrastructure only, proven with deterministic verification runs). Task dependencies, worker
 assignment, bounded concurrency, persistence, cancellation, retries,
 pause/resume and restart recovery. Pixel renders **one video at a time**;
 other workers continue independent work.
@@ -112,7 +113,7 @@ no duplicate outputs after interruption or recovery.
 
 ### Phase 3: Automated content production
 
-- **DV-005A: Scout (research).** Verify product details, retrieve permitted
+- **DV-005A: Scout (research)** ← next. Verify product details, retrieve permitted
   references, capture evidence, identify missing information, and prepare
   structured product briefs.
 - **DV-005B: Quill (scriptwriting).** Hooks, narration, captions, benefits,
