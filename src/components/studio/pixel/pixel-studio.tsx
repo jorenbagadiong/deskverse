@@ -14,6 +14,7 @@ import {
   NO_AUDIO,
   type StudioAudio,
 } from "@/components/studio/pixel/audio-section"
+import { RenderHistory } from "@/components/studio/pixel/render-history"
 import { RenderPanel } from "@/components/studio/pixel/render-panel"
 import { StoryboardPreview } from "@/components/studio/pixel/storyboard-preview"
 import { TextField } from "@/components/studio/pixel/text-field"
@@ -564,6 +565,27 @@ export function PixelStudio() {
               busy={render.busy}
               view={render.view}
               onRender={startRender}
+              canCancel={render.canCancel}
+              onCancel={render.cancel}
+            />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <h2 className="text-title">Render history</h2>
+            <CardDescription>
+              Every render saved on this computer. Preview, download, retry,
+              cancel or delete them, even after reloading the page.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <RenderHistory
+              refreshKey={
+                render.view.kind === "tracking"
+                  ? `${render.view.status.jobId}:${render.view.status.state}`
+                  : render.view.kind
+              }
             />
           </CardContent>
         </Card>

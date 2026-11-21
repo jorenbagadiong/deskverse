@@ -246,6 +246,8 @@ const PROBLEM_FOR_REASON: Record<RunFailureReason, ExecutableProblem> = {
   "timed-out": "timed-out",
   failed: "failed",
   "output-too-large": "unrecognized-output",
+  // Detection is never cancelled; listed for completeness.
+  cancelled: "failed",
 }
 
 async function probeVersion(

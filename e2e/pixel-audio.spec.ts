@@ -150,7 +150,9 @@ test.describe("Pixel Studio audio (FFmpeg mocked)", () => {
     const audioUploads: { role: string | null; type: string }[] = []
     let renderBody: Record<string, unknown> | null = null
     await page.route("**/api/studio/pixel/jobs", (route) =>
-      route.fulfill({ status: 201, json: { jobId } }),
+      route.request().method() !== "POST"
+        ? route.fallback()
+        : route.fulfill({ status: 201, json: { jobId } }),
     )
     let n = 0
     await page.route(`**/api/studio/pixel/jobs/${jobId}/assets`, (route) =>

@@ -285,7 +285,9 @@ test.describe("Pixel Studio", () => {
     let polls = 0
     const uploads: string[] = []
     await page.route("**/api/studio/pixel/jobs", (route) =>
-      route.fulfill({ status: 201, json: { jobId } }),
+      route.request().method() !== "POST"
+        ? route.fallback()
+        : route.fulfill({ status: 201, json: { jobId } }),
     )
     await page.route(`**/api/studio/pixel/jobs/${jobId}/assets`, (route) => {
       uploads.push(route.request().headers()["content-type"])

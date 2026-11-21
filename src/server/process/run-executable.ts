@@ -17,7 +17,13 @@ import { execFile, spawn } from "node:child_process"
  */
 
 export type RunFailureReason =
-  "not-found" | "not-executable" | "timed-out" | "failed" | "output-too-large"
+  | "not-found"
+  | "not-executable"
+  | "timed-out"
+  | "failed"
+  | "output-too-large"
+  /** Stopped on purpose through an AbortSignal (DV-003D1). */
+  | "cancelled"
 
 export type RunResult =
   | { ok: true; stdout: string; stderr: string }
@@ -26,6 +32,8 @@ export type RunResult =
 export type Runner = (
   command: string,
   args: readonly string[],
+  /** Aborting kills the process; the promise settles after it has exited. */
+  options?: { signal?: AbortSignal },
 ) => Promise<RunResult>
 
 export interface RunOptions {
@@ -86,8 +94,13 @@ export function createRunner({
   timeoutMs = 5_000,
   maxOutputBytes = 4 * 1024 * 1024,
 }: RunOptions = {}): Runner {
-  return (command, args) =>
+  return (command, args, { signal } = {}) =>
     new Promise<RunResult>((resolve) => {
+      if (signal?.aborted) {
+        resolve({ ok: false, reason: "cancelled", exitCode: null })
+        return
+      }
+      let aborted = false
       try {
         const child = execFile(
           command,
@@ -102,11 +115,20 @@ export function createRunner({
             // Next.js types mark NODE_ENV as required; the child doesn't need it.
             env: minimalEnvironment() as NodeJS.ProcessEnv,
           },
+          // Runs once the process has exited (or failed to start).
           (error, stdout, stderr) => {
-            if (error) resolve({ ok: false, ...classifyRunError(error) })
+            signal?.removeEventListener("abort", onAbort)
+            if (aborted)
+              resolve({ ok: false, reason: "cancelled", exitCode: null })
+            else if (error) resolve({ ok: false, ...classifyRunError(error) })
             else resolve({ ok: true, stdout, stderr })
           },
         )
+        const onAbort = () => {
+          aborted = true
+          child.kill("SIGKILL")
+        }
+        signal?.addEventListener("abort", onAbort, { once: true })
         // FFmpeg can read keyboard commands from stdin; give it none.
         child.stdin?.end()
       } catch (error) {
@@ -128,6 +150,13 @@ export interface SpawnOptions {
   onStdout?: (chunk: string) => void
   /** Keep at most this much of stderr, for server-side diagnostics only. */
   maxStderrBytes?: number
+  /**
+   * Cancels the process: SIGTERM first (FFmpeg stops cleanly), SIGKILL if
+   * it hasn't exited after `killGraceMs`. The promise settles only once the
+   * process has exited, so callers can clean up safely afterwards.
+   */
+  signal?: AbortSignal
+  killGraceMs?: number
 }
 
 export type SpawnResult =
@@ -147,23 +176,58 @@ export type Spawner = (
 
 /**
  * Streams a long-running tool: stdin is closed ("ignore") so it can never
- * wait for input, stdout is streamed to `onStdout`, stderr is capped, and
- * the process is killed with SIGKILL at the deadline.
+ * wait for input, stdout is streamed to `onStdout`, stderr is capped, the
+ * process is killed with SIGKILL at the deadline, and an AbortSignal stops
+ * it (SIGTERM, then SIGKILL after a grace period).
  */
 export const spawnTool: Spawner = (
   command,
   args,
-  { cwd, timeoutMs, onStdout, maxStderrBytes = 64 * 1024 },
+  {
+    cwd,
+    timeoutMs,
+    onStdout,
+    maxStderrBytes = 64 * 1024,
+    signal,
+    killGraceMs = 2_000,
+  },
 ) =>
   new Promise<SpawnResult>((resolve) => {
+    if (signal?.aborted) {
+      resolve({
+        ok: false,
+        reason: "cancelled",
+        exitCode: null,
+        stderrTail: "",
+      })
+      return
+    }
     let stderr = ""
     let timedOut = false
+    let aborted = false
     let settled = false
+    let forceKill: ReturnType<typeof setTimeout> | undefined
     const finish = (result: SpawnResult) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
-      resolve(result)
+      clearTimeout(forceKill)
+      signal?.removeEventListener("abort", onAbort)
+      resolve(
+        aborted
+          ? {
+              ok: false,
+              reason: "cancelled",
+              exitCode: null,
+              stderrTail: stderr,
+            }
+          : result,
+      )
+    }
+    const onAbort = () => {
+      aborted = true
+      child.kill("SIGTERM")
+      forceKill = setTimeout(() => child.kill("SIGKILL"), killGraceMs)
     }
 
     let child: ReturnType<typeof spawn>
@@ -188,6 +252,7 @@ export const spawnTool: Spawner = (
       timedOut = true
       child.kill("SIGKILL")
     }, timeoutMs)
+    signal?.addEventListener("abort", onAbort, { once: true })
 
     child.stdout?.setEncoding("utf8")
     child.stdout?.on("data", (chunk: string) => onStdout?.(chunk))

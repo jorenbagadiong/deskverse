@@ -11,12 +11,13 @@ team's video creator.
 > joins everything into one MP4. Every pixel and every sound in the output
 > comes from your images, your text and your audio files.
 
-| Phase       | Scope                                                                                     | Status  |
-| ----------- | ----------------------------------------------------------------------------------------- | ------- |
-| **DV-003A** | Environment detection, strict types, validation, storyboard UI, storage foundation        | ✅ Done |
-| **DV-003B** | Real rendering: uploads, server-built projects, FFmpeg renderer, queue, preview, download | ✅ Done |
-| **DV-003C** | Optional voiceover and background music, mixed and encoded as AAC                         | ✅ Done |
-| **DV-003D** | Persistent queue, cancellation, retries, transitions and motion                           | Planned |
+| Phase         | Scope                                                                                     | Status  |
+| ------------- | ----------------------------------------------------------------------------------------- | ------- |
+| **DV-003A**   | Environment detection, strict types, validation, storyboard UI, storage foundation        | ✅ Done |
+| **DV-003B**   | Real rendering: uploads, server-built projects, FFmpeg renderer, queue, preview, download | ✅ Done |
+| **DV-003C**   | Optional voiceover and background music, mixed and encoded as AAC                         | ✅ Done |
+| **DV-003D1**  | Reliable job management: cancel, retry, history, delete, storage, restart recovery        | ✅ Done |
+| **DV-003D2+** | Transitions, motion, templates and audio editing                                          | Planned |
 
 ## 1. FFmpeg and FFprobe
 
@@ -231,8 +232,10 @@ problems.
   belongs to the previous process and is marked `failed` ("interrupted") and
   any partial output is deleted, so nothing half-rendered is reported as
   complete.
-- Startup cleanup removes drafts and failed jobs older than 24 hours.
-  Completed videos stay until you delete them.
+- Cancellation, retry, deletion and restart recovery: see §6 (DV-003D1).
+- Startup cleanup only removes abandoned drafts (uploads never rendered)
+  untouched for 24 hours and stray scratch files. Completed, failed and
+  cancelled jobs are never removed automatically.
 - Timeouts: 60 s per scene and 10 minutes for the encode. The process is
   killed with `SIGKILL` at the deadline. FFmpeg never waits for input (stdin
   is closed and `-nostdin` is set).
@@ -329,7 +332,117 @@ rights issues) and the four-mode benchmark:
 - Looped music keeps its level (0.04 dB drift); the last 0.15 s is more than
   20 dB quieter (fade-out).
 
-## 6. Video output target
+## 6. Job management (DV-003D1)
+
+Pixel Studio keeps every render as a job on disk, so history survives page
+reloads and server restarts. The **Render history** card lists them with the
+actions that make sense for each state, and the **Render** card offers
+**Cancel render** while a render runs.
+
+### Lifecycle
+
+```
+draft ──► queued ──► rendering ──► completed
+  │         │            │
+  │         │            ├──► failed ──► queued   (manual Retry)
+  │         └────────────┴──► cancelled
+  └──► (deleted)          completed / failed / cancelled ──► (deleted)
+```
+
+| State     | Actions in the history    |
+| --------- | ------------------------- |
+| Draft     | Delete                    |
+| Queued    | Cancel                    |
+| Rendering | Cancel                    |
+| Completed | Preview, Download, Delete |
+| Failed    | Retry, Delete             |
+| Cancelled | Delete                    |
+
+Transitions are checked against this table under a per-job lock, and retry
+additionally requires the job to be `failed` at that moment ("expected
+state"), so concurrent requests can't race. Completion, cancellation and
+failure are mutually exclusive: only the queue decides an active job's final
+state. Job files written by DV-003A/B/C are read unchanged.
+
+### Cancellation
+
+- **Queued:** the job leaves the waiting list immediately, becomes
+  `cancelled`, frees its slot and never starts. Its uploads are kept until
+  deleted.
+- **Rendering:** the queue aborts the render's `AbortController`. The signal
+  reaches every FFmpeg/FFprobe call (scene composition, encoding, loudness
+  measurement, audio mixing, verification): `spawn`ed processes get SIGTERM,
+  then SIGKILL if they're still running after 2 s; probes are killed at once.
+  Each runner resolves only after its process has exited, then the scratch
+  directory and any output are removed and the job becomes `cancelled`.
+- **Near completion:** the abort flag is checked right before publishing and
+  again before the `completed` transition. A cancel that arrives after FFmpeg
+  finished but before publication wins (the output is discarded); one that
+  arrives after the job completed is answered with the completed job.
+  `cancelled → completed` is impossible.
+- Cancelling a cancelled job again is harmless; drafts, completed and failed
+  jobs can't be cancelled (409).
+
+### Retry
+
+Only `failed` jobs, including jobs interrupted by a restart. Retry reuses the
+stored images, audio and server-built project (no re-upload) after
+re-validating the project and checking that every file still exists; it
+removes old scratch files and partial output, clears the error, and re-enters
+the same bounded queue (one active render, three waiting). A second retry
+while the first is pending is refused, as are retries of completed, cancelled,
+queued or rendering jobs. FFmpeg (and AAC for audio projects) must be ready.
+There are no automatic retries.
+
+### History and deletion
+
+- `GET /api/studio/pixel/jobs` returns at most 30 jobs by default (100 max),
+  newest first, as summaries: product name, state, times, audio mode, image
+  count, verified duration and size, error message, live progress and
+  preview/download links for completed videos. No paths and no stored asset
+  details.
+- **Delete** (after a confirmation dialog) removes the job folder: images,
+  audio, project, scratch files, video and metadata. Only real job folders
+  named by generated IDs are deleted, symlinks are removed without being
+  followed, and queued/rendering jobs are refused (cancel first). Afterwards
+  the job's status and video endpoints answer 404.
+
+### Storage and cleanup
+
+`GET /api/studio/pixel/storage` sums real files only (no symlinks): uploads,
+videos, scratch files and metadata, plus job counts by state (with
+interrupted jobs counted separately). **Clean up temporary files**
+(`POST …/storage/cleanup`) empties scratch folders of inactive jobs, removes
+interrupted temp files and deletes drafts untouched for an hour. It never
+touches queued or rendering jobs, completed videos, or failed and cancelled
+jobs. Those are only removed when you delete them.
+
+### Restart recovery
+
+On startup the server:
+
+1. stops orphaned `ffmpeg`/`ffprobe` processes of a previous server (Linux /
+   WSL: via `/proc`, only processes of this user whose working directory is
+   inside Pixel Studio's private job storage);
+2. marks jobs still `queued` or `rendering` as `failed` with the reason
+   "interrupted", and removes their partial output and scratch files;
+3. leaves completed, failed and cancelled jobs as they are.
+
+Interrupted jobs can then be retried. A render is never resumed halfway.
+
+### Measured (FFmpeg 6.1.1, this machine)
+
+- Real cancellation in every stage (integration tests, live process
+  confirmed each time): settled in 9–449 ms. Encoding takes the longest
+  because FFmpeg finishes the current frame on SIGTERM; no FFmpeg process
+  remains afterwards.
+- Over HTTP: the cancel request returns in 40–464 ms; afterwards the job is
+  `cancelled`, its scratch and output folders are empty, its video answers
+  404, and retry is refused.
+- Rendering after DV-003D1: FFmpeg peak memory 469–471 MiB (DV-003C: 458–471)
+  with identical outputs; the H.264 stream is still copied, not re-encoded.
+
+## 7. Video output target
 
 Fixed in `src/lib/video/format.ts`. Clients can't change it.
 
@@ -380,7 +493,7 @@ server is the real gate.
 - **Scenes:** 3–8, hook first and CTA last, 2–8 s each in whole frames,
   15–30 s total.
 
-## 7. Local file storage
+## 8. Local file storage
 
 `src/server/video/storage.ts` (server-only). Data lives **outside the
 repository** in the per-user application data folder:
@@ -422,7 +535,7 @@ folder in the system temp directory.
   after verification), and only if the file is a regular file inside
   storage. Its path is never sent to the browser.
 
-## 8. Security model
+## 9. Security model
 
 | Boundary          | Rule                                                                                                                                                                                                                                             |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -432,6 +545,7 @@ folder in the system temp directory.
 | Captions → FFmpeg | Text goes to per-job UTF-8 files drawn with `drawtext=textfile=…:expansion=none`, so `%{…}`, quotes, colons and brackets are drawn literally. Filter graphs contain only generated, escaped values.                                              |
 | Errors            | Users see plain messages. Raw FFmpeg output (which may contain paths) only goes to the server log.                                                                                                                                               |
 | Files             | Generated names, containment checks, symlink refusal, byte sniffing plus FFprobe and decode checks, size limits, data outside the repo.                                                                                                          |
+| Job management    | Cancel, retry, delete, history, storage and cleanup use the same local-only guard. Action endpoints take no body (any body is refused), IDs must be generated job IDs, and the server alone decides which files a job owns.                      |
 | Network           | Every endpoint (capabilities, jobs, uploads, render, status, video) checks `Host` (DNS rebinding), `X-Forwarded-*`, `Origin` and `Sec-Fetch-Site`. The render request must be JSON.                                                              |
 | Hosting           | Rendering is **disabled** (503) when a hosting platform is detected (`VERCEL`, `NETLIFY`, `RENDER`, `FLY_APP_NAME`, `RAILWAY_ENVIRONMENT`, `K_SERVICE`, `AWS_LAMBDA_FUNCTION_NAME`, `DYNO`) or `DESKVERSE_DISABLE_LOCAL_RENDERING=1` is set.     |
 
@@ -449,7 +563,7 @@ WSL's localhost forwarding still lets your Windows browser reach
 public. The hosting gate is a safety net, not a substitute for keeping it
 local.
 
-## 9. Licensing and redistribution
+## 10. Licensing and redistribution
 
 _General information, not legal advice._
 
@@ -487,7 +601,7 @@ _General information, not legal advice._
   scene. Also use each platform's branded-content or paid-partnership
   setting.
 
-## 10. Measured performance
+## 11. Measured performance
 
 One full render on the development machine (WSL2, Ubuntu 24.04, 16 cores,
 9.6 GB RAM, FFmpeg 6.1.1, libx264, no GPU), from four real JPEG photos
@@ -525,7 +639,7 @@ play with an audio track and audible output (the silent one has no audio
 track); Firefox reports 19.02 s because of AAC encoder padding, within the
 0.1 s tolerance.
 
-## 11. Limitations
+## 12. Limitations
 
 - One fixed template, simple cuts, no motion or transitions.
 - Audio: no trimming, offsets, crossfaded loops or per-scene sync points;
@@ -537,23 +651,22 @@ track); Firefox reports 19.02 s because of AAC encoder padding, within the
   symbols). Emoji and CJK are rejected rather than drawn.
 - JPEG EXIF orientation isn't applied. A phone photo stored sideways with a
   rotation tag renders sideways, so rotate it before uploading.
-- No cancellation, retry or delete button yet. Completed videos stay in the
-  data folder until removed by hand.
-- The queue lives in one server process. Running several Deskverse servers on
-  the same data folder isn't supported.
+- Jobs are managed by one server process. Running several Deskverse servers
+  on the same data folder isn't supported.
+- Orphaned FFmpeg processes are found and stopped on Linux/WSL only (via
+  `/proc`); elsewhere they end on their own when their input is processed.
 - The in-page preview needs a browser with H.264 playback (Chrome, Edge,
   Firefox, Safari). Playwright's bundled Chromium can't decode H.264, so the
   E2E suite checks the file itself and playback only where supported.
 
-## 12. Remaining work
+## 13. Remaining work
 
-**DV-003D (queue and polish):** a persistent queue, cancel and retry in the
-UI, deleting jobs and outputs, crossfades (`xfade`), gentle motion on stills,
-EXIF orientation, and more templates. Audio follow-ups: trimming and offsets
+**DV-003D2 and later:** crossfades (`xfade`), gentle motion on stills, EXIF
+orientation, and more templates. Audio follow-ups: trimming and offsets
 for narration, crossfaded music loops, per-scene timing cues, and accepting
 MP3s with cover art by ignoring the picture.
 
-## 13. Code map
+## 14. Code map
 
 ```
 assets/fonts/inter/            Inter Bold + Medium (OFL 1.1) for captions
@@ -567,7 +680,8 @@ src/lib/video/                 shared, client-safe
   storyboard.ts                storyboard template + duration fitting
   capabilities.ts              capability report types, required filters
 src/server/                    server-only (import "server-only")
-  process/run-executable.ts    execFile runner + streaming spawn (no shell)
+  process/run-executable.ts    execFile runner + streaming spawn (no shell), AbortSignal cancellation
+  process/orphans.ts           stops orphaned FFmpeg of a previous server (Linux /proc)
   http/local-request.ts        loopback Host/Origin/Fetch-Metadata checks
   http/local-api.ts            endpoint guard, hosting gate, bounded body reading
   http/range.ts                byte ranges, download names
@@ -580,12 +694,14 @@ src/server/                    server-only (import "server-only")
   video/font-metrics.ts        TrueType cmap/hmtx parsing, glyph coverage, widths
   video/project.ts             trusted project reconstruction
   video/render-service.ts      one render: compose → encode → verify → publish
-  video/render-queue.ts        one-at-a-time queue, restart recovery, singleton
+  video/render-queue.ts        one-at-a-time queue: cancel, retry, delete, restart recovery
+  video/job-summary.ts         history rows and storage summary (no paths)
   video/storage.ts             private job storage, path safety, data dir
   video/image-sniff.ts         byte-level image type and dimension checks
   video/upload-verify.ts       FFprobe + decode upload check, public job status
-src/app/api/studio/pixel/      capabilities, jobs, assets, render, status, video routes
-src/components/studio/pixel/   studio UI, render panel, use-render-job hook
+src/app/api/studio/pixel/      capabilities, jobs (list/create/status/delete), assets, audio, render,
+                               cancel, retry, video, storage, storage/cleanup routes
+src/components/studio/pixel/   studio UI, render panel, render history, use-render-job hook
 tests/*.test.ts                unit tests (FFmpeg mocked)
 tests/integration/             real-FFmpeg integration tests: video and the four audio modes
 e2e/pixel-*.spec.ts            Playwright: UI (mocked FFmpeg) and real rendering

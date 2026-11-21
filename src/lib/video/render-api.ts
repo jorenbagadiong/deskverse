@@ -8,6 +8,7 @@ import type {
 import type {
   AudioConfig,
   AudioContainer,
+  AudioMode,
   AudioRole,
   ImageMimeType,
   ProductInfo,
@@ -23,6 +24,14 @@ import type {
  *   POST /api/studio/pixel/jobs/:jobId/render         RenderRequest (JSON)   queue the render
  *   GET  /api/studio/pixel/jobs/:jobId                → RenderJobStatus      poll
  *   GET  /api/studio/pixel/jobs/:jobId/video[?download=1]                    verified MP4 only
+ *
+ * Job management (DV-003D1):
+ *   GET    /api/studio/pixel/jobs[?limit=N]            → JobHistory         newest first, bounded
+ *   POST   /api/studio/pixel/jobs/:jobId/cancel        → RenderJobStatus    stop a queued/active render
+ *   POST   /api/studio/pixel/jobs/:jobId/retry         → RenderJobStatus    re-queue a failed job
+ *   DELETE /api/studio/pixel/jobs/:jobId               → { deleted: true }  remove the job and its files
+ *   GET    /api/studio/pixel/storage                   → StorageSummary
+ *   POST   /api/studio/pixel/storage/cleanup           → CleanupSummary     remove abandoned temp data
  */
 
 export const JOBS_ENDPOINT = "/api/studio/pixel/jobs"
@@ -32,6 +41,16 @@ export const assetsEndpoint = (id: string) => `${jobEndpoint(id)}/assets`
 export const renderEndpoint = (id: string) => `${jobEndpoint(id)}/render`
 export const audioEndpoint = (id: string, role: AudioRole) =>
   `${jobEndpoint(id)}/audio?role=${role}`
+export const cancelEndpoint = (id: string) => `${jobEndpoint(id)}/cancel`
+export const retryEndpoint = (id: string) => `${jobEndpoint(id)}/retry`
+export const STORAGE_ENDPOINT = "/api/studio/pixel/storage"
+export const CLEANUP_ENDPOINT = `${STORAGE_ENDPOINT}/cleanup`
+export const historyEndpoint = (limit?: number) =>
+  `${JOBS_ENDPOINT}${limit ? `?limit=${limit}` : ""}`
+
+/** History page sizes. */
+export const HISTORY_LIMIT = { default: 30, max: 100 } as const
+
 export const videoEndpoint = (id: string, download = false) =>
   `${jobEndpoint(id)}/video${download ? "?download=1" : ""}`
 
@@ -84,4 +103,62 @@ export interface ApiError {
   error: string
   message: string
   issues?: { path: string; message: string }[]
+}
+
+/** What the user may do with a job right now (decided by the server). */
+export interface JobActions {
+  cancel: boolean
+  retry: boolean
+  delete: boolean
+  preview: boolean
+}
+
+/** One row of the render history: no paths, no private asset metadata. */
+export interface JobSummary {
+  jobId: RenderJobId
+  state: RenderJobState
+  createdAt: string
+  updatedAt: string
+  /** From the server-built project; null for drafts or unreadable projects. */
+  productName: string | null
+  audioMode: AudioMode | null
+  imageCount: number
+  /** Verified facts, only for completed videos. */
+  durationSeconds: number | null
+  sizeBytes: number | null
+  error: RenderJobError | null
+  progress: RenderProgress | null
+  videoUrl: string | null
+  downloadUrl: string | null
+  actions: JobActions
+}
+
+export interface JobHistory {
+  jobs: JobSummary[]
+  /** All readable jobs in storage (the list may be shorter). */
+  total: number
+  limit: number
+}
+
+export interface StorageSummary {
+  totalBytes: number
+  uploadBytes: number
+  outputBytes: number
+  workBytes: number
+  otherBytes: number
+  jobs: number
+  completed: number
+  failed: number
+  interrupted: number
+  cancelled: number
+  drafts: number
+  active: number
+  unreadable: number
+}
+
+export interface CleanupSummary {
+  freedBytes: number
+  removedDrafts: number
+  clearedWorkDirs: number
+  removedTempFiles: number
 }

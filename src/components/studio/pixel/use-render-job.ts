@@ -10,6 +10,7 @@ import type { StudioImage } from "@/components/studio/pixel/image-picker"
 import {
   assetsEndpoint,
   audioEndpoint,
+  cancelEndpoint,
   FILE_NAME_HEADER,
   jobEndpoint,
   JOBS_ENDPOINT,
@@ -212,5 +213,27 @@ export function useRenderJob() {
     (view.kind === "tracking" &&
       (view.status.state === "queued" || view.status.state === "rendering"))
 
-  return { view, start, busy }
+  const activeJobId =
+    view.kind === "tracking" &&
+    (view.status.state === "queued" || view.status.state === "rendering")
+      ? view.status.jobId
+      : null
+
+  /** Cancels the tracked render; the poll loop then sees its final state. */
+  const cancel = useCallback(async () => {
+    if (!activeJobId) return
+    try {
+      await call(cancelEndpoint(activeJobId), { method: "POST" })
+    } catch (error) {
+      setView({
+        kind: "error",
+        message:
+          error instanceof ApiFailure
+            ? error.message
+            : "The render couldn't be cancelled. Try again.",
+      })
+    }
+  }, [activeJobId])
+
+  return { view, start, busy, cancel, canCancel: activeJobId !== null }
 }

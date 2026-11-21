@@ -72,4 +72,52 @@ test.describe("Pixel Studio (mobile)", () => {
       page.viewportSize()!.width,
     )
   })
+
+  test("render history and storage fit on a phone", async ({ page }) => {
+    await page.route(/\/api\/studio\/pixel\/jobs(\?.*)?$/, (route) =>
+      route.request().method() === "GET"
+        ? route.fulfill({
+            json: {
+              total: 1,
+              limit: 30,
+              jobs: [
+                {
+                  jobId: `job_${"7".repeat(32)}`,
+                  state: "failed",
+                  createdAt: "2026-11-21T09:00:00.000Z",
+                  updatedAt: "2026-11-21T09:00:10.000Z",
+                  productName:
+                    "A rather long product name for a small phone screen",
+                  audioMode: "voiceover-and-music",
+                  imageCount: 6,
+                  durationSeconds: null,
+                  sizeBytes: null,
+                  error: {
+                    code: "interrupted",
+                    message:
+                      "The server stopped before this render finished. Select Retry to render it again.",
+                  },
+                  progress: null,
+                  videoUrl: null,
+                  downloadUrl: null,
+                  actions: {
+                    cancel: false,
+                    retry: true,
+                    delete: true,
+                    preview: false,
+                  },
+                },
+              ],
+            },
+          })
+        : route.fallback(),
+    )
+    await openStudio(page, READY_REPORT)
+    const list = page.getByRole("list", { name: "Render history" })
+    await expect(list.getByText("Interrupted")).toBeVisible()
+    await list.getByRole("button", { name: /^Retry/ }).scrollIntoViewIfNeeded()
+    await expect(list.getByRole("button", { name: /^Retry/ })).toBeVisible()
+    await expect(page.getByTestId("storage-total")).toBeVisible()
+    expect(await noHorizontalOverflow(page)).toBeLessThanOrEqual(0)
+  })
 })

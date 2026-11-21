@@ -249,6 +249,38 @@ failure by design. Everything else passes. Run the office tests where Chrome
 has a GPU (for example native Windows). Details and the exact list:
 [E2E environment notes](docs/e2e-environment.md).
 
+## DV-003D1 scope: Reliable job management ✅
+
+Pixel Studio is now built for repeated daily use. Every render is a job saved
+on this computer, and the **Render history** card lists them, even after you
+reload the page or restart the server.
+
+- **Cancel** a queued render (it never starts) or a running one: the FFmpeg
+  process is really stopped (SIGTERM, then SIGKILL after 2 s), nothing
+  partial is kept, and the job shows as cancelled. Use **Cancel render** in
+  the Render card, or Cancel in the history.
+- **Retry** failed or interrupted renders with the files already uploaded:
+  no re-upload. There are no automatic retries.
+- **Preview and download** any completed video later, from the history.
+- **Delete** a job (after confirming) to remove its images, audio, project,
+  scratch files and video. Running jobs must be cancelled first.
+- **Storage summary:** space used by uploads, videos and scratch files, and
+  counts of completed, failed (including interrupted), cancelled and draft
+  jobs. **Clean up temporary files** removes scratch files and drafts
+  untouched for an hour; videos and failed jobs are kept.
+- **Restart recovery:** after a restart, jobs that were rendering become
+  "Interrupted" (failed, retryable), their partial files are removed, and on
+  Linux/WSL any FFmpeg process left behind by the old server is stopped.
+  Nothing is deleted automatically except abandoned drafts older than a day.
+
+Measured on the development machine: real cancellation settles in under half
+a second (FFmpeg stops cleanly), and rendering memory is unchanged (FFmpeg
+peak about 470 MiB). Details:
+[video architecture §6](docs/video-architecture.md#6-job-management-dv-003d1).
+
+**Not in this phase:** transitions, motion, templates and audio editing
+(DV-003D2 and later).
+
 ## DV-003C scope: Voiceover & background music ✅
 
 Pixel Studio's **Audio** card adds optional sound from your own files: **No
@@ -284,9 +316,8 @@ Measured on the development machine: adding audio costs 1.0–2.5 s per video
 peak memory, and the mixes land at −16.1 to −16.3 LUFS. Details:
 [video architecture §5](docs/video-architecture.md#5-audio-voiceover-and-background-music-dv-003c).
 
-**Not in this phase:** cancellation, retries, the persistent queue,
-transitions and audio editing (trimming, offsets, crossfaded loops), planned
-for DV-003D.
+**Not in this phase:** cancellation, retries and history (added in DV-003D1,
+above), transitions and audio editing (trimming, offsets, crossfaded loops).
 
 ## DV-003B scope: First real product video ✅
 

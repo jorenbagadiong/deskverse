@@ -1,6 +1,8 @@
 "use client"
 
+import { useState } from "react"
 import {
+  Ban,
   CircleAlert,
   CircleCheck,
   CircleDashed,
@@ -96,13 +98,19 @@ export function RenderPanel({
   busy,
   view,
   onRender,
+  canCancel = false,
+  onCancel,
 }: {
   requirements: readonly RenderRequirement[]
   canRender: boolean
   busy: boolean
   view: RenderView
   onRender: () => void
+  /** True while the tracked render is queued or rendering. */
+  canCancel?: boolean
+  onCancel?: () => void
 }) {
+  const [cancelling, setCancelling] = useState(false)
   const status = view.kind === "tracking" ? view.status : null
   const completed =
     status?.state === "completed" && status.output && status.videoUrl
@@ -173,6 +181,21 @@ export function RenderPanel({
           )}
           {busy ? "Rendering…" : completed ? "Render again" : "Render MP4"}
         </Button>
+        {canCancel && onCancel ? (
+          <Button
+            type="button"
+            variant="outline"
+            className="self-start"
+            disabled={cancelling}
+            onClick={() => {
+              setCancelling(true)
+              Promise.resolve(onCancel()).finally(() => setCancelling(false))
+            }}
+          >
+            <Ban aria-hidden="true" />
+            {cancelling ? "Cancelling…" : "Cancel render"}
+          </Button>
+        ) : null}
         <p id="render-help" className="text-sm text-muted-foreground">
           {canRender
             ? "Renders a 1080 × 1920 H.264 MP4 with FFmpeg on this computer. Nothing is sent to the internet."
@@ -198,6 +221,13 @@ export function RenderPanel({
           </p>
         ) : null}
       </div>
+
+      {status?.state === "cancelled" ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          Render cancelled. Nothing was saved as a video; your uploads are kept
+          in the history until you delete them.
+        </p>
+      ) : null}
 
       {failed && failureMessage ? (
         <div

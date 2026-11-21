@@ -237,6 +237,37 @@ export type AudioInspector = (
   displayName: string,
 ) => Promise<AudioFacts>
 
+export interface JobRecord {
+  job: RenderJob
+  /** The server-built project, or null for drafts (none yet) or unreadable ones. */
+  project: VideoProject | null
+}
+
+export interface StorageUsage {
+  totalBytes: number
+  /** Uploaded images and audio. */
+  uploadBytes: number
+  /** Finished, verified videos. */
+  outputBytes: number
+  /** Scratch files of renders (normally empty between renders). */
+  workBytes: number
+  /** Metadata and anything else. */
+  otherBytes: number
+  jobs: number
+  byState: Record<RenderJobState, number>
+  /** Failed jobs that were interrupted by a server restart (retryable). */
+  interrupted: number
+  /** Folders that look like jobs but whose metadata can't be read. */
+  unreadable: number
+}
+
+export interface CleanupResult {
+  freedBytes: number
+  removedDrafts: number
+  clearedWorkDirs: number
+  removedTempFiles: number
+}
+
 export interface CompletedOutput {
   /** Absolute path for server-side streaming only. Never send it to a browser. */
   path: string
@@ -250,7 +281,12 @@ export interface VideoStorage {
   transitionJob(
     id: string,
     to: RenderJobState,
-    details?: { error?: RenderJobError; output?: RenderJob["output"] },
+    details?: {
+      error?: RenderJobError
+      output?: RenderJob["output"]
+      /** Only transition if the job is currently in this state (checked under the lock). */
+      from?: RenderJobState
+    },
   ): Promise<RenderJob>
   addImageAsset(
     jobId: string,
@@ -289,7 +325,28 @@ export interface VideoStorage {
   assetPath(jobId: string, assetId: string): Promise<string>
   /** Empties the job's `work/` directory. */
   cleanupWork(jobId: string): Promise<void>
+  /**
+   * Deletes a job and everything it owns (uploads, project, scratch files,
+   * output, metadata). Refuses queued or rendering jobs: they must be
+   * cancelled (and their processes stopped) first. The check happens under
+   * the job's lock, so it can't race a retry.
+   */
   deleteJob(jobId: string): Promise<void>
+  /** Newest jobs first (by creation), at most `limit`, each with its project if readable. */
+  listJobRecords(
+    limit: number,
+  ): Promise<{ records: JobRecord[]; total: number }>
+  /** Space used by Pixel Studio's private storage, counting real files only. */
+  usage(): Promise<StorageUsage>
+  /**
+   * Removes abandoned temporary data: scratch files of inactive jobs, stray
+   * temp files, and drafts (uploads never rendered) older than
+   * `draftOlderThanMs`. Never touches queued, rendering, completed, failed
+   * or cancelled jobs' uploads or videos.
+   */
+  cleanupAbandoned(options: {
+    draftOlderThanMs: number
+  }): Promise<CleanupResult>
   /** Deletes finished/abandoned jobs not updated within `olderThanMs`. Returns their IDs. */
   cleanupStaleJobs(options: {
     olderThanMs: number
@@ -332,6 +389,20 @@ export function createVideoStorage(
     if (!isRenderJobId(id))
       throw new StorageError("invalid-id", "Unknown render job.")
     return id
+  }
+
+  /** IDs of real job directories (symlinks and unknown names are ignored). */
+  async function jobIds(): Promise<RenderJobId[]> {
+    let entries: import("node:fs").Dirent[]
+    try {
+      entries = await fs.readdir(jobsDir, { withFileTypes: true })
+    } catch (error) {
+      if (isErrno(error, "ENOENT")) return []
+      throw error
+    }
+    return entries
+      .filter((e) => e.isDirectory() && isRenderJobId(e.name))
+      .map((e) => e.name as RenderJobId)
   }
 
   async function jobDir(id: string) {
@@ -382,7 +453,7 @@ export function createVideoStorage(
     return parseJob(parsed, id)
   }
 
-  return {
+  const api: VideoStorage = {
     root,
 
     async createJob() {
@@ -416,6 +487,11 @@ export function createVideoStorage(
       return withLock(id, async () => {
         const dir = await jobDir(id)
         const job = await readJobFrom(dir, parseJobId(id))
+        if (details.from !== undefined && job.state !== details.from)
+          throw new StorageError(
+            "invalid-state",
+            `This video is ${job.state}, not ${details.from}.`,
+          )
         if (!canTransition(job.state, to))
           throw new StorageError(
             "invalid-state",
@@ -730,8 +806,152 @@ export function createVideoStorage(
     deleteJob(jobId) {
       return withLock(jobId, async () => {
         const dir = await jobDir(jobId)
+        try {
+          const job = await readJobFrom(dir, parseJobId(jobId))
+          if (job.state === "queued" || job.state === "rendering")
+            throw new StorageError(
+              "invalid-state",
+              "This video is still rendering. Cancel it before deleting it.",
+            )
+        } catch (error) {
+          // Unreadable metadata: still deletable (an abandoned folder).
+          if (
+            !(error instanceof StorageError) ||
+            error.code === "invalid-state"
+          )
+            throw error
+        }
+        // rm() removes symlinks themselves and never follows them; the job
+        // directory itself was verified to be a real directory in storage.
         await fs.rm(dir, { recursive: true, force: true })
       })
+    },
+
+    async listJobRecords(limit) {
+      const records: JobRecord[] = []
+      for (const id of await jobIds()) {
+        try {
+          records.push({
+            job: await readJobFrom(resolveInside(jobsDir, id), id),
+            project: null,
+          })
+        } catch (error) {
+          if (!(error instanceof StorageError)) throw error
+        }
+      }
+      records.sort(
+        (a, b) =>
+          Date.parse(b.job.createdAt) - Date.parse(a.job.createdAt) ||
+          b.job.id.localeCompare(a.job.id),
+      )
+      const page = records.slice(0, Math.max(0, Math.floor(limit)))
+      for (const record of page) {
+        try {
+          record.project = await api.readProject(record.job.id)
+        } catch {
+          record.project = null
+        }
+      }
+      return { records: page, total: records.length }
+    },
+
+    async usage() {
+      const usage: StorageUsage = {
+        totalBytes: 0,
+        uploadBytes: 0,
+        outputBytes: 0,
+        workBytes: 0,
+        otherBytes: 0,
+        jobs: 0,
+        byState: {
+          draft: 0,
+          queued: 0,
+          rendering: 0,
+          completed: 0,
+          failed: 0,
+          cancelled: 0,
+        },
+        unreadable: 0,
+        interrupted: 0,
+      }
+      for (const id of await jobIds()) {
+        const dir = resolveInside(jobsDir, id)
+        try {
+          const job = await readJobFrom(dir, id)
+          usage.jobs++
+          usage.byState[job.state]++
+          if (job.state === "failed" && job.error?.code === "interrupted")
+            usage.interrupted++
+        } catch (error) {
+          if (!(error instanceof StorageError)) throw error
+          usage.unreadable++
+        }
+        const sizes = await folderSizes(dir)
+        usage.uploadBytes += sizes.assets
+        usage.outputBytes += sizes.output
+        usage.workBytes += sizes.work
+        usage.otherBytes += sizes.other
+      }
+      usage.totalBytes =
+        usage.uploadBytes +
+        usage.outputBytes +
+        usage.workBytes +
+        usage.otherBytes
+      return usage
+    },
+
+    async cleanupAbandoned({ draftOlderThanMs }) {
+      const result: CleanupResult = {
+        freedBytes: 0,
+        removedDrafts: 0,
+        clearedWorkDirs: 0,
+        removedTempFiles: 0,
+      }
+      const cutoff = now().getTime() - draftOlderThanMs
+      for (const id of await jobIds()) {
+        await withLock(id, async () => {
+          const dir = resolveInside(jobsDir, id)
+          let state: RenderJobState | null = null
+          let updatedAt: number
+          try {
+            const job = await readJobFrom(dir, id)
+            state = job.state
+            updatedAt = Date.parse(job.updatedAt)
+          } catch (error) {
+            if (!(error instanceof StorageError)) throw error
+            updatedAt = (await fs.lstat(dir)).mtimeMs
+          }
+          // Active jobs are never touched.
+          if (state === "queued" || state === "rendering") return
+          const sizes = await folderSizes(dir)
+          if ((state === "draft" || state === null) && updatedAt < cutoff) {
+            await fs.rm(dir, { recursive: true, force: true })
+            result.removedDrafts++
+            result.freedBytes += sizes.total
+            return
+          }
+          if (sizes.work > 0) {
+            const work = resolveInside(dir, "work")
+            await fs.rm(work, { recursive: true, force: true })
+            await fs.mkdir(work, { mode: DIR_MODE })
+            result.clearedWorkDirs++
+            result.freedBytes += sizes.work
+          }
+          // Interrupted atomic writes (job.json.<rand>.tmp, project.json.<rand>.tmp).
+          for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+            if (
+              !entry.isFile() ||
+              !/^(job|project)\.json\.[0-9a-f]+\.tmp$/.test(entry.name)
+            )
+              continue
+            const file = resolveInside(dir, entry.name)
+            result.freedBytes += (await fs.lstat(file)).size
+            await fs.rm(file, { force: true })
+            result.removedTempFiles++
+          }
+        })
+      }
+      return result
     },
 
     async cleanupStaleJobs({ olderThanMs, states }) {
@@ -785,6 +1005,42 @@ export function createVideoStorage(
       }
     },
   }
+  return api
+}
+
+/**
+ * Sizes of a job directory's parts, counting regular files only. Symlinks
+ * are never followed (lstat), and only the known two levels are walked.
+ */
+async function folderSizes(dir: string) {
+  const sizes = { assets: 0, output: 0, work: 0, other: 0, total: 0 }
+  let entries: import("node:fs").Dirent[]
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true })
+  } catch {
+    return sizes
+  }
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name)
+    if (entry.isFile()) {
+      sizes.other += (await fs.lstat(full)).size
+    } else if (entry.isDirectory()) {
+      const bucket =
+        entry.name === "assets" ||
+        entry.name === "output" ||
+        entry.name === "work"
+          ? entry.name
+          : "other"
+      for (const inner of await fs
+        .readdir(full, { withFileTypes: true })
+        .catch(() => [])) {
+        if (!inner.isFile()) continue
+        sizes[bucket] += (await fs.lstat(path.join(full, inner.name))).size
+      }
+    }
+  }
+  sizes.total = sizes.assets + sizes.output + sizes.work + sizes.other
+  return sizes
 }
 
 function assetFileName(asset: Pick<MediaAsset, "id" | "mimeType">) {

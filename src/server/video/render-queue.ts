@@ -1,19 +1,25 @@
 import "server-only"
 
 import os from "node:os"
+import path from "node:path"
 
 import type {
   RenderJob,
   RenderOutput,
   RenderProgress,
 } from "@/lib/video/render-job"
+import { stopOrphanedRenders } from "@/server/process/orphans"
 import { createRunner, spawnTool } from "@/server/process/run-executable"
 import {
   getFfmpegCapabilities,
   resolveExecutable,
 } from "@/server/video/ffmpeg-capabilities"
 import { fontDirectory, loadVideoFont } from "@/server/video/font-metrics"
-import { RenderFailure, renderVideo } from "@/server/video/render-service"
+import {
+  RenderCancelled,
+  RenderFailure,
+  renderVideo,
+} from "@/server/video/render-service"
 import {
   createVideoStorage,
   resolveDataRoot,
@@ -27,16 +33,28 @@ import {
  * status; no HTTP request is held open while rendering.
  *
  * Restarts: progress lives in memory, state lives in job.json. On startup,
- * any job still "queued" or "rendering" belongs to a previous process and is
- * marked failed ("interrupted"), so nothing half-rendered is reported as
- * complete. A persistent queue, cancellation and retries are DV-003D.
+ * orphaned FFmpeg processes of a previous server are stopped, and any job
+ * still "queued" or "rendering" is marked failed ("interrupted"), so nothing
+ * half-rendered is reported as complete; the user can retry it.
+ *
+ * Cancellation (DV-003D1) aborts the active render's FFmpeg processes and
+ * awaits their exit; the queue alone decides the final state, so completion,
+ * cancellation and failure are mutually exclusive.
  */
 
 export const MAX_WAITING = 3
 
+export type QueueErrorCode =
+  | "busy"
+  | "duplicate"
+  | "not-cancellable"
+  | "not-retryable"
+  | "files-missing"
+  | "active"
+
 export class QueueError extends Error {
   constructor(
-    readonly code: "busy" | "duplicate",
+    readonly code: QueueErrorCode,
     message: string,
   ) {
     super(message)
@@ -46,11 +64,23 @@ export class QueueError extends Error {
 export type RenderFn = (
   jobId: string,
   onProgress: (progress: RenderProgress) => void,
+  /** Aborted when the user cancels; the render must stop its processes. */
+  signal: AbortSignal,
 ) => Promise<RenderOutput>
+
+interface ActiveRender {
+  id: string
+  controller: AbortController
+  /** Settles once the job's final state (completed/failed/cancelled) is stored. */
+  settled: Promise<void>
+}
+
+export const INTERRUPTED_MESSAGE =
+  "The server stopped before this render finished. Select Retry to render it again."
 
 export class RenderQueue {
   private waiting: string[] = []
-  private active: string | null = null
+  private active: ActiveRender | null = null
   private progress = new Map<string, RenderProgress>()
   private idleWaiters: (() => void)[] = []
 
@@ -60,18 +90,29 @@ export class RenderQueue {
     private readonly log: (message: string) => void = () => {},
   ) {}
 
-  /** Marks jobs left over from a previous server process as failed. */
-  async recover() {
+  /**
+   * Startup recovery. Stops orphaned FFmpeg processes of a previous server
+   * process (when `stopOrphans` is given), then marks its leftover
+   * queued/rendering jobs as failed ("interrupted", retryable) and removes
+   * their partial output and scratch files. Completed, failed and cancelled
+   * jobs are left as they are.
+   */
+  async recover({
+    stopOrphans,
+  }: { stopOrphans?: () => Promise<number[]> } = {}) {
+    if (stopOrphans) {
+      const stopped = await stopOrphans().catch(() => [])
+      if (stopped.length > 0)
+        this.log(
+          `[pixel] stopped ${stopped.length} orphaned FFmpeg process(es)`,
+        )
+    }
     const leftovers = await this.storage.findJobs(["queued", "rendering"])
     for (const id of leftovers) {
-      if (id === this.active || this.waiting.includes(id)) continue
+      if (this.isTracked(id)) continue
       await this.storage
         .transitionJob(id, "failed", {
-          error: {
-            code: "interrupted",
-            message:
-              "The server stopped before this render finished. Start a new render.",
-          },
+          error: { code: "interrupted", message: INTERRUPTED_MESSAGE },
         })
         .catch(() => undefined)
       await this.storage.discardOutput(id).catch(() => undefined)
@@ -80,30 +121,95 @@ export class RenderQueue {
     return leftovers
   }
 
+  /** Whether this process is rendering or holding the job in its queue. */
+  isTracked(jobId: string) {
+    return this.active?.id === jobId || this.waiting.includes(jobId)
+  }
+
   /**
    * Queues a draft job. Throws QueueError("duplicate") if it is already
    * queued/rendering, QueueError("busy") when the queue is full, and a
    * StorageError("invalid-state") if the job isn't a draft any more.
    */
-  async enqueue(jobId: string): Promise<RenderJob> {
-    if (this.active === jobId || this.waiting.includes(jobId))
+  enqueue(jobId: string): Promise<RenderJob> {
+    return this.claimAndQueue(jobId, "draft")
+  }
+
+  /**
+   * Retries a failed (or interrupted) job with its stored uploads and
+   * server-built project: no re-upload. The project and every file it uses
+   * are re-validated first; partial output and scratch files are removed.
+   */
+  async retry(jobId: string): Promise<RenderJob> {
+    if (this.isTracked(jobId))
       throw new QueueError("duplicate", "This video is already being rendered.")
-    if (this.waiting.length >= MAX_WAITING)
+    const job = await this.storage.readJob(jobId)
+    if (job.state !== "failed")
       throw new QueueError(
-        "busy",
-        "Several videos are already waiting to render. Try again in a minute.",
+        "not-retryable",
+        job.state === "completed"
+          ? "This video is already finished."
+          : `Only failed videos can be retried (this one is ${job.state}).`,
       )
-    // Claim the slot before the async transition so a racing duplicate fails.
-    this.waiting.push(jobId)
     try {
-      const job = await this.storage.transitionJob(jobId, "queued")
-      this.updateWaitingPositions()
-      void this.pump()
-      return job
-    } catch (error) {
-      this.waiting = this.waiting.filter((id) => id !== jobId)
-      throw error
+      const project = await this.storage.readProject(jobId)
+      for (const asset of project.assets)
+        await this.storage.assetPath(jobId, asset.id)
+      for (const asset of project.audioAssets ?? [])
+        await this.storage.audioAssetPath(jobId, asset.id)
+    } catch {
+      throw new QueueError(
+        "files-missing",
+        "This video's saved images, audio or project can't be used any more. Delete it and start a new render.",
+      )
     }
+    return this.claimAndQueue(jobId, "failed")
+  }
+
+  /**
+   * Cancels a job. A waiting job is removed from the queue and never starts.
+   * An active job's FFmpeg processes are stopped; this resolves once the
+   * job's final state is stored (normally "cancelled", or "completed" if it
+   * had already finished). Repeated calls are safe.
+   */
+  async cancel(jobId: string): Promise<RenderJob> {
+    if (this.waiting.includes(jobId)) {
+      this.waiting = this.waiting.filter((id) => id !== jobId)
+      this.progress.delete(jobId)
+      this.updateWaitingPositions()
+      const job = await this.storage.transitionJob(jobId, "cancelled")
+      this.notifyIfIdle()
+      return job
+    }
+    const active = this.active
+    if (active?.id === jobId) {
+      active.controller.abort()
+      await active.settled
+      return this.storage.readJob(jobId)
+    }
+    const job = await this.storage.readJob(jobId)
+    if (job.state === "cancelled") return job
+    // Left over from another server process and not running here.
+    if (job.state === "queued" || job.state === "rendering")
+      return this.storage.transitionJob(jobId, "cancelled")
+    throw new QueueError(
+      "not-cancellable",
+      `Only queued or rendering videos can be cancelled (this one is ${job.state}).`,
+    )
+  }
+
+  /**
+   * Deletes a job and all its files. Refused while it is queued or
+   * rendering in this process; storage re-checks the state under its lock.
+   */
+  async delete(jobId: string): Promise<void> {
+    if (this.isTracked(jobId))
+      throw new QueueError(
+        "active",
+        "This video is still rendering. Cancel it before deleting it.",
+      )
+    await this.storage.deleteJob(jobId)
+    this.progress.delete(jobId)
   }
 
   /** In-memory progress for a job this process is handling, else null. */
@@ -115,10 +221,43 @@ export class RenderQueue {
     return this.active !== null
   }
 
+  /** The job currently rendering, if any. */
+  activeJobId() {
+    return this.active?.id ?? null
+  }
+
   /** Resolves when nothing is rendering or waiting (tests). */
   whenIdle(): Promise<void> {
     if (!this.active && this.waiting.length === 0) return Promise.resolve()
     return new Promise((resolve) => this.idleWaiters.push(resolve))
+  }
+
+  private async claimAndQueue(jobId: string, from: "draft" | "failed") {
+    if (this.isTracked(jobId))
+      throw new QueueError("duplicate", "This video is already being rendered.")
+    if (this.waiting.length >= MAX_WAITING)
+      throw new QueueError(
+        "busy",
+        "Several videos are already waiting to render. Try again in a minute.",
+      )
+    // Claim the slot synchronously, before any await, so a racing duplicate
+    // request fails the isTracked check above.
+    this.waiting.push(jobId)
+    try {
+      if (from === "failed") {
+        await this.storage.discardOutput(jobId)
+        await this.storage.cleanupWork(jobId)
+      }
+      const job = await this.storage.transitionJob(jobId, "queued", { from })
+      this.updateWaitingPositions()
+      void this.pump()
+      return job
+    } catch (error) {
+      this.waiting = this.waiting.filter((id) => id !== jobId)
+      this.progress.delete(jobId)
+      this.updateWaitingPositions()
+      throw error
+    }
   }
 
   private updateWaitingPositions() {
@@ -127,42 +266,71 @@ export class RenderQueue {
     )
   }
 
+  private notifyIfIdle() {
+    if (!this.active && this.waiting.length === 0)
+      for (const resolve of this.idleWaiters.splice(0)) resolve()
+  }
+
   private async pump(): Promise<void> {
     if (this.active) return
     const next = this.waiting.shift()
     if (!next) {
-      for (const resolve of this.idleWaiters.splice(0)) resolve()
+      this.notifyIfIdle()
       return
     }
-    this.active = next
+    const controller = new AbortController()
+    let markSettled!: () => void
+    const settled = new Promise<void>((resolve) => (markSettled = resolve))
+    this.active = { id: next, controller, settled }
     // It's this job's turn: never show it as waiting behind itself.
     this.progress.set(next, { phase: "preparing" })
     this.updateWaitingPositions()
     try {
       await this.storage.transitionJob(next, "rendering")
-      const output = await this.render(next, (p) => this.progress.set(next, p))
+      const output = await this.render(
+        next,
+        (p) => {
+          if (!controller.signal.aborted) this.progress.set(next, p)
+        },
+        controller.signal,
+      )
+      // A cancel that arrived after FFmpeg finished but before publication
+      // wins: the job becomes "cancelled", never cancelled → completed.
+      if (controller.signal.aborted) throw new RenderCancelled()
       await this.storage.transitionJob(next, "completed", { output })
     } catch (error) {
-      const failure =
-        error instanceof RenderFailure
-          ? error
-          : new RenderFailure(
-              "render-failed",
-              "Rendering stopped because of an unexpected error. Try again.",
-            )
-      if (!(error instanceof RenderFailure))
-        this.log(`[pixel] ${next} failed unexpectedly: ${String(error)}`)
       await this.storage.discardOutput(next).catch(() => undefined)
-      await this.storage
-        .transitionJob(next, "failed", {
-          error: { code: failure.code, message: failure.message },
-        })
-        .catch((e) =>
-          this.log(`[pixel] ${next} couldn't be marked failed: ${String(e)}`),
-        )
+      if (error instanceof RenderCancelled || controller.signal.aborted) {
+        await this.storage.cleanupWork(next).catch(() => undefined)
+        await this.storage
+          .transitionJob(next, "cancelled")
+          .catch((e) =>
+            this.log(
+              `[pixel] ${next} couldn't be marked cancelled: ${String(e)}`,
+            ),
+          )
+      } else {
+        const failure =
+          error instanceof RenderFailure
+            ? error
+            : new RenderFailure(
+                "render-failed",
+                "Rendering stopped because of an unexpected error. Try again.",
+              )
+        if (!(error instanceof RenderFailure))
+          this.log(`[pixel] ${next} failed unexpectedly: ${String(error)}`)
+        await this.storage
+          .transitionJob(next, "failed", {
+            error: { code: failure.code, message: failure.message },
+          })
+          .catch((e) =>
+            this.log(`[pixel] ${next} couldn't be marked failed: ${String(e)}`),
+          )
+      }
     } finally {
       this.progress.delete(next)
       this.active = null
+      markSettled()
       void this.pump()
     }
   }
@@ -205,7 +373,7 @@ export function getRenderService() {
     const log = (message: string) => console.error(message)
     const queue = new RenderQueue(
       storage,
-      (jobId, onProgress) => {
+      (jobId, onProgress, signal) => {
         if (!ffmpeg.ok || !ffprobe.ok)
           throw new RenderFailure(
             "ffmpeg-unavailable",
@@ -229,17 +397,19 @@ export function getRenderService() {
             log,
           },
           onProgress,
+          signal,
         )
       },
       log,
     )
-    await queue.recover()
-    // Abandoned drafts (uploads never rendered) and old failures.
+    await queue.recover({
+      stopOrphans: () => stopOrphanedRenders(path.join(storage.root, "jobs")),
+    })
+    // Abandoned drafts (uploads never rendered) older than a day, and stray
+    // scratch files. Failed, cancelled and completed jobs are never removed
+    // automatically: the user retries or deletes them.
     await storage
-      .cleanupStaleJobs({
-        olderThanMs: 24 * 60 * 60 * 1000,
-        states: ["draft", "failed", "cancelled"],
-      })
+      .cleanupAbandoned({ draftOlderThanMs: 24 * 60 * 60 * 1000 })
       .catch((error) => log(`[pixel] cleanup failed: ${String(error)}`))
     return { queue, storage }
   })().catch((error) => {

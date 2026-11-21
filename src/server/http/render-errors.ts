@@ -8,7 +8,7 @@ import { StorageError } from "@/server/video/storage"
 export function renderErrorResponse(error: unknown): Response {
   if (error instanceof QueueError)
     return jsonError(
-      error.code === "busy" ? 429 : 409,
+      error.code === "busy" ? 429 : error.code === "files-missing" ? 422 : 409,
       error.code,
       error.message,
     )

@@ -36,6 +36,27 @@ import {
   type VideoStorage,
 } from "@/server/video/storage"
 
+/**
+ * The render was stopped on purpose (DV-003D1). Not a failure: the queue
+ * marks the job "cancelled" and nothing is published.
+ */
+export class RenderCancelled extends Error {
+  constructor() {
+    super("The render was cancelled.")
+    this.name = "RenderCancelled"
+  }
+}
+
+/** Throws RenderCancelled when the signal has been aborted. */
+function throwIfCancelled(signal: AbortSignal | undefined) {
+  if (signal?.aborted) throw new RenderCancelled()
+}
+
+/** A process result that ended because of cancellation. */
+function wasCancelled(result: { ok: boolean; reason?: string }) {
+  return !result.ok && result.reason === "cancelled"
+}
+
 /** A failure with a message written for the user (no paths, no raw output). */
 export class RenderFailure extends Error {
   constructor(
@@ -72,8 +93,12 @@ async function verify(
   file: string,
   totalFrames: number,
   expectAudio: boolean,
+  signal?: AbortSignal,
 ): Promise<VerifiedOutput> {
-  const probe = await deps.run(deps.commands.ffprobe, outputProbeArgs(file))
+  const probe = await deps.run(deps.commands.ffprobe, outputProbeArgs(file), {
+    signal,
+  })
+  if (wasCancelled(probe)) throw new RenderCancelled()
   if (!probe.ok)
     throw new RenderFailure(
       "verification-failed",
@@ -89,7 +114,9 @@ async function verify(
     const decoded = await deps.run(
       deps.commands.ffmpeg,
       outputAudioDecodeArgs(file),
+      { signal },
     )
+    if (wasCancelled(decoded)) throw new RenderCancelled()
     if (!decoded.ok || decoded.stderr.trim() !== "")
       throw new RenderFailure(
         "verification-failed",
@@ -108,10 +135,13 @@ export async function renderVideo(
   jobId: string,
   deps: RenderDeps,
   onProgress: (progress: RenderProgress) => void,
+  /** Cancels the render: every FFmpeg/FFprobe process is stopped and awaited. */
+  signal?: AbortSignal,
 ): Promise<RenderOutput> {
   const clock = deps.clock ?? Date.now
   const started = clock()
   const { storage } = deps
+  throwIfCancelled(signal)
   onProgress({ phase: "preparing" })
 
   // 1. Prerequisites: FFmpeg ready, with an encoder that passed a test encode.
@@ -179,6 +209,7 @@ export async function renderVideo(
 
     // 4. One still frame per scene.
     for (const [index, scene] of plan.scenes.entries()) {
+      throwIfCancelled(signal)
       onProgress({
         phase: "composing",
         completedScenes: index,
@@ -186,8 +217,10 @@ export async function renderVideo(
       })
       const result = await deps.spawn(deps.commands.ffmpeg, scene.args, {
         cwd: work,
+        signal,
         timeoutMs: deps.timeouts.sceneMs,
       })
+      if (wasCancelled(result)) throw new RenderCancelled()
       if (!result.ok) {
         deps.log?.(
           `[pixel] ${jobId} scene ${index + 1} failed (${result.reason}): ${result.stderrTail}`,
@@ -224,9 +257,11 @@ export async function renderVideo(
     )
     const encoded = await deps.spawn(deps.commands.ffmpeg, plan.encode.args, {
       cwd: work,
+      signal,
       timeoutMs: deps.timeouts.encodeMs,
       onStdout: parse,
     })
+    if (wasCancelled(encoded)) throw new RenderCancelled()
     if (!encoded.ok) {
       deps.log?.(
         `[pixel] ${jobId} encode with ${encoderName} failed (${encoded.reason}): ${encoded.stderrTail}`,
@@ -246,6 +281,7 @@ export async function renderVideo(
       resolveInside(work, plan.encode.output),
       plan.totalFrames,
       false,
+      signal,
     )
     let published = plan.encode.output
 
@@ -271,8 +307,9 @@ export async function renderVideo(
             plan.totalFrames,
             loudnessTarget(asset.role, audioConfig),
           ),
-          { cwd: work, timeoutMs: audioMs },
+          { cwd: work, signal, timeoutMs: audioMs },
         )
+        if (wasCancelled(measured)) throw new RenderCancelled()
         const measurement = measured.ok
           ? parseLoudnormJson(measured.stderrTail)
           : null
@@ -308,9 +345,11 @@ export async function renderVideo(
       )
       const mixed = await deps.spawn(deps.commands.ffmpeg, audioPlan.args, {
         cwd: work,
+        signal,
         timeoutMs: audioMs,
         onStdout: parseMix,
       })
+      if (wasCancelled(mixed)) throw new RenderCancelled()
       if (!mixed.ok) {
         deps.log?.(
           `[pixel] ${jobId} audio mix failed (${mixed.reason}): ${mixed.stderrTail}`,
@@ -328,11 +367,14 @@ export async function renderVideo(
         resolveInside(work, audioPlan.output),
         plan.totalFrames,
         true,
+        signal,
       )
       published = audioPlan.output
     }
 
-    // 8. Publish into output/ (atomic rename inside the job directory).
+    // 8. Publish into output/ (atomic rename inside the job directory). A
+    // cancellation that arrived during verification wins: nothing is moved.
+    throwIfCancelled(signal)
     await storage.commitOutput(jobId, published)
     return {
       audio: verified.audio,
@@ -348,7 +390,8 @@ export async function renderVideo(
       renderSeconds: Math.round((clock() - started) / 100) / 10,
     }
   } catch (error) {
-    if (error instanceof RenderFailure) throw error
+    if (error instanceof RenderFailure || error instanceof RenderCancelled)
+      throw error
     deps.log?.(`[pixel] ${jobId} unexpected render error: ${String(error)}`)
     throw new RenderFailure(
       error instanceof StorageError ? "invalid-project" : "render-failed",

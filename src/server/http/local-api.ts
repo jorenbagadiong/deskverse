@@ -68,6 +68,26 @@ export function guardLocalApi(
   return null
 }
 
+/**
+ * Action endpoints (cancel, retry, delete, cleanup) take no input at all; a
+ * body is refused rather than ignored.
+ */
+export async function requireNoBody(
+  request: Request,
+): Promise<Response | null> {
+  const refuse = () =>
+    jsonError(400, "unexpected-body", "This action takes no request body.")
+  const length = request.headers.get("content-length")
+  if (length !== null && length !== "0") return refuse()
+  // Whatever the framing, any body bytes at all are refused.
+  try {
+    await readLimitedBody(request, 0)
+  } catch {
+    return refuse()
+  }
+  return null
+}
+
 /** Requires a JSON body; HTML forms can't send this type across sites. */
 export function requireJson(request: Request): Response | null {
   const type = request.headers.get("content-type") ?? ""
