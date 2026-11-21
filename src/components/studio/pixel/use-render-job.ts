@@ -34,7 +34,14 @@ export type RenderView =
     }
   | { kind: "starting" }
   | { kind: "tracking"; status: RenderJobStatus }
-  | { kind: "error"; message: string }
+  | { kind: "error"; message: string; stage: FailureStage }
+
+/**
+ * Where a failure happened, so the panel can say what failed: an upload
+ * rejection isn't a render failure.
+ */
+export type FailureStage =
+  "image-upload" | "audio-upload" | "start" | "render" | "cancel"
 
 const POLL_MS = 1000
 
@@ -93,6 +100,7 @@ export function useRenderJob() {
     ) => {
       const run = ++generation.current
       const live = () => generation.current === run
+      let stage: FailureStage = "start"
       try {
         setView({
           kind: "uploading",
@@ -104,6 +112,7 @@ export function useRenderJob() {
           method: "POST",
         })
 
+        stage = "image-upload"
         const assetIds: RenderRequest["assetIds"] = []
         for (const [index, image] of images.entries()) {
           if (!live()) return
@@ -128,6 +137,7 @@ export function useRenderJob() {
         }
 
         // Audio (DV-003C): the original files, one request per role.
+        stage = "audio-upload"
         const needs = audio ? MODE_NEEDS[audio.mode] : null
         const files = (
           [
@@ -159,6 +169,7 @@ export function useRenderJob() {
         }
 
         if (!live()) return
+        stage = "start"
         setView({ kind: "starting" })
         const request: RenderRequest = {
           product,
@@ -181,6 +192,7 @@ export function useRenderJob() {
           body: JSON.stringify(request),
         })
 
+        stage = "render"
         let failures = 0
         while (live()) {
           setView({ kind: "tracking", status })
@@ -199,6 +211,7 @@ export function useRenderJob() {
         if (live())
           setView({
             kind: "error",
+            stage,
             message:
               error instanceof ApiFailure
                 ? error.message
@@ -229,6 +242,7 @@ export function useRenderJob() {
     } catch (error) {
       setView({
         kind: "error",
+        stage: "cancel",
         message:
           error instanceof ApiFailure
             ? error.message

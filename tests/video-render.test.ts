@@ -15,6 +15,7 @@ import {
   wrapText,
 } from "@/server/video/ffmpeg-command"
 import {
+  checkImageDecode,
   createProgressParser,
   imageDecodeArgs,
   imageProbeArgs,
@@ -358,6 +359,66 @@ describe("render plan (safe FFmpeg arguments)", () => {
   })
 })
 
+describe("image test decode", () => {
+  const frame = "0,          0,          0,        1,   960000, 0x9a8b7c6d\n"
+  const header = "#tb 0: 1/25\n#media_type 0: video\n#dimensions 0: 800x800\n"
+  const notice = (id: string) =>
+    `[webp @ 0x${id}] invalid TIFF header in Exif data`
+
+  it("decodes one frame to a checksum line, stopping on errors", () => {
+    const args = imageDecodeArgs("/x/a.webp")
+    expect(args).toContain("-xerror")
+    expect(args.slice(-5)).toEqual(["-frames:v", "1", "-f", "framecrc", "-"])
+  })
+
+  it("accepts a clean decode of exactly one frame", () => {
+    expect(
+      checkImageDecode({ ok: true, stdout: header + frame, stderr: "" }),
+    ).toEqual({ ok: true, value: { ignoredDiagnostics: [] } })
+  })
+
+  it("ignores only FFmpeg's WebP Exif-header notice, as whole lines", () => {
+    const ok = checkImageDecode({
+      ok: true,
+      stdout: header + frame,
+      stderr: `${notice("592d434ec1c0")}\n${notice("592d434f3080")}\n`,
+    })
+    expect(ok).toEqual({
+      ok: true,
+      value: {
+        ignoredDiagnostics: [notice("592d434ec1c0"), notice("592d434f3080")],
+      },
+    })
+    for (const stderr of [
+      // Same words from another decoder, or with extra text: not allowlisted.
+      "[mjpeg @ 0x1] invalid TIFF header in Exif data",
+      `${notice("1")} and the frame was truncated`,
+      `prefix ${notice("1")}`,
+      // A real decoding error next to the notice.
+      `${notice("1")}\n[webp @ 0x2] Not enough data for the frame`,
+      "[vist#0:0/webp @ 0x5b1e] Decoding error: Invalid data found when processing input",
+    ])
+      expect(
+        checkImageDecode({ ok: true, stdout: header + frame, stderr }),
+      ).toEqual({
+        ok: false,
+        reason: "it doesn't decode cleanly (the file may be damaged).",
+      })
+  })
+
+  it("rejects failed exits and decodes without exactly one frame", () => {
+    expect(checkImageDecode({ ok: false })).toMatchObject({
+      ok: false,
+      reason: expect.stringMatching(/FFmpeg stopped with a decoding error/),
+    })
+    for (const stdout of ["", header, header + frame + frame])
+      expect(checkImageDecode({ ok: true, stdout, stderr: "" })).toEqual({
+        ok: false,
+        reason: "FFmpeg couldn't decode a picture from it.",
+      })
+  })
+})
+
 describe("FFprobe parsing", () => {
   it("builds read-only probe commands with the file protocol", () => {
     for (const args of [
@@ -367,7 +428,11 @@ describe("FFprobe parsing", () => {
       expect(args).toContain("-protocol_whitelist")
       expect(args.at(-1)).toMatch(/^file:\/x\//)
     }
-    expect(imageDecodeArgs("/x/a.jpg").slice(-3)).toEqual(["-f", "null", "-"])
+    expect(imageDecodeArgs("/x/a.jpg").slice(-3)).toEqual([
+      "-f",
+      "framecrc",
+      "-",
+    ])
   })
 
   it("accepts an image whose codec and size match the sniffed header", () => {

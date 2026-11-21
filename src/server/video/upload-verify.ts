@@ -7,6 +7,7 @@ import type { Runner } from "@/server/process/run-executable"
 import {
   audioDecodeArgs,
   audioProbeArgs,
+  checkImageDecode,
   imageDecodeArgs,
   imageProbeArgs,
   parseAudioProbe,
@@ -22,7 +23,8 @@ import {
  * Second-line upload check, after byte sniffing and header dimensions:
  * FFprobe must agree on the codec and size, and FFmpeg must decode the first
  * frame without errors (catches truncated or corrupt files that still have a
- * valid header).
+ * valid header). Notices FFmpeg logs about metadata only (see
+ * checkImageDecode) don't reject an image that decodes normally.
  */
 export function createUploadVerifier(
   run: Runner,
@@ -45,9 +47,12 @@ export function createUploadVerifier(
       })
       if (!parsed.ok) reject(parsed.reason)
     }
-    const decode = await run(commands.ffmpeg, imageDecodeArgs(filePath))
-    if (!decode.ok || decode.stderr.trim() !== "")
-      reject("it doesn't decode cleanly (the file may be damaged).")
+    // Exit status, exactly one decoded frame and a clean stderr (apart from
+    // known metadata-only notices) are all required.
+    const decoded = checkImageDecode(
+      await run(commands.ffmpeg, imageDecodeArgs(filePath)),
+    )
+    if (!decoded.ok) reject(decoded.reason)
   }
 }
 

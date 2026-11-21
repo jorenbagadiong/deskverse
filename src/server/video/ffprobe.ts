@@ -35,7 +35,10 @@ export function imageProbeArgs(filePath: string) {
   ]
 }
 
-/** Decodes the first frame and discards it: proves the image actually decodes. */
+/**
+ * Decodes the first frame and prints one checksum line for it (`framecrc`):
+ * proves the image actually decodes to a picture, not just that FFmpeg exited.
+ */
 export function imageDecodeArgs(filePath: string) {
   return [
     "-nostdin",
@@ -48,9 +51,60 @@ export function imageDecodeArgs(filePath: string) {
     "-frames:v",
     "1",
     "-f",
-    "null",
+    "framecrc",
     "-",
   ]
+}
+
+/**
+ * Diagnostics FFmpeg logs at error level that are known to concern metadata
+ * only, never the picture. Each entry must match a whole stderr line, and is
+ * accepted only when the decode also exited cleanly with exactly one frame.
+ *
+ * - WebP: many encoders write the EXIF chunk with an "Exif\0\0" prefix (the
+ *   JPEG APP1 convention) instead of raw TIFF. FFmpeg 6.1's WebP decoder
+ *   then logs "invalid TIFF header in Exif data", skips the metadata and
+ *   decodes the image normally: pixel-identical to the same file without
+ *   the chunk (verified with frame checksums).
+ */
+const METADATA_ONLY_DIAGNOSTICS: readonly RegExp[] = [
+  /^\[webp @ 0x[0-9a-f]+\] invalid TIFF header in Exif data$/,
+]
+
+export type ImageDecodeCheck = ProbeCheck<{ ignoredDiagnostics: string[] }>
+
+/**
+ * Judges a test decode (see imageDecodeArgs). Rejects a failed exit, anything
+ * but exactly one decoded frame, and any stderr line that isn't a known
+ * metadata-only diagnostic. Real decoding errors are never ignored.
+ */
+export function checkImageDecode(
+  result: { ok: true; stdout: string; stderr: string } | { ok: false },
+): ImageDecodeCheck {
+  if (!result.ok)
+    return {
+      ok: false,
+      reason:
+        "FFmpeg stopped with a decoding error (the file may be damaged or cut off).",
+    }
+  const frames = result.stdout
+    .split("\n")
+    .filter((line) => line.trim() !== "" && !line.startsWith("#"))
+  if (frames.length !== 1)
+    return { ok: false, reason: "FFmpeg couldn't decode a picture from it." }
+  const lines = result.stderr
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+  const unexpected = lines.filter(
+    (line) => !METADATA_ONLY_DIAGNOSTICS.some((pattern) => pattern.test(line)),
+  )
+  if (unexpected.length > 0)
+    return {
+      ok: false,
+      reason: "it doesn't decode cleanly (the file may be damaged).",
+    }
+  return { ok: true, value: { ignoredDiagnostics: lines } }
 }
 
 /** FFmpeg's decoder name for each accepted type. */

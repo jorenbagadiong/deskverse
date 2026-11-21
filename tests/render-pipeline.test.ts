@@ -38,6 +38,9 @@ import { createUploadVerifier } from "@/server/video/upload-verify"
 
 const fonts = { bold: loadVideoFont("bold"), medium: loadVideoFont("medium") }
 
+/** One `framecrc` line: what a successful single-frame test decode prints. */
+const FRAME_LINE = "0,          0,          0,        1,  1749600, 0x1f2e3d4c\n"
+
 function png(width: number, height: number) {
   const b = new Uint8Array(33)
   b.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13])
@@ -320,7 +323,8 @@ describe("project storage", () => {
           }
         : {
             ok: true,
-            stdout: "",
+            // A frame came out, but the decoder reported a real error.
+            stdout: FRAME_LINE,
             stderr: "[png @ 0x1] IDAT: invalid code lengths set\n",
           }
     await expect(
@@ -340,6 +344,94 @@ describe("project storage", () => {
       ),
     ).rejects.toMatchObject({
       message: expect.stringMatching(/doesn't decode cleanly/),
+    })
+  })
+})
+
+describe("WebP uploads with metadata-only decoder notices", () => {
+  /** Header-only WebP (VP8X): enough for byte sniffing and dimensions. */
+  function webp(width: number, height: number) {
+    const b = new Uint8Array(30)
+    const text = (at: number, value: string) =>
+      [...value].forEach((c, i) => (b[at + i] = c.charCodeAt(0)))
+    text(0, "RIFF")
+    new DataView(b.buffer).setUint32(4, 22, true)
+    text(8, "WEBPVP8X")
+    b[16] = 10
+    b[20] = 0x08 // EXIF flag
+    const put24 = (at: number, v: number) => {
+      b[at] = v & 0xff
+      b[at + 1] = (v >> 8) & 0xff
+      b[at + 2] = (v >> 16) & 0xff
+    }
+    put24(24, width - 1)
+    put24(27, height - 1)
+    return b
+  }
+
+  const fakeFfmpeg =
+    (decode: Awaited<ReturnType<Runner>>): Runner =>
+    async (_command, args) =>
+      args.includes("-show_entries")
+        ? {
+            ok: true,
+            stdout: JSON.stringify({
+              streams: [{ codec_name: "webp", width: 1080, height: 1080 }],
+            }),
+            stderr: "",
+          }
+        : decode
+
+  async function upload(decode: Awaited<ReturnType<Runner>>) {
+    const job = await storage.createJob()
+    return storage.addImageAsset(
+      job.id,
+      {
+        bytes: webp(1080, 1080),
+        declaredType: "image/webp",
+        fileName: "ph-11134207.webp",
+      },
+      {
+        verify: createUploadVerifier(fakeFfmpeg(decode), {
+          ffmpeg: "ffmpeg",
+          ffprobe: "ffprobe",
+        }),
+      },
+    )
+  }
+
+  const NOTICE =
+    "[webp @ 0x592d434ec1c0] invalid TIFF header in Exif data\n[webp @ 0x592d434f3080] invalid TIFF header in Exif data\n"
+
+  it("accepts a WebP whose only stderr is FFmpeg's Exif-prefix notice", async () => {
+    const asset = await upload({ ok: true, stdout: FRAME_LINE, stderr: NOTICE })
+    expect(asset).toMatchObject({ mimeType: "image/webp", width: 1080 })
+  })
+
+  it("still rejects it when a real decoding error comes with the notice", async () => {
+    await expect(
+      upload({
+        ok: true,
+        stdout: FRAME_LINE,
+        stderr: `${NOTICE}[webp @ 0x1] Not enough data for the frame\n`,
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid-upload",
+      message:
+        "“ph-11134207.webp” couldn't be verified: it doesn't decode cleanly (the file may be damaged).",
+    })
+  })
+
+  it("rejects a failed or frameless decode, notice or not", async () => {
+    await expect(
+      upload({ ok: false, reason: "failed", exitCode: 69 }),
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/FFmpeg stopped with a decoding error/),
+    })
+    await expect(
+      upload({ ok: true, stdout: "", stderr: NOTICE }),
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/couldn't decode a picture/),
     })
   })
 })

@@ -12,7 +12,10 @@ import {
   LoaderCircle,
 } from "lucide-react"
 
-import type { RenderView } from "@/components/studio/pixel/use-render-job"
+import type {
+  FailureStage,
+  RenderView,
+} from "@/components/studio/pixel/use-render-job"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import type { RenderProgress } from "@/lib/video/render-job"
@@ -24,6 +27,15 @@ export interface RenderRequirement {
 }
 
 /** Human description of real server progress (no estimates). */
+/** The alert's title says which step failed. */
+const FAILURE_TITLE: Record<FailureStage, string> = {
+  "image-upload": "Image upload failed.",
+  "audio-upload": "Audio upload failed.",
+  start: "The render couldn't start.",
+  render: "Render failed.",
+  cancel: "Cancelling failed.",
+}
+
 function describe(progress: RenderProgress | null, state: string) {
   if (!progress)
     return {
@@ -117,6 +129,8 @@ export function RenderPanel({
   const failed = view.kind === "error" || status?.state === "failed"
   const failureMessage =
     view.kind === "error" ? view.message : status?.error?.message
+  const failureTitle =
+    view.kind === "error" ? FAILURE_TITLE[view.stage] : FAILURE_TITLE.render
 
   let activity: { text: string; percent: number | null } | null = null
   if (view.kind === "uploading")
@@ -239,7 +253,7 @@ export function RenderPanel({
             className="mt-0.5 size-4 shrink-0 text-destructive"
           />
           <p>
-            <strong className="font-semibold">Render failed.</strong>{" "}
+            <strong className="font-semibold">{failureTitle}</strong>{" "}
             {failureMessage}
           </p>
         </div>

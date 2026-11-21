@@ -698,7 +698,14 @@ folder in the system temp directory.
 - **Uploads:** `Content-Length` is checked first, the body is counted while
   streaming and cut off at 10 MB, the type is identified by the file's
   bytes, FFprobe must agree on codec and size, and FFmpeg must decode the
-  image without errors. A failed check deletes the file again.
+  image without errors: a clean exit, exactly one decoded frame (checked
+  with a `framecrc` line), and nothing on stderr. The one exception is a
+  short allowlist of metadata-only notices, matched as whole lines: today
+  only FFmpeg 6.1's `invalid TIFF header in Exif data` from the WebP
+  decoder. Many encoders write a WebP's EXIF chunk with an `Exif\0\0`
+  prefix; FFmpeg skips that metadata and decodes identical pixels. Real
+  decoding errors are never ignored. A failed check deletes the file again,
+  and the studio reports it as "Image upload failed." with the reason.
 - **Owner-only permissions:** directories `0700`, files `0600`, files written
   with `wx` (never overwrite), metadata written atomically (temp file +
   rename), and updates to one job serialized. `project.json` can only be
