@@ -226,8 +226,8 @@ export function WorkflowSection({ ticket }: { ticket: TicketDetail }) {
                   .join(", ")}
                 .{" "}
                 {state.availability.research
-                  ? "Scout research runs on its own: use Scout Research below."
-                  : "Scout research is switched off (see Scout Research below)."}
+                  ? "Scout research and Quill scriptwriting run on their own: use the sections below."
+                  : "Quill scriptwriting runs on its own (Quill Scripts below); Scout research is switched off."}
               </p>
             </div>
           ) : null}

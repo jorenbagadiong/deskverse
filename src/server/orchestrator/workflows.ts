@@ -98,6 +98,27 @@ export const RESEARCH_WORKFLOW: WorkflowDefinition = {
 }
 
 /**
+ * Scriptwriting only (DV-005B): Quill writes one script per selected
+ * product from an explicitly chosen, verified Scout report (pinned in the
+ * task's params). No research is repeated, nothing is rendered. Writing is
+ * pure (database in, database out), so a crashed attempt is safe to repeat.
+ */
+export const QUILL_WORKFLOW: WorkflowDefinition = {
+  id: "quill-script-v1",
+  mode: "production",
+  title: "Scriptwriting only (Quill)",
+  stages: [
+    {
+      stage: "quill.script",
+      label: "Quill: script",
+      dependsOn: [],
+      resourceClass: "cpu",
+      recovery: "retry",
+    },
+  ],
+}
+
+/**
  * The full production chain. Not runnable until Quill, Pixel and Vera
  * have production handlers. Publishing (Relay) will use recovery "inspect": a crashed
  * attempt might already have published, so it is never retried blindly.
@@ -138,9 +159,8 @@ export const PRODUCTION_WORKFLOW: WorkflowDefinition = {
   ],
 }
 
-/** Milestones that will provide the remaining production handlers (Scout: DV-005A, built). */
+/** Milestones that will provide the remaining production handlers (Scout DV-005A and Quill DV-005B are built). */
 export const MISSING_PRODUCTION_CAPABILITIES = [
-  { stage: "quill.script", milestone: "DV-005B" },
   {
     stage: "pixel.render",
     milestone: "DV-005C (needs a render gate shared with Pixel Studio)",
@@ -151,6 +171,7 @@ export const MISSING_PRODUCTION_CAPABILITIES = [
 export const WORKFLOWS: readonly WorkflowDefinition[] = [
   VERIFICATION_WORKFLOW,
   RESEARCH_WORKFLOW,
+  QUILL_WORKFLOW,
   PRODUCTION_WORKFLOW,
 ]
 
@@ -177,6 +198,7 @@ export const stageLabel = (stage: string) =>
 export interface HandlerContext {
   taskId: string
   runId: string
+  ticketId: string
   stage: string
   /** Counted attempt number (1-based). */
   attempt: number
@@ -198,7 +220,7 @@ export interface CommitContext {
   fence: number
 }
 
-export type ResultKind = "verification" | "scout_research"
+export type ResultKind = "verification" | "scout_research" | "quill_script"
 
 export type HandlerOutcome =
   | {

@@ -28,7 +28,8 @@
     "orchestrator:verify": "tsx --import ./scripts/server-only-hook.mjs scripts/orchestrator/verify.ts",
     "scout:check": "tsx --import ./scripts/server-only-hook.mjs scripts/scout/check.ts",
     "scout:verify": "tsx --import ./scripts/server-only-hook.mjs scripts/scout/verify.ts",
-    "scout:smoke": "tsx --import ./scripts/server-only-hook.mjs scripts/scout/smoke.ts"
+    "scout:smoke": "tsx --import ./scripts/server-only-hook.mjs scripts/scout/smoke.ts",
+    "quill:verify": "tsx --import ./scripts/server-only-hook.mjs scripts/quill/verify.ts"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.3.0",

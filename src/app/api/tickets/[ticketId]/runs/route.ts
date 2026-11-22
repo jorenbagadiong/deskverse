@@ -69,6 +69,35 @@ function parseVerification(raw: unknown, mode: unknown): VerificationOptions {
   return { durationMs, faults: faults as VerificationOptions["faults"] }
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** Quill (DV-005B): [{ productId, reportId }], 1–100, nothing else. */
+function parseScripts(raw: unknown) {
+  if (raw === undefined) return undefined
+  const bad = () =>
+    invalid(
+      [{ path: "scripts", message: "Choose a research report per product." }],
+      "Send scripts as [{ productId, reportId }].",
+    )
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > 100) throw bad()
+  return raw.map((item) => {
+    if (
+      !item ||
+      typeof item !== "object" ||
+      Object.keys(item).some((k) => k !== "productId" && k !== "reportId") ||
+      typeof item.productId !== "string" ||
+      typeof item.reportId !== "string" ||
+      !UUID.test(item.productId) ||
+      !UUID.test(item.reportId)
+    )
+      throw bad()
+    return {
+      productId: item.productId as string,
+      reportId: item.reportId as string,
+    }
+  })
+}
+
 /**
  * GET  /api/tickets/:ticketId/runs  → { availability, runs }
  * POST /api/tickets/:ticketId/runs  { requestId, ticketVersion, mode, workflow?, verification? }
@@ -76,6 +105,8 @@ function parseVerification(raw: unknown, mode: unknown): VerificationOptions {
  *   research only, when source retrieval is switched on.
  *   mode "production" + workflow "campaign-v1" (the default): refused
  *   (503 capability-unavailable) until Quill, Pixel and Vera exist.
+ *   mode "production" + workflow "quill-script-v1" + scripts (DV-005B):
+ *   Quill scriptwriting only, from the chosen, verified, current reports.
  *   mode "verification": only in an isolated test environment.
  *   201 { runId } (200 if the requestId was already used).
  */
@@ -112,6 +143,7 @@ export async function POST(
           "mode",
           "workflow",
           "verification",
+          "scripts",
         ].includes(k),
     )
     if (
@@ -127,8 +159,9 @@ export async function POST(
     )
       throw invalid(
         [],
-        "Send { requestId, ticketVersion, mode, workflow?, verification? }.",
+        "Send { requestId, ticketVersion, mode, workflow?, verification?, scripts? }.",
       )
+    const scripts = parseScripts(body.scripts)
     const verification = parseVerification(body.verification, body.mode)
     const available = availability()
     const { runId, created } = await planRun(pool(), {
@@ -141,6 +174,7 @@ export async function POST(
       availableWorkflows: availableWorkflows(),
       verificationAllowed: available.verification,
       verification,
+      scripts,
     })
     return jsonResponse({ runId }, created ? 201 : 200)
   })

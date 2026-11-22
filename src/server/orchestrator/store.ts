@@ -1,6 +1,10 @@
-import { createHash } from "node:crypto"
-
 import type pg from "pg"
+
+import {
+  canonicalJson,
+  sha256,
+  type Queryable,
+} from "@/server/orchestrator/canonical"
 
 import {
   ACTIVE_RUN_STATUSES,
@@ -24,6 +28,7 @@ import type {
 import {
   MISSING_PRODUCTION_CAPABILITIES,
   PRODUCTION_WORKFLOW,
+  QUILL_WORKFLOW,
   RESEARCH_WORKFLOW,
   stageLabel,
   VERIFICATION_WORKFLOW,
@@ -34,6 +39,7 @@ import {
   type WorkflowDefinition,
 } from "@/server/orchestrator/workflows"
 import { sameDestination } from "@/server/scout/net/url"
+import { verifyScoutReport } from "@/server/scout/store"
 
 /**
  * Durable orchestration state in PostgreSQL (DV-004C).
@@ -62,6 +68,7 @@ export class OrchestratorError extends Error {
       | "invalid-transition"
       | "unavailable"
       | "invalid"
+      | "stale-research"
       | "limit",
     message: string,
   ) {
@@ -93,21 +100,7 @@ export async function transaction<T>(
 const ACTIVE_RUNS = ACTIVE_RUN_STATUSES as readonly string[]
 const UNSUCCESSFUL = ["failed", "needs_input", "blocked", "cancelled"]
 
-/** Canonical JSON (sorted keys) for checksums. */
-export function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`
-  if (value && typeof value === "object")
-    return `{${Object.keys(value)
-      .sort()
-      .map(
-        (k) =>
-          `${JSON.stringify(k)}:${canonicalJson((value as Record<string, unknown>)[k])}`,
-      )
-      .join(",")}}`
-  return JSON.stringify(value)
-}
-
-const sha256 = (text: string) => createHash("sha256").update(text).digest("hex")
+export { canonicalJson }
 
 async function event(
   c: Client,
@@ -168,6 +161,8 @@ export interface PlanInput {
   verificationAllowed: boolean
   /** Other production workflows that can run here (e.g. "scout-research-v1"). */
   availableWorkflows?: readonly string[]
+  /** Quill (DV-005B): the Scout report to write each product's script from. */
+  scripts?: readonly { productId: string; reportId: string }[]
   verification?: VerificationOptions
   retry?: Partial<RetryPolicy>
 }
@@ -179,7 +174,6 @@ export interface PlanInput {
  * exactly. A repeated requestId returns the original run.
  */
 const NAMES: Record<string, string> = {
-  "quill.script": "Quill",
   "pixel.render": "Pixel",
   "vera.review": "Vera",
 }
@@ -189,7 +183,7 @@ export const CAMPAIGN_UNAVAILABLE = `Full campaign automation isn't available ye
     `${i === all.length - 1 ? "and " : ""}${NAMES[c.stage] ?? c.stage} (${c.milestone.split(" ")[0]})`,
 ).join(
   ", ",
-)} aren't built. Nothing was started. Research-only runs (Scout) are available separately.`
+)} aren't built. Nothing was started. Research-only (Scout) and scriptwriting-only (Quill) runs are available separately.`
 
 export const RESEARCH_UNAVAILABLE =
   "Scout research isn't switched on: source retrieval is off. Set DESKVERSE_SCOUT_RETRIEVAL=on in .env.local, restart the app and the worker, then try again. Nothing was started."
@@ -226,6 +220,161 @@ function selectWorkflow(input: PlanInput): WorkflowDefinition {
         : `${workflow.title} isn't available here. Nothing was started.`,
     )
   return workflow
+}
+
+interface SnapshotProduct extends Record<string, unknown> {
+  id: string
+  position: number
+}
+
+/**
+ * The frozen input each product WOULD get if a run started now: the same
+ * data and checksum planRun stores. Used by planRun and to tell whether a
+ * Scout report still matches the current product (DV-005B).
+ */
+export async function currentProductSnapshots(c: Queryable, ticketId: string) {
+  const ticket = (
+    await c.query(
+      "SELECT id, number, title, platform, priority, instructions, publishing_preferences FROM affiliate_tickets WHERE id = $1",
+      [ticketId],
+    )
+  ).rows[0]
+  const products: SnapshotProduct[] = (
+    await c.query(
+      "SELECT id, position, name, affiliate_url, description, specifications, notes, source, media_rights, media_rights_note FROM ticket_products WHERE ticket_id = $1 ORDER BY position",
+      [ticketId],
+    )
+  ).rows
+  const references: {
+    product_id: string
+    kind: string
+    url: string
+    label: string
+  }[] = (
+    await c.query(
+      "SELECT product_id, kind, url, label FROM ticket_references WHERE ticket_id = $1 ORDER BY position",
+      [ticketId],
+    )
+  ).rows
+  const assets = (
+    await c.query(
+      "SELECT id, product_id, kind, mime_type, extension, byte_size, sha256, width, height, duration_ms FROM ticket_assets WHERE ticket_id = $1 ORDER BY position, created_at",
+      [ticketId],
+    )
+  ).rows
+  if (!ticket) return { snapshots: [], products, references }
+  const campaign = {
+    id: ticket.id,
+    number: ticket.number,
+    title: ticket.title,
+    platform: ticket.platform,
+    priority: ticket.priority,
+    instructions: ticket.instructions,
+    publishingPreferences: ticket.publishing_preferences,
+  }
+  const snapshots = products.map((product) => {
+    const data = {
+      schemaVersion: 1,
+      ticket: campaign,
+      product: {
+        id: product.id,
+        position: product.position,
+        name: product.name,
+        affiliateUrl: product.affiliate_url,
+        description: product.description,
+        specifications: product.specifications,
+        notes: product.notes,
+        source: product.source,
+        mediaRights: product.media_rights,
+        mediaRightsNote: product.media_rights_note,
+        references: references
+          .filter((r) => r.product_id === product.id)
+          .map(({ kind, url, label }) => ({ kind, url, label })),
+        assets: assets
+          .filter((a) => a.product_id === product.id)
+          .map((a) => ({
+            id: a.id,
+            kind: a.kind,
+            mimeType: a.mime_type,
+            extension: a.extension,
+            byteSize: Number(a.byte_size),
+            sha256: a.sha256,
+            width: a.width,
+            height: a.height,
+            durationMs: a.duration_ms,
+          })),
+      },
+    }
+    return { product, data, checksum: sha256(canonicalJson(data)) }
+  })
+  return { snapshots, products, references }
+}
+
+/** What a Quill task pins: the exact Scout report it must write from. */
+export interface ReportPin {
+  reportId: string
+  reportVersion: number
+  reportChecksum: string
+}
+
+/**
+ * Validates the owner's report choices for a Quill run (DV-005B): one per
+ * product, the report belongs to this ticket and product, its checksum
+ * still verifies, and the product hasn't changed since Scout researched it
+ * (the frozen snapshot would be identical). Anything else is refused with
+ * the reason; nothing is mixed across versions.
+ */
+async function pinScoutReports(
+  c: Client,
+  input: PlanInput,
+  snapshots: Awaited<ReturnType<typeof currentProductSnapshots>>["snapshots"],
+) {
+  const selections = input.scripts ?? []
+  if (selections.length === 0)
+    throw new OrchestratorError(
+      "invalid",
+      "Choose a Scout research report for at least one product.",
+    )
+  const pins = new Map<string, ReportPin>()
+  for (const s of selections) {
+    const target = snapshots.find((x) => x.product.id === s.productId)
+    if (!target)
+      throw new OrchestratorError(
+        "not-found",
+        "One of the chosen products isn't part of this ticket.",
+      )
+    if (pins.has(s.productId))
+      throw new OrchestratorError("invalid", "Choose one report per product.")
+    const name =
+      String(target.product.name ?? "") ||
+      `Product #${target.product.position + 1}`
+    const verified = await verifyScoutReport(c, s.reportId)
+    if (
+      !verified ||
+      verified.ticketId !== input.ticketId ||
+      verified.productId !== s.productId
+    )
+      throw new OrchestratorError(
+        "not-found",
+        `That research report isn't one of “${name}”'s reports.`,
+      )
+    if (!verified.intact)
+      throw new OrchestratorError(
+        "invalid",
+        `“${name}”'s research report fails its checksum check, so Quill won't write from it. Run Scout again.`,
+      )
+    if (verified.snapshotChecksum !== target.checksum)
+      throw new OrchestratorError(
+        "stale-research",
+        `“${name}” has changed since Scout researched it (version ${verified.reportVersion}). Run Scout again on the current product, then write the script from the new report.`,
+      )
+    pins.set(s.productId, {
+      reportId: verified.reportId,
+      reportVersion: verified.reportVersion,
+      reportChecksum: verified.checksum,
+    })
+  }
+  return pins
 }
 
 export async function planRun(
@@ -294,26 +443,12 @@ export async function planRun(
         "This ticket already has an unfinished run. Wait for it, or cancel it first.",
       )
 
-    const products = (
-      await c.query<Record<string, unknown> & { id: string; position: number }>(
-        "SELECT id, position, name, affiliate_url, description, specifications, notes, source, media_rights, media_rights_note FROM ticket_products WHERE ticket_id = $1 ORDER BY position",
-        [input.ticketId],
-      )
-    ).rows
+    const { snapshots, products, references } = await currentProductSnapshots(
+      c,
+      input.ticketId,
+    )
     if (products.length === 0)
       throw new OrchestratorError("not-ready", "The ticket has no products.")
-    const references = (
-      await c.query(
-        "SELECT product_id, kind, url, label FROM ticket_references WHERE ticket_id = $1 ORDER BY position",
-        [input.ticketId],
-      )
-    ).rows
-    const assets = (
-      await c.query(
-        "SELECT id, product_id, kind, mime_type, extension, byte_size, sha256, width, height, duration_ms FROM ticket_assets WHERE ticket_id = $1 ORDER BY position, created_at",
-        [input.ticketId],
-      )
-    ).rows
     if (workflow.id === RESEARCH_WORKFLOW.id) {
       const researchable = products.filter(
         (p) =>
@@ -344,49 +479,16 @@ export async function planRun(
       )
     ).rows[0]
 
-    const campaign = {
-      id: ticket.id,
-      number: ticket.number,
-      title: ticket.title,
-      platform: ticket.platform,
-      priority: ticket.priority,
-      instructions: ticket.instructions,
-      publishingPreferences: ticket.publishing_preferences,
-    }
+    // Quill (DV-005B): only the selected products, each pinned to a verified,
+    // still-current Scout report.
+    const pins =
+      workflow.id === QUILL_WORKFLOW.id
+        ? await pinScoutReports(c, input, snapshots)
+        : null
     let taskCount = 0
-    for (const product of products) {
-      const data = {
-        schemaVersion: 1,
-        ticket: campaign,
-        product: {
-          id: product.id,
-          position: product.position,
-          name: product.name,
-          affiliateUrl: product.affiliate_url,
-          description: product.description,
-          specifications: product.specifications,
-          notes: product.notes,
-          source: product.source,
-          mediaRights: product.media_rights,
-          mediaRightsNote: product.media_rights_note,
-          references: references
-            .filter((r) => r.product_id === product.id)
-            .map(({ kind, url, label }) => ({ kind, url, label })),
-          assets: assets
-            .filter((a) => a.product_id === product.id)
-            .map((a) => ({
-              id: a.id,
-              kind: a.kind,
-              mimeType: a.mime_type,
-              extension: a.extension,
-              byteSize: Number(a.byte_size),
-              sha256: a.sha256,
-              width: a.width,
-              height: a.height,
-              durationMs: a.duration_ms,
-            })),
-        },
-      }
+    for (const { product, data, checksum } of snapshots) {
+      const pin = pins?.get(product.id)
+      if (pins && !pin) continue
       const snapshot = (
         await c.query<{ id: string }>(
           "INSERT INTO run_product_snapshots (run_id, ticket_id, product_id, position, schema_version, data, checksum) VALUES ($1, $2, $3, $4, 1, $5, $6) RETURNING id",
@@ -396,7 +498,7 @@ export async function planRun(
             product.id,
             product.position,
             data,
-            sha256(canonicalJson(data)),
+            checksum,
           ],
         )
       ).rows[0]
@@ -409,7 +511,9 @@ export async function planRun(
         const params: Record<string, unknown> =
           workflow.mode === "verification"
             ? { durationMs: input.verification?.durationMs ?? 200 }
-            : {}
+            : pin
+              ? { ...pin }
+              : {}
         if (fault && workflow.mode === "verification")
           params.fail = { kind: fault.kind, times: fault.times ?? 1 }
         const task = (
@@ -447,7 +551,7 @@ export async function planRun(
       {
         mode: input.mode,
         workflow: workflow.id,
-        products: products.length,
+        products: pins ? pins.size : products.length,
         tasks: taskCount,
         ticketVersion: ticket.version,
       },

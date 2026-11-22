@@ -29,6 +29,13 @@
       "when": 1795298772653,
       "tag": "0003_scout_research",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1795302732745,
+      "tag": "0004_quill_scripts",
+      "breakpoints": true
     }
   ]
 }

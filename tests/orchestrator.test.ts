@@ -222,6 +222,7 @@ describe("handlers and configuration", () => {
     const ctx = {
       taskId: "t",
       runId: "r",
+      ticketId: "k",
       stage: "verify.collect",
       attempt: 1,
       maxAttempts: 3,

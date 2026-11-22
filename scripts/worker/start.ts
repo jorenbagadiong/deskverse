@@ -12,6 +12,8 @@ import {
 } from "@/server/orchestrator/workflows"
 import { Worker } from "@/server/orchestrator/worker"
 import { readScoutConfig, testNetworkAllowed } from "@/server/scout/config"
+import { quillTestHooks, readQuillConfig } from "@/server/quill/ollama"
+import { createQuillHandler } from "@/server/quill/handler"
 import { createScoutHandler } from "@/server/scout/handler"
 import { parseTestNetwork, testNetwork } from "@/server/scout/net/test-network"
 
@@ -53,31 +55,45 @@ if (
   process.exit(1)
 }
 const scout = readScoutConfig()
+const quill = readQuillConfig()
+let quillTest: ReturnType<typeof quillTestHooks> = null
+try {
+  quillTest = quillTestHooks(process.env, db.config)
+} catch {
+  console.error(
+    "✗ DESKVERSE_QUILL_TEST only runs on a test database (deskverse_test_*). Refusing to start.",
+  )
+  process.exit(1)
+}
 const fixture = process.env.DESKVERSE_SCOUT_TEST_NETWORK
   ? parseTestNetwork(process.env.DESKVERSE_SCOUT_TEST_NETWORK)
   : null
-const registry = createRegistry({
-  verification,
-  production: scout.retrieval
-    ? [
-        createScoutHandler({
-          config: scout,
-          ...(fixture
-            ? {
-                network: testNetwork(fixture),
-                crashBeforeCommit: (name, attempt) =>
-                  Boolean(fixture.crashBeforeCommit) &&
-                  name.includes(fixture.crashBeforeCommit!) &&
-                  attempt === 1,
-              }
-            : {}),
-        }),
-      ]
-    : [],
-})
 const pool = createPool(db.config, {
   max: config.slots + 3,
   applicationName: "deskverse-worker",
+})
+const registry = createRegistry({
+  verification,
+  production: [
+    // Quill (DV-005B) reads only the database, so it is always available.
+    createQuillHandler({ pool, config: quill, test: quillTest }),
+    ...(scout.retrieval
+      ? [
+          createScoutHandler({
+            config: scout,
+            ...(fixture
+              ? {
+                  network: testNetwork(fixture),
+                  crashBeforeCommit: (name, attempt) =>
+                    Boolean(fixture.crashBeforeCommit) &&
+                    name.includes(fixture.crashBeforeCommit!) &&
+                    attempt === 1,
+                }
+              : {}),
+          }),
+        ]
+      : []),
+  ],
 })
 const worker = new Worker({ pool, registry, ...config }).start()
 
@@ -98,6 +114,9 @@ else
   console.log(
     "[worker] Scout research is off (set DESKVERSE_SCOUT_RETRIEVAL=on in .env.local to enable it)",
   )
+console.log(
+  `[worker] Quill scriptwriting: ${quill.generation === "ollama" ? (quill.ollama ? `template + local model ${quill.ollama.model}` : `template only (local model unusable: ${quill.ollamaProblem})`) : "template mode (no AI model)"}`,
+)
 console.log(
   `[worker] full campaign unavailable until ${MISSING_PRODUCTION_CAPABILITIES.map((c) => `${c.stage}: ${c.milestone}`).join("; ")}`,
 )

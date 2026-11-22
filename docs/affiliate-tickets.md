@@ -317,4 +317,8 @@ a killed run are removed at the next start.
 - **Research (DV-005A)** reads only the references you add; see
   [Scout research](scout-research.md) for what it can't read (JavaScript-only
   pages, logins, CAPTCHAs, sites that block automated access).
-- **Next: DV-005B, Quill.**
+- **Scripts (DV-005B)** come from a chosen Scout report and need research
+  that matches the current ticket and product exactly: after any edit, run
+  Scout again before writing new scripts. See
+  [Quill scriptwriting](quill-scriptwriting.md).
+- **Next: DV-005C, Pixel.**

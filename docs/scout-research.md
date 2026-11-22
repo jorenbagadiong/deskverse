@@ -25,6 +25,7 @@ adverts, scripts or videos, publish anything, or search the web.
 13. [Commands](#13-commands)
 14. [Tests and evidence](#14-tests-and-evidence)
 15. [Known limitations](#15-known-limitations)
+16. [Used by Quill (DV-005B)](#16-used-by-quill-dv-005b)
 
 ## 1. What Scout does, and doesn't
 
@@ -456,3 +457,13 @@ yarn scout:smoke --url https://… --name "Product" [--kind manufacturer] [--spe
   seen in the last 15 s).
 - Real local-model inference is optional and was not available on the
   development machine during DV-005A (mocked in tests).
+
+## 16. Used by Quill (DV-005B)
+
+Quill writes scripts only from a Scout report the owner chooses, pinned by
+ID, version and checksum; it re-verifies the checksum and refuses reports
+made from older product data. Only claims that are `supported`, not
+sensitive, not time-sensitive, not identifiers, free of conflicts and
+backed by real supporting evidence become copy. Scout's `sellingPoints`
+guide the order, but their claim keys are re-checked. Quill never changes
+Scout reports. See [Quill scriptwriting](quill-scriptwriting.md).

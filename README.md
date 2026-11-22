@@ -128,6 +128,7 @@ move the repo into the Linux home directory.
 | `yarn scout:check`         | Read-only Scout diagnostics (research, model, worker)  |
 | `yarn scout:verify`        | Scout crash verification (scratch DB, fixture sites)   |
 | `yarn scout:smoke`         | Bounded live check of one public reference page        |
+| `yarn quill:verify`        | Quill crash verification (scratch DB, fixture reports) |
 
 ## Project structure
 
@@ -174,13 +175,16 @@ src/
     orchestrator/       Runs, frozen inputs, task graph, claims/leases, worker, handlers (DV-004C)
     scout/              Scout research (DV-005A): safe retrieval (net/), extraction, claim
                         analysis, optional local model, handler, report storage
+    quill/              Quill scriptwriting (DV-005B): claim selection, templates, validation,
+                        optional local model, handler, script storage
 drizzle/                Versioned SQL migrations (committed)
 scripts/                yarn db:*, tickets:*, worker:*, orchestrator:*, scout:* commands, setup-local.sh,
                         e2e/ database test server, scout/ fixture sites (tests only)
 assets/fonts/inter/     Inter Bold + Medium (SIL OFL 1.1) for video captions
 docs/                   ROADMAP.md, brand-guidelines.md, animation-guidelines.md,
                         3d-office-architecture.md, video-architecture.md, database-architecture.md,
-                        affiliate-tickets.md, orchestrator.md, scout-research.md
+                        affiliate-tickets.md, orchestrator.md, scout-research.md,
+                        quill-scriptwriting.md
 tests/                  Vitest unit tests (+ integration/: real FFmpeg, db/: real PostgreSQL)
 e2e/                    Playwright browser tests
 ```
@@ -289,6 +293,36 @@ software WebGL and logs a deprecation warning, which the suite treats as a
 failure by design. Everything else passes. Run the office tests where Chrome
 has a GPU (for example native Windows). Details and the exact list:
 [E2E environment notes](docs/e2e-environment.md).
+
+## DV-005B scope: Quill, evidence-grounded scriptwriting ✅
+
+Quill writes short vertical affiliate video scripts from Scout research you
+choose. **Scriptwriting only:** nothing is rendered or published, and the
+full campaign stays unavailable.
+
+- **Pick the research:** in a Ready ticket's **Quill Scripts** section,
+  choose a Scout report per product and press **Start scriptwriting**
+  (worker: `yarn worker:start`). Reports made before the product changed,
+  or whose checksum fails, are refused: run Scout again.
+- **Only safe facts become copy:** claims Scout found **supported** by a
+  read, matched source; never prices, discounts, ratings, stock, delivery,
+  warranty, health, certifications, comparisons, "best", conflicting or
+  time-sensitive facts. Fewer than 2 safe facts asks you for input.
+- **The script:** hook, 1–5 benefit scenes, call to action, captions,
+  narration, visual directions and durations (Pixel's 15–30 s storyboard),
+  plus the affiliate disclosure on every scene. Every factual scene lists
+  its Scout claim and evidence.
+- **Template mode** (no AI model) by default; optional **local AI wording**
+  (Ollama, loopback, your model), every proposal validated and rejected
+  if it adds facts, numbers, citations, experiences or guarantees.
+- **Durable and exact:** immutable, versioned, checksummed scripts pinned
+  to one exact Scout report and product snapshot, written in the same
+  transaction that completes the task (migration `0004_quill_scripts`);
+  the database itself refuses ineligible claims and stale workers.
+- **Pixel checks without rendering:** Pixel text limits and image
+  readiness (3–6 images) are shown separately from script validity.
+
+Details: [Quill scriptwriting](docs/quill-scriptwriting.md).
 
 ## DV-005A scope: Scout, evidence-backed product research ✅
 
@@ -645,8 +679,8 @@ Rendering, uploads and downloads followed in DV-003B (above).
 ## Future milestones
 
 The plan from here is the Affiliate Ticket workflow in
-[docs/ROADMAP.md](docs/ROADMAP.md). Next is **DV-005B: Quill**
-(scriptwriting from Scout's verified facts).
+[docs/ROADMAP.md](docs/ROADMAP.md). Next is **DV-005C: Pixel** (rendering Quill scripts through Pixel
+Studio's pipeline and a shared render gate).
 Earlier ideas:
 
 - **Remaining AI team.** Quill, Vera, Relay and Ledger join the office using

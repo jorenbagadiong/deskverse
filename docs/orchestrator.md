@@ -11,8 +11,10 @@ research, scripts, rendering, review, publishing or analytics.
 `scout-research-v1`. See [§16](#16-dv-005a-additions).
 
 - **The full campaign is refused** ("Full campaign automation isn't
-  available yet") until Quill, Pixel and Vera exist (DV-005B, DV-005C,
-  DV-006A). Research-only runs are allowed when source retrieval is on.
+  available yet") until Pixel and Vera exist (DV-005C, DV-006A).
+  Research-only runs (Scout) are allowed when source retrieval is on, and
+  scriptwriting-only runs (Quill, DV-005B, `quill-script-v1`) always; see
+  [§17](#17-dv-005b-additions).
 - **Everything is verified with deterministic verification handlers.**
   Their results are labelled as test results everywhere, and they only run
   in isolated test environments.
@@ -35,6 +37,7 @@ research, scripts, rendering, review, publishing or analytics.
 14. [Tests and evidence](#14-tests-and-evidence)
 15. [Limitations and next steps](#15-limitations-and-next-steps)
 16. [DV-005A additions](#16-dv-005a-additions)
+17. [DV-005B additions](#17-dv-005b-additions)
 
 ## 1. Architecture
 
@@ -405,8 +408,8 @@ It checks:
 
 ## 15. Limitations and next steps
 
-- **One production handler (Scout).** The full campaign is refused until
-  DV-005B, DV-005C and DV-006A.
+- **Two production handlers (Scout, Quill).** The full campaign is refused
+  until DV-005C and DV-006A.
 - **The real render gate isn't built.** The shared Pixel Studio + worker
   render gate is needed before DV-005C, as described in §8.
 - **The Workflow section polls** (every 2 s) rather than receiving pushed
@@ -451,3 +454,23 @@ It checks:
 - **Worker check-ins** (`orchestrator_workers`): every ≤ 5 s, removed on a
   clean stop, cleared after a restore; "running" means seen in the last
   15 s. Never used for claiming.
+
+## 17. DV-005B additions
+
+- **`quill-script-v1`:** one `quill.script` task (`cpu`, recovery
+  `retry`) per **selected** product, from an explicitly chosen Scout
+  report. `planRun` takes `scripts: [{ productId, reportId }]` and, in the
+  same transaction, verifies each report (ticket and product ownership,
+  recomputed checksum) and that the product's current frozen input is
+  identical to the one Scout researched (else `stale-research`, 409). Only
+  the selected products get snapshots and tasks.
+- **Pinning:** each task's params hold the report's ID, version and
+  checksum. The handler re-verifies them at run time; manual retries keep
+  them.
+- **Deliverable:** `quill_script` results via the same transactional
+  `deliverable.persist` as Scout; `task_results` holds a compact reference.
+- **Handler context** now includes `ticketId`.
+- `currentProductSnapshots()` builds the frozen input a run would get now
+  (used by planning and by the "is this research still current?" check).
+- The full campaign message now names only Pixel (DV-005C) and Vera
+  (DV-006A).

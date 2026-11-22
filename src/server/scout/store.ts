@@ -14,7 +14,7 @@ import type {
   ResearchTaskState,
   SourceOutcome,
 } from "@/lib/scout/types"
-import { canonicalJson } from "@/server/orchestrator/store"
+import { canonicalJson, type Queryable } from "@/server/orchestrator/canonical"
 import type { CommitContext } from "@/server/orchestrator/workflows"
 import { RESEARCH_WORKFLOW } from "@/server/orchestrator/workflows"
 import type { AnalysedSource, Analysis } from "@/server/scout/analysis/claims"
@@ -309,11 +309,14 @@ export async function persistResearch(
 const iso = (v: unknown) => (v instanceof Date ? v.toISOString() : null)
 
 export async function getResearchReport(
-  pool: pg.Pool,
+  pool: Queryable,
   ticketId: string,
   runId: string,
   snapshotId: string,
-  page: { offset: number; limit: number } = { offset: 0, limit: 100 },
+  page: { offset: number; limit: number; all?: boolean } = {
+    offset: 0,
+    limit: 100,
+  },
 ): Promise<ResearchReport | null> {
   const r = (
     await pool.query(
@@ -367,11 +370,7 @@ export async function getResearchReport(
     }))
     .sort(byKey)
   const links = (
-    await pool.query<{
-      claim_key: string
-      evidence_key: string
-      relationship: string
-    }>(
+    await pool.query(
       `SELECT c.key AS claim_key, e.key AS evidence_key, l.relationship FROM scout_claim_evidence l
          JOIN scout_claims c ON c.id = l.claim_id AND c.report_id = l.report_id
          JOIN scout_evidence e ON e.id = l.evidence_id AND e.report_id = l.report_id
@@ -417,7 +416,10 @@ export async function getResearchReport(
     evidence,
     claims,
   )
-  const limit = Math.min(Math.max(page.limit, 1), 100)
+  // The API pages evidence (≤ 100); internal readers (Quill) may take all.
+  const limit = page.all
+    ? evidence.length || 1
+    : Math.min(Math.max(page.limit, 1), 100)
   const offset = Math.max(page.offset, 0)
   return {
     id: r.id,
@@ -528,4 +530,43 @@ export async function listResearch(
     }
   }
   return { latestRun, reports }
+}
+
+/**
+ * Re-reads a Scout report by ID and recomputes its checksum (DV-005B).
+ * Quill plans and writes only from reports that verify.
+ */
+export async function verifyScoutReport(c: Queryable, reportId: string) {
+  if (!/^[0-9a-f-]{36}$/i.test(reportId)) return null
+  const row = (
+    await c.query(
+      "SELECT ticket_id, run_id, snapshot_id FROM scout_reports WHERE id = $1",
+      [reportId],
+    )
+  ).rows[0]
+  if (!row) return null
+  const report = await getResearchReport(
+    c,
+    row.ticket_id,
+    row.run_id,
+    row.snapshot_id,
+    {
+      offset: 0,
+      limit: 100,
+      all: true,
+    },
+  )
+  if (!report) return null
+  return {
+    reportId: report.id,
+    ticketId: row.ticket_id as string,
+    productId: report.productId,
+    runId: report.runId,
+    snapshotId: report.snapshotId,
+    reportVersion: report.reportVersion,
+    checksum: report.checksum,
+    snapshotChecksum: report.snapshotChecksum,
+    intact: report.integrity === "verified",
+    report,
+  }
 }

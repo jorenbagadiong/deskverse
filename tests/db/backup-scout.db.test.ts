@@ -155,7 +155,9 @@ describe("backup and restore with Scout research", () => {
         deskverseVersion: "test",
         checkProcesses: false,
       })
-      expect(manifest.database.migrations.current).toBe("0003_scout_research")
+      expect(manifest.database.migrations.current).toBe(
+        journal.entries.at(-1)!.tag,
+      )
       expect(manifest.database.tables).toMatchObject({ scout_reports: 2 })
       expect(manifest.database.tables.scout_sources).toBe(4)
       expect(manifest.database.tables.scout_evidence).toBeGreaterThan(4)
@@ -218,7 +220,7 @@ describe("backup and restore with Scout research", () => {
   )
 
   it(
-    "restores a DV-004C-era backup (schema 0002) and migrates it to 0003, keeping verification results",
+    "restores a DV-004C-era backup (schema 0002) and migrates it forward, keeping verification results",
     { timeout: 120_000 },
     async () => {
       const { cp, readFile, writeFile } = await import("node:fs/promises")
@@ -296,6 +298,7 @@ describe("backup and restore with Scout research", () => {
       try {
         expect(await runMigrations(pool, journal, migrationsFolder())).toEqual([
           "0003_scout_research",
+          "0004_quill_scripts",
         ])
         const kept = (
           await pool.query("SELECT kind, payload FROM task_results")

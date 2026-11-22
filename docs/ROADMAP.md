@@ -2,7 +2,7 @@
 
 **Version 1.1:** Affiliate Ticket architecture (approved 2026-11-21)
 **Environment:** your own computer, Windows 11 + WSL2 Ubuntu
-**Current milestone:** DV-005A, Scout research (complete); next is DV-005B
+**Current milestone:** DV-005B, Quill scriptwriting (complete); next is DV-005C
 
 ## 1. Vision
 
@@ -65,21 +65,22 @@ approval required · one approved video per day._
 
 ## 4. Completed milestones
 
-| Milestone              | Description                     | Status                                                                                                |
-| ---------------------- | ------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| DV-001                 | Brand and design system         | Complete                                                                                              |
-| DV-002 / DV-002B       | Interactive 3D office           | Implemented; further phases planned                                                                   |
-| DV-003A                | Pixel Studio foundation         | Complete                                                                                              |
-| DV-003B                | Real FFmpeg video rendering     | Complete                                                                                              |
-| DV-003C                | Voiceover and music             | Complete                                                                                              |
-| DV-003D1               | Render management and recovery  | Complete                                                                                              |
-| DV-003D2               | Cinematic effects and EXIF      | Complete                                                                                              |
-| DV-003D3               | Audio refinements               | Complete                                                                                              |
-| WebP compatibility fix | WebP upload validation          | Complete                                                                                              |
-| DV-004A                | Local PostgreSQL foundation     | Complete (see [database architecture](database-architecture.md))                                      |
-| DV-004B                | Affiliate Ticket management     | Complete (see [Affiliate Tickets](affiliate-tickets.md))                                              |
-| DV-004C                | Durable campaign orchestrator   | Complete: infrastructure, verified with deterministic test runs (see [orchestrator](orchestrator.md)) |
-| DV-005A                | Scout: evidence-backed research | Complete: research-only runs; full campaign still off (see [Scout research](scout-research.md))       |
+| Milestone              | Description                      | Status                                                                                                                        |
+| ---------------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| DV-001                 | Brand and design system          | Complete                                                                                                                      |
+| DV-002 / DV-002B       | Interactive 3D office            | Implemented; further phases planned                                                                                           |
+| DV-003A                | Pixel Studio foundation          | Complete                                                                                                                      |
+| DV-003B                | Real FFmpeg video rendering      | Complete                                                                                                                      |
+| DV-003C                | Voiceover and music              | Complete                                                                                                                      |
+| DV-003D1               | Render management and recovery   | Complete                                                                                                                      |
+| DV-003D2               | Cinematic effects and EXIF       | Complete                                                                                                                      |
+| DV-003D3               | Audio refinements                | Complete                                                                                                                      |
+| WebP compatibility fix | WebP upload validation           | Complete                                                                                                                      |
+| DV-004A                | Local PostgreSQL foundation      | Complete (see [database architecture](database-architecture.md))                                                              |
+| DV-004B                | Affiliate Ticket management      | Complete (see [Affiliate Tickets](affiliate-tickets.md))                                                                      |
+| DV-004C                | Durable campaign orchestrator    | Complete: infrastructure, verified with deterministic test runs (see [orchestrator](orchestrator.md))                         |
+| DV-005A                | Scout: evidence-backed research  | Complete: research-only runs; full campaign still off (see [Scout research](scout-research.md))                               |
+| DV-005B                | Quill: evidence-grounded scripts | Complete: scriptwriting-only runs from chosen Scout reports; no rendering (see [Quill scriptwriting](quill-scriptwriting.md)) |
 
 DV-001 to DV-003 are separate from the Affiliate Ticket system they support; DV-004A onwards build it.
 
@@ -121,9 +122,15 @@ no duplicate outputs after interruption or recovery.
   versioned research briefs. Runs as the research-only workflow
   `scout-research-v1`; the full campaign stays unavailable. Optional local
   model (Ollama, loopback only). See [Scout research](scout-research.md).
-- **DV-005B: Quill (scriptwriting)** ← next. Hooks, narration, captions, benefits,
-  calls to action and storyboards, from verified product facts.
-- **DV-005C: Pixel (video production).** Connect the existing FFmpeg
+- **DV-005B: Quill (scriptwriting)** (complete). Writes versioned,
+  immutable short-form scripts (hook, benefits, captions, storyboard,
+  call to action, disclosure) from an explicitly chosen, verified, current
+  Scout report; only supported, non-sensitive, current claims become copy,
+  each scene linked to its evidence. Template mode works without a model;
+  optional local Ollama wording is validated. Runs as `quill-script-v1`;
+  the full campaign stays unavailable. See
+  [Quill scriptwriting](quill-scriptwriting.md).
+- **DV-005C: Pixel (video production)** ← next. Connect the existing FFmpeg
   pipeline to Affiliate Tickets, turning validated scripts and product media
   into versioned MP4 deliverables.
 

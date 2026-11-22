@@ -9,6 +9,7 @@ import {
   createRegistry,
   MISSING_PRODUCTION_CAPABILITIES,
   productionAvailable,
+  QUILL_WORKFLOW,
   RESEARCH_WORKFLOW,
 } from "@/server/orchestrator/workflows"
 import { readScoutConfig } from "@/server/scout/config"
@@ -28,7 +29,11 @@ export const pool = () => getPool()
  * registered when source retrieval is switched on.
  */
 export function availableWorkflows(): string[] {
-  return readScoutConfig().retrieval ? [RESEARCH_WORKFLOW.id] : []
+  // Quill (DV-005B) needs no network or model: always available.
+  return [
+    ...(readScoutConfig().retrieval ? [RESEARCH_WORKFLOW.id] : []),
+    QUILL_WORKFLOW.id,
+  ]
 }
 
 export function availability(): WorkflowAvailability {

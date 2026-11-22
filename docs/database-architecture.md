@@ -11,6 +11,8 @@ your own computer:
   [affiliate-tickets.md](affiliate-tickets.md).
 - **DV-005A** added Scout's research tables and worker check-ins
   ([scout-research.md](scout-research.md)).
+- **DV-005B** added Quill's script tables
+  ([quill-scriptwriting.md](quill-scriptwriting.md)).
 
 **PostgreSQL isn't needed for Pixel Studio or the office.** They work exactly
 as before with the database stopped, missing or misconfigured. Pixel Studio's
@@ -215,6 +217,7 @@ Schema:
 | `0001_affiliate_tickets` (DV-004B)     | `affiliate_tickets`, `ticket_products`, `ticket_references`, `ticket_assets`, `ticket_events` (see [affiliate-tickets.md §3](affiliate-tickets.md#3-data-model))                                                                                                                                                                                                             |
 | `0002_campaign_orchestrator` (DV-004C) | `campaign_runs`, `run_product_snapshots`, `worker_tasks`, `task_dependencies`, `task_attempts`, `task_results`, `run_events`, plus triggers keeping snapshots, results and dependencies immutable and refusing dependency cycles (see [orchestrator.md §2](orchestrator.md#2-data-model))                                                                                    |
 | `0003_scout_research` (DV-005A)        | `scout_reports`, `scout_sources`, `scout_evidence`, `scout_claims`, `scout_claim_evidence`, `orchestrator_workers`; widens `task_results.kind` to `verification`/`scout_research`; triggers keeping research immutable and accepting it only from the task's current lease holder (see [scout-research.md §11](scout-research.md#11-storage-versions-integrity-and-backups)) |
+| `0004_quill_scripts` (DV-005B)         | `quill_scripts`, `quill_scenes`, `quill_scene_claims`; widens `task_results.kind` with `quill_script`; triggers keeping scripts immutable, accepting them only from the lease holder for the pinned report, and refusing ineligible Scout claims (see [quill-scriptwriting.md §9](quill-scriptwriting.md#9-storage-versions-integrity))                                      |
 
 `0001` was applied to a fresh scratch database by `yarn test:db` before it
 was applied to the development database. It creates tables only; nothing
@@ -505,5 +508,5 @@ another connection is open.
   documented here.
 
 **DV-004B (Affiliate Tickets), DV-004C (the orchestrator) and DV-005A
-(Scout research) are built on this foundation.** The next milestone is
-**DV-005B, Quill**. See [ROADMAP.md](ROADMAP.md).
+(Scout research) and DV-005B (Quill scriptwriting) are built on this
+foundation.** The next milestone is **DV-005C, Pixel**. See [ROADMAP.md](ROADMAP.md).

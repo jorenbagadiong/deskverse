@@ -86,13 +86,14 @@ test("says the full campaign isn't available; verification is labelled test-only
   await expect(section.getByTestId("automation-unavailable")).toContainText(
     "Full campaign automation isn't available yet.",
   )
-  // Scout exists since DV-005A; the rest of the campaign doesn't.
+  // Scout (DV-005A) and Quill (DV-005B) exist; the rest of the campaign doesn't.
   await expect(section.getByTestId("automation-unavailable")).toContainText(
-    "Quill (DV-005B), Pixel (DV-005C), Vera (DV-006A)",
+    "Pixel (DV-005C), Vera (DV-006A)",
   )
-  await expect(section.getByTestId("automation-unavailable")).not.toContainText(
-    "Scout (DV-005A)",
-  )
+  for (const built of ["Scout (DV-005A)", "Quill (DV-005B)"])
+    await expect(
+      section.getByTestId("automation-unavailable"),
+    ).not.toContainText(built)
   await expect(
     page.getByRole("button", { name: /start (ai )?processing/i }),
   ).toHaveCount(0)

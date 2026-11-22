@@ -191,6 +191,7 @@ export class Worker {
       const outcome = await handler.run({
         taskId: claim.taskId,
         runId: claim.runId,
+        ticketId: claim.ticketId,
         stage: claim.stage,
         attempt: claim.attempt,
         maxAttempts: claim.maxAttempts,

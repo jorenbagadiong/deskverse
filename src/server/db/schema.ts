@@ -27,7 +27,7 @@ import type { PublishingPreferences } from "@/lib/tickets/types"
  * DV-004A: app_metadata. DV-004B: Affiliate Tickets. DV-004C: the campaign
  * orchestrator (runs, frozen inputs, tasks, attempts, results, events).
  * DV-005A: Scout research (reports, sources, evidence, claims) and worker
- * check-ins.
+ * check-ins. DV-005B: Quill scripts (scripts, scenes, scene claims).
  *
  * The ticket tables hold the OWNER'S input only. Future workers (Scout,
  * Quill, Pixel…) will write their results to separate deliverable tables
@@ -589,7 +589,7 @@ export const taskResults = pgTable(
   (t) => [
     check(
       "task_results_kind_check",
-      sql`${t.kind} IN ('verification', 'scout_research')`,
+      sql`${t.kind} IN ('verification', 'scout_research', 'quill_script')`,
     ),
     check(
       "task_results_size_check",
@@ -953,6 +953,170 @@ export const scoutClaimEvidence = pgTable(
   ],
 )
 
+// ---------------------------------------------------------------------------
+// Quill scripts (DV-005B). Immutable once written (triggers in 0004).
+// ---------------------------------------------------------------------------
+
+/**
+ * One script for one product snapshot, written by exactly one Quill task
+ * from exactly one pinned Scout report. `script_version` counts the
+ * scripts for that product across runs: 1, 2, 3…
+ */
+export const quillScripts = pgTable(
+  "quill_scripts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    runId: uuid("run_id").notNull(),
+    ticketId: uuid("ticket_id").notNull(),
+    taskId: uuid("task_id").notNull().unique(),
+    snapshotId: uuid("snapshot_id").notNull(),
+    productId: uuid("product_id").notNull(),
+    reportId: uuid("report_id")
+      .notNull()
+      .references(() => scoutReports.id, { onDelete: "restrict" }),
+    reportVersion: integer("report_version").notNull(),
+    reportChecksum: text("report_checksum").notNull(),
+    snapshotChecksum: text("snapshot_checksum").notNull(),
+    scriptVersion: integer("script_version").notNull(),
+    /** Script format version (1 = "quill-script/1"). */
+    schemaVersion: integer("schema_version").notNull(),
+    generationMode: text("generation_mode").notNull(),
+    language: text("language").notNull(),
+    platform: text("platform").notNull(),
+    status: text("status").notNull(),
+    pixelTextCompatible: boolean("pixel_text_compatible").notNull(),
+    renderReady: boolean("render_ready").notNull(),
+    fence: bigint("fence", { mode: "number" }).notNull(),
+    /** SHA-256 of the canonical script document (metadata, scenes, claims, linkage). */
+    checksum: text("checksum").notNull(),
+    /** The script document without its scenes (they're in quill_scenes). */
+    meta: jsonb("meta").$type<Record<string, unknown>>().notNull(),
+    createdAt: timestamps.createdAt,
+  },
+  (t) => [
+    foreignKey({
+      name: "quill_scripts_task_fk",
+      columns: [t.taskId, t.runId],
+      foreignColumns: [workerTasks.id, workerTasks.runId],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "quill_scripts_snapshot_fk",
+      columns: [t.snapshotId, t.runId],
+      foreignColumns: [runProductSnapshots.id, runProductSnapshots.runId],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "quill_scripts_run_fk",
+      columns: [t.runId, t.ticketId],
+      foreignColumns: [campaignRuns.id, campaignRuns.ticketId],
+    }).onDelete("restrict"),
+    unique("quill_scripts_id_report_unique").on(t.id, t.reportId),
+    unique("quill_scripts_product_version_unique").on(
+      t.productId,
+      t.scriptVersion,
+    ),
+    check(
+      "quill_scripts_version_check",
+      sql`${t.scriptVersion} >= 1 AND ${t.reportVersion} >= 1`,
+    ),
+    check("quill_scripts_schema_check", sql`${t.schemaVersion} = 1`),
+    check(
+      "quill_scripts_mode_check",
+      sql`${t.generationMode} IN ('template', 'template+ollama')`,
+    ),
+    check("quill_scripts_language_check", sql`${t.language} = 'en'`),
+    check("quill_scripts_platform_check", maxLength("platform", 40)),
+    check("quill_scripts_status_check", sql`${t.status} = 'valid'`),
+    check(
+      "quill_scripts_checksums_check",
+      sql`${t.checksum} ~ '^[0-9a-f]{64}$' AND ${t.reportChecksum} ~ '^[0-9a-f]{64}$' AND ${t.snapshotChecksum} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check("quill_scripts_meta_check", sql`pg_column_size(${t.meta}) <= 131072`),
+    index("quill_scripts_ticket_idx").on(t.ticketId, t.createdAt),
+    index("quill_scripts_run_idx").on(t.runId),
+    index("quill_scripts_report_idx").on(t.reportId),
+  ],
+)
+
+/** The ordered scenes of a script (Pixel's vocabulary: hook, benefit, call-to-action). */
+export const quillScenes = pgTable(
+  "quill_scenes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    scriptId: uuid("script_id")
+      .notNull()
+      .references(() => quillScripts.id, { onDelete: "restrict" }),
+    position: integer("position").notNull(),
+    sceneKey: text("scene_key").notNull(),
+    kind: text("kind").notNull(),
+    durationMs: integer("duration_ms").notNull(),
+    narration: text("narration").notNull(),
+    caption: text("caption").notNull(),
+    subtext: text("subtext"),
+    visual: text("visual").notNull(),
+    notes: jsonb("notes").$type<string[]>().notNull().default([]),
+  },
+  (t) => [
+    unique("quill_scenes_id_script_unique").on(t.id, t.scriptId),
+    unique("quill_scenes_script_position_unique").on(t.scriptId, t.position),
+    check("quill_scenes_position_check", sql`${t.position} BETWEEN 0 AND 7`),
+    check("quill_scenes_key_check", sql`${t.sceneKey} ~ '^scene-[1-8]$'`),
+    check(
+      "quill_scenes_kind_check",
+      sql`${t.kind} IN ('hook', 'benefit', 'call-to-action')`,
+    ),
+    check(
+      "quill_scenes_duration_check",
+      sql`${t.durationMs} BETWEEN 1990 AND 8010`,
+    ),
+    check(
+      "quill_scenes_text_check",
+      sql`char_length(${t.narration}) BETWEEN 1 AND 400 AND char_length(${t.caption}) BETWEEN 1 AND 80 AND (${t.subtext} IS NULL OR char_length(${t.subtext}) <= 60) AND char_length(${t.visual}) <= 300`,
+    ),
+    check("quill_scenes_notes_check", sql`pg_column_size(${t.notes}) <= 2048`),
+  ],
+)
+
+/** Which Scout claim (and its evidence) a scene states. Same report only. */
+export const quillSceneClaims = pgTable(
+  "quill_scene_claims",
+  {
+    scriptId: uuid("script_id").notNull(),
+    sceneId: uuid("scene_id").notNull(),
+    reportId: uuid("report_id").notNull(),
+    claimKey: text("claim_key").notNull(),
+    statement: text("statement").notNull(),
+    evidenceKeys: text("evidence_keys").array().notNull(),
+    /** Evidence keys with their source and retrieval time, as shown. */
+    evidence: jsonb("evidence").$type<Record<string, unknown>[]>().notNull(),
+  },
+  (t) => [
+    primaryKey({
+      name: "quill_scene_claims_pk",
+      columns: [t.sceneId, t.claimKey],
+    }),
+    foreignKey({
+      name: "quill_scene_claims_scene_fk",
+      columns: [t.sceneId, t.scriptId],
+      foreignColumns: [quillScenes.id, quillScenes.scriptId],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "quill_scene_claims_script_fk",
+      columns: [t.scriptId, t.reportId],
+      foreignColumns: [quillScripts.id, quillScripts.reportId],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "quill_scene_claims_claim_fk",
+      columns: [t.reportId, t.claimKey],
+      foreignColumns: [scoutClaims.reportId, scoutClaims.key],
+    }).onDelete("restrict"),
+    check(
+      "quill_scene_claims_size_check",
+      sql`char_length(${t.statement}) BETWEEN 1 AND 500 AND cardinality(${t.evidenceKeys}) BETWEEN 1 AND 20 AND pg_column_size(${t.evidence}) <= 8192`,
+    ),
+    index("quill_scene_claims_script_idx").on(t.scriptId),
+  ],
+)
+
 export const schema = {
   appMetadata,
   affiliateTickets,
@@ -973,4 +1137,7 @@ export const schema = {
   scoutEvidence,
   scoutClaims,
   scoutClaimEvidence,
+  quillScripts,
+  quillScenes,
+  quillSceneClaims,
 }
