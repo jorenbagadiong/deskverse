@@ -3472,6 +3472,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@types/pegjs@npm:^0.10.0":
+  version: 0.10.6
+  resolution: "@types/pegjs@npm:0.10.6"
+  checksum: 10c0/ee4a31cf07679ae5422fec95e499ad059483a9ab2815af1ada0ee858a00af6c7e6579a8e172810c1c9db04005941bef96d0dd2c28648769211f57df330f9c30f
+  languageName: node
+  linkType: hard
+
 "@types/pg@npm:^8.23.1":
   version: 8.23.1
   resolution: "@types/pg@npm:8.23.1"
@@ -4220,6 +4227,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"big-integer@npm:^1.6.48":
+  version: 1.6.52
+  resolution: "big-integer@npm:1.6.52"
+  checksum: 10c0/9604224b4c2ab3c43c075d92da15863077a9f59e5d4205f4e7e76acd0cd47e8d469ec5e5dba8d9b32aa233951893b29329ca56ac80c20ce094b4a647a66abae0
+  languageName: node
+  linkType: hard
+
 "brace-expansion@npm:^1.1.7":
   version: 1.1.22
   resolution: "brace-expansion@npm:1.1.22"
@@ -4469,6 +4483,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"commander@npm:^2.19.0":
+  version: 2.20.3
+  resolution: "commander@npm:2.20.3"
+  checksum: 10c0/74c781a5248c2402a0a3e966a0a2bba3c054aad144f5c023364be83265e796b20565aa9feff624132ff629aa64e16999fa40a743c10c12f7c61e96a794b99288
+  languageName: node
+  linkType: hard
+
 "concat-map@npm:0.0.1":
   version: 0.0.1
   resolution: "concat-map@npm:0.0.1"
@@ -4709,6 +4730,7 @@ __metadata:
     parse5: "npm:^8.1.1"
     pg: "npm:^8.23.1"
     prettier: "npm:^3.10.1"
+    prettier-plugin-sql: "npm:^0.20.0"
     prettier-plugin-tailwindcss: "npm:^0.8.1"
     radix-ui: "npm:^1.8.1"
     react: "npm:19.3.0"
@@ -4751,6 +4773,13 @@ __metadata:
   version: 8.0.4
   resolution: "diff@npm:8.0.4"
   checksum: 10c0/7ee5d03926db4039be7252ac3b0abaae1bd122a2ca971e5ca7270e444e36ff83dd906fad1a719740ca347e97ed5dc8f458a76a8391dbcd7aff363bdafb348a00
+  languageName: node
+  linkType: hard
+
+"discontinuous-range@npm:1.0.0":
+  version: 1.0.0
+  resolution: "discontinuous-range@npm:1.0.0"
+  checksum: 10c0/487b105f83c1cc528e25e65d3c4b73958ec79769b7bd0e264414702a23a7e2b282c72982b4bef4af29fcab53f47816c3f0a5c40d85a99a490f4bc35b83dc00f8
   languageName: node
   linkType: hard
 
@@ -6870,6 +6899,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"jsox@npm:^1.2.123":
+  version: 1.2.128
+  resolution: "jsox@npm:1.2.128"
+  bin:
+    jsox: lib/cli.js
+  checksum: 10c0/3c8925b95e1e444ec9daea6ac57e3bc2f3f646e6d6cd29a0fd0e37f060718636e09ba3afb72f5b844a0cee44e6177e584187ada17d1e4864c20be74e01798231
+  languageName: node
+  linkType: hard
+
 "jsx-ast-utils@npm:^2.4.1 || ^3.0.0, jsx-ast-utils@npm:^3.3.5":
   version: 3.3.5
   resolution: "jsx-ast-utils@npm:3.3.5"
@@ -7396,6 +7434,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"moo@npm:^0.5.0":
+  version: 0.5.3
+  resolution: "moo@npm:0.5.3"
+  checksum: 10c0/5c5e00d7c57a69ce1cc2f21a90655ff10556481cc10fa70528c01e91f00deff8a65fa8da6dc7b27d136d66085055aab238fd1b19a75070263e0028e8f07c8213
+  languageName: node
+  linkType: hard
+
 "ms@npm:^2.1.1, ms@npm:^2.1.3":
   version: 2.1.3
   resolution: "ms@npm:2.1.3"
@@ -7426,6 +7471,23 @@ __metadata:
   version: 1.4.0
   resolution: "natural-compare@npm:1.4.0"
   checksum: 10c0/f5f9a7974bfb28a91afafa254b197f0f22c684d4a1731763dda960d2c8e375b36c7d690e0d9dc8fba774c537af14a7e979129bca23d88d052fbeb9466955e447
+  languageName: node
+  linkType: hard
+
+"nearley@npm:^2.20.1":
+  version: 2.20.1
+  resolution: "nearley@npm:2.20.1"
+  dependencies:
+    commander: "npm:^2.19.0"
+    moo: "npm:^0.5.0"
+    railroad-diagrams: "npm:^1.0.0"
+    randexp: "npm:0.4.6"
+  bin:
+    nearley-railroad: bin/nearley-railroad.js
+    nearley-test: bin/nearley-test.js
+    nearley-unparse: bin/nearley-unparse.js
+    nearleyc: bin/nearleyc.js
+  checksum: 10c0/d25e1fd40b19c53a0ada6a688670f4a39063fd9553ab62885e81a82927d51572ce47193b946afa3d85efa608ba2c68f433c421f69b854bfb7f599eacb5fae37e
   languageName: node
   linkType: hard
 
@@ -7535,6 +7597,16 @@ __metadata:
   version: 2.0.65
   resolution: "node-releases@npm:2.0.65"
   checksum: 10c0/80a1f49172b1ac7abee612e4ff4fd707763478a8ea0ffb38f428a925622b6bfe320a1103b30d76ae37df3a2544ada7a63c74ca578b19cc332298960bf4c826c4
+  languageName: node
+  linkType: hard
+
+"node-sql-parser@npm:^5.3.10":
+  version: 5.4.0
+  resolution: "node-sql-parser@npm:5.4.0"
+  dependencies:
+    "@types/pegjs": "npm:^0.10.0"
+    big-integer: "npm:^1.6.48"
+  checksum: 10c0/fb62be3f5b960e3ce41440e6f2b4060f0f0df7b3734f7aefe169d245fc250773a43d49c811e0dda9b7e24e44ace54df6765be0cf4d7dad4eb9e6855eeef63b8e
   languageName: node
   linkType: hard
 
@@ -8084,6 +8156,20 @@ __metadata:
   languageName: node
   linkType: hard
 
+"prettier-plugin-sql@npm:^0.20.0":
+  version: 0.20.0
+  resolution: "prettier-plugin-sql@npm:0.20.0"
+  dependencies:
+    jsox: "npm:^1.2.123"
+    node-sql-parser: "npm:^5.3.10"
+    sql-formatter: "npm:^15.7.0"
+    tslib: "npm:^2.8.1"
+  peerDependencies:
+    prettier: ^3.0.3
+  checksum: 10c0/6d77b11013c6e56f959df2b411d9b011663feda5bc81e6c9f1f5ad554b9930eb9831f420d26747c166ce87f3c65ea789884682d40e4ea13705d396263c7ba26f
+  languageName: node
+  linkType: hard
+
 "prettier-plugin-tailwindcss@npm:^0.8.1":
   version: 0.8.1
   resolution: "prettier-plugin-tailwindcss@npm:0.8.1"
@@ -8285,6 +8371,23 @@ __metadata:
   languageName: node
   linkType: hard
 
+"railroad-diagrams@npm:^1.0.0":
+  version: 1.0.0
+  resolution: "railroad-diagrams@npm:1.0.0"
+  checksum: 10c0/81bf8f86870a69fb9ed243102db9ad6416d09c4cb83964490d44717690e07dd982f671503236a1f8af28f4cb79d5d7a87613930f10ac08defa845ceb6764e364
+  languageName: node
+  linkType: hard
+
+"randexp@npm:0.4.6":
+  version: 0.4.6
+  resolution: "randexp@npm:0.4.6"
+  dependencies:
+    discontinuous-range: "npm:1.0.0"
+    ret: "npm:~0.1.10"
+  checksum: 10c0/14ee14b6d7f5ce69609b51cc914fb7a7c82ad337820a141c5f762c5ad1fe868f5191ea6e82359aee019b625ee1359486628fa833909d12c3b5dd9571908c3345
+  languageName: node
+  linkType: hard
+
 "react-dom@npm:19.3.0":
   version: 19.3.0
   resolution: "react-dom@npm:19.3.0"
@@ -8477,6 +8580,13 @@ __metadata:
     onetime: "npm:^7.0.0"
     signal-exit: "npm:^4.1.0"
   checksum: 10c0/c2ba89131eea791d1b25205bdfdc86699767e2b88dee2a590b1a6caa51737deac8bad0260a5ded2f7c074b7db2f3a626bcf1fcf3cdf35974cbeea5e2e6764f60
+  languageName: node
+  linkType: hard
+
+"ret@npm:~0.1.10":
+  version: 0.1.15
+  resolution: "ret@npm:0.1.15"
+  checksum: 10c0/01f77cad0f7ea4f955852c03d66982609893edc1240c0c964b4c9251d0f9fb6705150634060d169939b096d3b77f4c84d6b6098a5b5d340160898c8581f1f63f
   languageName: node
   linkType: hard
 
@@ -8922,6 +9032,18 @@ __metadata:
   version: 4.2.0
   resolution: "split2@npm:4.2.0"
   checksum: 10c0/b292beb8ce9215f8c642bb68be6249c5a4c7f332fc8ecadae7be5cbdf1ea95addc95f0459ef2e7ad9d45fd1064698a097e4eb211c83e772b49bc0ee423e91534
+  languageName: node
+  linkType: hard
+
+"sql-formatter@npm:^15.7.0":
+  version: 15.10.0
+  resolution: "sql-formatter@npm:15.10.0"
+  dependencies:
+    argparse: "npm:^2.0.1"
+    nearley: "npm:^2.20.1"
+  bin:
+    sql-formatter: bin/sql-formatter-cli.cjs
+  checksum: 10c0/4ab02553a4df525825ad211138f8e26111467b53ddd87d4562d45ce137237ff765be63d6d8db0ef1c1bb92e0610fbac362255bb9e8286af060387424e35aa031
   languageName: node
   linkType: hard
 

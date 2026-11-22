@@ -1,6 +1,16 @@
 {
   "semi": false,
-  "plugins": ["prettier-plugin-tailwindcss"],
+  "plugins": ["prettier-plugin-sql", "prettier-plugin-tailwindcss"],
   "tailwindStylesheet": "./src/app/globals.css",
-  "tailwindFunctions": ["cn", "cva"]
+  "tailwindFunctions": ["cn", "cva"],
+  "overrides": [
+    {
+      "files": "*.sql",
+      "options": {
+        "language": "postgresql",
+        "keywordCase": "upper",
+        "tabWidth": 2
+      }
+    }
+  ]
 }
