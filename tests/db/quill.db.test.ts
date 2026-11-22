@@ -328,7 +328,7 @@ describe("planning a scriptwriting run", () => {
       code: "unavailable",
       message: CAMPAIGN_UNAVAILABLE,
     })
-    expect(campaign.message).toMatch(/Vera \(DV-006A\) isn't built/)
+    expect(campaign.message).toMatch(/result handoffs/)
     expect(campaign.message).not.toMatch(/Pixel \(DV-005C\)/)
     expect(campaign.message).not.toMatch(/Quill \(DV-005B\)/)
   })
@@ -856,9 +856,7 @@ describe("backup and restore", () => {
           deskverseVersion: "test",
           checkProcesses: false,
         })
-        expect(manifest.database.migrations.current).toBe(
-          "0005_pixel_deliverables",
-        )
+        expect(manifest.database.migrations.current).toBe("0006_vera_reviews")
         expect(manifest.database.tables).toMatchObject({
           quill_scripts: 1,
           scout_reports: 1,
@@ -943,6 +941,7 @@ describe("backup and restore", () => {
         expect(await runMigrations(pool, journal, migrationsFolder())).toEqual([
           "0004_quill_scripts",
           "0005_pixel_deliverables",
+          "0006_vera_reviews",
         ])
         expect((await verifyScoutReport(pool, reportId))?.intact).toBe(true)
         const { runId } = await planQuill(t.ticketId, [

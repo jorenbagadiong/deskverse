@@ -7,7 +7,7 @@ export type ResourceClass = "general" | "cpu" | "render"
 export type RecoveryPolicy = "retry" | "inspect"
 
 export interface WorkflowAvailability {
-  /** The full Scout → Quill → Pixel → Vera campaign. False until DV-005C/006A. */
+  /** The full Scout → Quill → Pixel → Vera campaign. False until automatic pinned result handoffs are verified. */
   production: boolean
   /** Research-only runs (DV-005A, workflow "scout-research-v1"). */
   research: boolean
@@ -86,6 +86,7 @@ export const RUNS_CHANGED_EVENT = "deskverse:runs-changed"
 export function runTitle(run: { mode: RunMode; workflow: string }) {
   if (run.mode === "verification") return "Verification run (test only)"
   if (run.workflow === "scout-research-v1") return "Research run (Scout only)"
+  if (run.workflow === "vera-review-v1") return "Quality review run (Vera only)"
   if (run.workflow === "pixel-render-v1") return "Video run (Pixel only)"
   if (run.workflow === "quill-script-v1")
     return "Scriptwriting run (Quill only)"

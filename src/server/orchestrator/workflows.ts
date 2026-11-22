@@ -20,7 +20,7 @@ import type {
  * only). DV-005A adds the first production handler, Scout's
  * `scout.research`, and the research-only workflow `scout-research-v1`
  * that contains nothing else. The full campaign (`campaign-v1`) stays
- * unavailable until every one of its stages has a production handler:
+ * unavailable until automatic pinned handoffs are implemented and verified:
  * having Scout is not permission to start a campaign.
  */
 
@@ -142,10 +142,28 @@ export const PIXEL_WORKFLOW: WorkflowDefinition = {
 }
 
 /**
- * The full production chain. Not runnable until Vera (DV-006A) has a
- * production handler. Publishing (Relay) will use recovery "inspect": a crashed
- * attempt might already have published, so it is never retried blindly.
+ * QA-only workflow (DV-006A): repeatable read-only checks of an explicitly
+ * selected completed Pixel version; no upstream work or content revisions.
  */
+export const VERA_WORKFLOW: WorkflowDefinition = {
+  id: "vera-review-v1",
+  mode: "production",
+  title: "Quality review only (Vera)",
+  stages: [
+    {
+      stage: "vera.review",
+      label: "Vera: quality review",
+      dependsOn: [],
+      resourceClass: "cpu",
+      recovery: "retry",
+    },
+  ],
+}
+/** Registration alone never enables campaigns: all automatic handoffs remain unverified. */
+export const CAMPAIGN_READY = false
+export const CAMPAIGN_BLOCKER =
+  "Automatic Scout → Quill report pinning, Quill → Pixel script/media manifest pinning and Pixel → Vera deliverable pinning are not implemented or end-to-end verified. Campaign media selections and rights acknowledgements must be frozen up front."
+
 export const PRODUCTION_WORKFLOW: WorkflowDefinition = {
   id: "campaign-v1",
   mode: "production",
@@ -182,9 +200,9 @@ export const PRODUCTION_WORKFLOW: WorkflowDefinition = {
   ],
 }
 
-/** Milestones that will provide the remaining production handlers (Scout DV-005A and Quill DV-005B are built). */
+/** Full campaign blockers, independent of the registered production handlers. */
 export const MISSING_PRODUCTION_CAPABILITIES = [
-  { stage: "vera.review", milestone: "DV-006A" },
+  { stage: "campaign.handoffs", milestone: "Unverified automatic handoffs" },
 ] as const
 
 export const WORKFLOWS: readonly WorkflowDefinition[] = [
@@ -192,6 +210,7 @@ export const WORKFLOWS: readonly WorkflowDefinition[] = [
   RESEARCH_WORKFLOW,
   QUILL_WORKFLOW,
   PIXEL_WORKFLOW,
+  VERA_WORKFLOW,
   PRODUCTION_WORKFLOW,
 ]
 
@@ -243,7 +262,11 @@ export interface CommitContext {
 }
 
 export type ResultKind =
-  "verification" | "scout_research" | "quill_script" | "pixel_video"
+  | "verification"
+  | "scout_research"
+  | "quill_script"
+  | "pixel_video"
+  | "vera_review"
 
 export type HandlerOutcome =
   | {
@@ -369,18 +392,19 @@ export function createRegistry({
   return handlers
 }
 
-/** A production workflow is runnable when every stage has a production handler. */
+/** Standalone workflows need handlers; campaigns additionally need proven handoffs. */
 export function workflowAvailable(
   registry: HandlerRegistry,
   workflow: WorkflowDefinition,
 ) {
   return (
     workflow.mode === "production" &&
+    (workflow.id !== PRODUCTION_WORKFLOW.id || CAMPAIGN_READY) &&
     workflow.stages.every((s) => registry.get(s.stage)?.kind === "production")
   )
 }
 
-/** The full campaign needs a production handler for every one of its stages. */
+/** Full campaign readiness is independent of handler registration. */
 export function productionAvailable(registry: HandlerRegistry) {
   return workflowAvailable(registry, PRODUCTION_WORKFLOW)
 }

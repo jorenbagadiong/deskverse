@@ -168,3 +168,21 @@ Not yet tried, options for a future milestone:
 - An opt-in, test-only Playwright project that passes
   `--enable-unsafe-swiftshader`, kept separate from the default projects. This
   would remove the warning but not the slow-render timeouts.
+
+## DV-006A verification (2026-11-22)
+
+The database browser suite passed **43 tests**, with **0 failed, 0 skipped**.
+The seven new Vera flows use a real worker, genuine persisted Scout/Quill/Pixel
+inputs and actual FFmpeg QA. They cover exact selection, keyboard start,
+scene/disclosure evidence, source links, historical versions, API ownership and
+strict inputs, worker offline/recovery, and 360/375 px light/dark layouts. After
+making the latest-QA pointer independent of paginated history, all seven Vera
+flows passed again against the final build.
+
+The ordinary suite passed **69**, failed **24**, and skipped **0**. All failures
+are the same ten desktop office, eight living-office and six mobile office tests
+listed above. Every failed test includes the existing software-WebGL warning.
+No new failure was classified as a GPU failure, and no office test/assertion,
+console-warning allowlist or browser flag was changed. Actual browser H.264
+playback remains **NOT TESTED** because no compatible installed browser was
+available; HTTP delivery and FFmpeg decoding are separate verified checks.

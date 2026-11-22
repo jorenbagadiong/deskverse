@@ -194,7 +194,7 @@ export async function runScenario({
     const runningOf = async (child: ChildProcess) =>
       (
         await pool.query<{ task_id: string; fence: string }>(
-          "SELECT a.task_id, a.fence FROM task_attempts a WHERE a.outcome = 'running' AND a.worker_id LIKE $1 LIMIT 1",
+          "SELECT a.task_id, a.fence FROM task_attempts a JOIN worker_tasks t ON t.id=a.task_id WHERE a.outcome = 'running' AND a.worker_id LIKE $1 AND NOT (t.params ? 'fail') ORDER BY a.started_at DESC LIMIT 1",
           [`worker-${child.pid}-%`],
         )
       ).rows[0]

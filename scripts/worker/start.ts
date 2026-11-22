@@ -14,6 +14,7 @@ import { Worker } from "@/server/orchestrator/worker"
 import { readScoutConfig, testNetworkAllowed } from "@/server/scout/config"
 import { quillTestHooks, readQuillConfig } from "@/server/quill/ollama"
 import { createQuillHandler } from "@/server/quill/handler"
+import { createVeraHandler } from "@/server/vera/handler"
 import { createPixelHandler } from "@/server/pixel/handler"
 import {
   getFfmpegCapabilities,
@@ -125,6 +126,15 @@ const registry = createRegistry({
     createQuillHandler({ pool, config: quill, test: quillTest }),
     // Pixel (DV-005C) needs FFmpeg and FFprobe.
     ...(pixel ? [pixel] : []),
+    ...(ffmpeg.ok && ffprobe.ok
+      ? [
+          createVeraHandler({
+            pool,
+            dataRoot,
+            commands: { ffmpeg: ffmpeg.command, ffprobe: ffprobe.command },
+          }),
+        ]
+      : []),
     ...(scout.retrieval
       ? [
           createScoutHandler({

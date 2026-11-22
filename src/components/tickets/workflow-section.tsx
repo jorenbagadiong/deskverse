@@ -216,18 +216,11 @@ export function WorkflowSection({ ticket }: { ticket: TicketDetail }) {
                 Full campaign automation isn&apos;t available yet.
               </p>
               <p className="mt-1 text-muted-foreground">
-                A full campaign needs the rest of the AI team, which isn&apos;t
-                built yet:{" "}
-                {state.availability.missing
-                  .map(
-                    (m) =>
-                      `${m.stage.split(".")[0][0].toUpperCase()}${m.stage.split(".")[0].slice(1)} (${m.milestone.split(" ")[0]})`,
-                  )
-                  .join(", ")}
-                .{" "}
+                Automatic result handoffs and frozen media/rights selections
+                have not been verified. Full campaign automation stays disabled.{" "}
                 {state.availability.research
-                  ? "Scout research, Quill scriptwriting and Pixel videos run on their own: use the sections below."
-                  : "Quill scriptwriting and Pixel videos run on their own (sections below); Scout research is switched off."}
+                  ? "Scout research, Quill scriptwriting, Pixel videos and Vera quality review run separately in the sections below."
+                  : "Quill scriptwriting, Pixel videos and Vera quality review run separately below; Scout research is switched off."}
               </p>
             </div>
           ) : null}

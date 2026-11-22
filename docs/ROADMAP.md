@@ -2,7 +2,7 @@
 
 **Version 1.1:** Affiliate Ticket architecture (approved 2026-11-21)
 **Environment:** your own computer, Windows 11 + WSL2 Ubuntu
-**Current milestone:** DV-005C, Pixel ticket video production (complete); next is DV-006A
+**Current milestone:** DV-006A, Vera automated quality assurance (complete; automatic campaign handoffs remain outstanding). DV-006B remains out of scope.
 
 ## 1. Vision
 
@@ -138,20 +138,24 @@ no duplicate outputs after interruption or recovery.
   a time, crash-safe). Each video is checked with FFprobe, the disclosure
   is confirmed in real frames, and it is committed as a versioned,
   immutable deliverable "Technically verified — Awaiting Vera QA". Runs as
-  `pixel-render-v1`; the full campaign stays unavailable until Vera. See
+  `pixel-render-v1`; the full campaign stays unavailable until automatic result handoffs are proven. See
   [Pixel ticket production](pixel-ticket-production.md).
   _Acceptance:_ one Affiliate Ticket progresses automatically from valid
   inputs to a verified video, without separate manual worker commands.
   _Status:_ each stage now runs and is verified on its own (research-only,
   scriptwriting-only and video-only runs). The automatic chain
-  (`campaign-v1`) stays off until Vera (DV-006A) exists, so this phase's
+  (`campaign-v1`) stays off until automatic result handoffs, frozen media/rights selections and real campaign E2E tests pass, so this phase's
   acceptance isn't met yet.
 
 ### Phase 4: Review and approval
 
-- **DV-006A: Vera (quality review)** ← next. Check product claims, disclosures,
-  media rights, captions, technical output and audio/video timing. Failed
-  outputs go back for a limited number of revisions, or ask for human input.
+- **DV-006A: Vera (quality review)** (complete). Production `vera.review` and independent
+  `vera-review-v1` workflow review exact Pixel versions, persisted Scout/Quill
+  lineage, actual MP4 bytes, disclosure/caption frames, silent audio and rights.
+  Immutable reports distinguish pass, revision, owner input and unusable evidence
+  from successful task completion. No automatic content revision loop or human
+  approval. See [Vera quality assurance](vera-quality-assurance.md) for checks,
+  test evidence and limitations. Full campaign handoffs remain outstanding.
 - **DV-006B: Approval Inbox.** `/approvals` with:
   - video previews, scripts, QA results and affiliate links;
   - approval decisions and revision requests;

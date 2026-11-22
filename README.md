@@ -21,6 +21,13 @@ team researches, writes, renders, reviews, schedules and tracks the content
 their media in Deskverse's private data folder. Pixel Studio and the office
 don't need PostgreSQL: they work with it stopped or not installed.
 
+Vera now performs **automated quality review (DV-006A)** on an explicitly
+selected completed Pixel version. The ticket workspace shows real video checks,
+source evidence, rights gaps, actionable findings and historical reviews. QA
+pass still awaits human approval. `campaign-v1` stays disabled until automatic
+result handoffs and frozen media/rights selections are implemented and verified.
+See [Vera quality assurance](docs/vera-quality-assurance.md).
+
 ## Tech stack
 
 | Area       | Choice                                                        |
@@ -302,7 +309,7 @@ has a GPU (for example native Windows). Details and the exact list:
 
 Pixel renders a silent, captioned vertical video from a Quill script and
 the product's own images. **Video only:** nothing is published, and the
-full campaign stays unavailable until Vera (DV-006A).
+full campaign stays unavailable until automatic pinned result handoffs and frozen media/rights selections are verified.
 
 - **Pick the script and images:** in a Ready ticket's **Pixel Videos**
   section, choose a script and 3–6 images per product (confirm media
@@ -733,3 +740,11 @@ Deployment stays optional: the app is a standard Next.js project with
 static-rendered pages, so it can later go to any Node host or a static/edge
 platform without code changes. Nothing in DV-001 or DV-002 depends on a specific
 provider.
+
+### Vera QA operations (DV-006A)
+
+Run `yarn db:migrate` for `0006_vera_reviews`, then `yarn worker:start`.
+Select a completed video in **Vera Quality Review** and choose **Start Review**.
+FFmpeg/FFprobe run locally; reviews never modify videos. `yarn vera:verify`
+exercises 1/3/10 products, process crashes and isolated format-3 backup/restore.
+No approval inbox, publishing, scheduling or external AI is added.

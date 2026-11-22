@@ -590,7 +590,7 @@ export const taskResults = pgTable(
   (t) => [
     check(
       "task_results_kind_check",
-      sql`${t.kind} IN ('verification', 'scout_research', 'quill_script', 'pixel_video')`,
+      sql`${t.kind} IN ('verification', 'scout_research', 'quill_script', 'pixel_video', 'vera_review')`,
     ),
     check(
       "task_results_size_check",
@@ -1293,7 +1293,96 @@ export const pixelDeliverables = pgTable(
   ],
 )
 
+/** Immutable deterministic QA reports (DV-006A); QA verdict is independent of task status. */
+export const veraReviews = pgTable(
+  "vera_reviews",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    taskId: uuid("task_id").notNull().unique(),
+    runId: uuid("run_id").notNull(),
+    ticketId: uuid("ticket_id").notNull(),
+    productId: uuid("product_id").notNull(),
+    deliverableId: uuid("deliverable_id")
+      .notNull()
+      .references(() => pixelDeliverables.id, { onDelete: "restrict" }),
+    deliverableVersion: integer("deliverable_version").notNull(),
+    deliverableSha256: text("deliverable_sha256").notNull(),
+    reviewVersion: integer("review_version").notNull(),
+    ruleset: text("ruleset").notNull(),
+    verdict: text("verdict").notNull(),
+    checksum: text("checksum").notNull(),
+    document: jsonb("document").$type<Record<string, unknown>>().notNull(),
+    fence: bigint("fence", { mode: "number" }).notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    foreignKey({
+      name: "vera_reviews_task_fk",
+      columns: [t.taskId, t.runId],
+      foreignColumns: [workerTasks.id, workerTasks.runId],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "vera_reviews_ticket_fk",
+      columns: [t.runId, t.ticketId],
+      foreignColumns: [campaignRuns.id, campaignRuns.ticketId],
+    }).onDelete("restrict"),
+    unique("vera_reviews_version_unique").on(t.deliverableId, t.reviewVersion),
+    check(
+      "vera_reviews_version_check",
+      sql`${t.reviewVersion} >= 1 AND ${t.deliverableVersion} >= 1`,
+    ),
+    check("vera_reviews_ruleset_check", sql`${t.ruleset} = 'vera-rules/1'`),
+    check(
+      "vera_reviews_verdict_check",
+      sql`${t.verdict} IN ('pass', 'needs_revision', 'needs_owner_input', 'failed')`,
+    ),
+    check(
+      "vera_reviews_checksum_check",
+      sql`${t.checksum} ~ '^[0-9a-f]{64}$' AND ${t.deliverableSha256} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      "vera_reviews_document_check",
+      sql`pg_column_size(${t.document}) <= 65536`,
+    ),
+    index("vera_reviews_ticket_idx").on(t.ticketId, t.completedAt),
+  ],
+)
+export const veraFindings = pgTable(
+  "vera_findings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    reviewId: uuid("review_id")
+      .notNull()
+      .references(() => veraReviews.id, { onDelete: "restrict" }),
+    position: integer("position").notNull(),
+    ruleId: text("rule_id").notNull(),
+    category: text("category").notNull(),
+    severity: text("severity").notNull(),
+    outcome: text("outcome").notNull(),
+    sceneId: text("scene_id"),
+    evidence: jsonb("evidence").$type<Record<string, unknown>>().notNull(),
+  },
+  (t) => [
+    unique("vera_findings_position_unique").on(t.reviewId, t.position),
+    check("vera_findings_position_check", sql`${t.position} BETWEEN 0 AND 255`),
+    check(
+      "vera_findings_outcome_check",
+      sql`${t.outcome} IN ('passed','failed','warning','manual_review_required','not_evaluated')`,
+    ),
+    check(
+      "vera_findings_severity_check",
+      sql`${t.severity} IN ('info','warning','revision','owner','fatal')`,
+    ),
+    check(
+      "vera_findings_size_check",
+      sql`pg_column_size(${t.evidence}) <= 16384 AND char_length(${t.ruleId}) <= 100`,
+    ),
+  ],
+)
+
 export const schema = {
+  veraReviews,
+  veraFindings,
   appMetadata,
   affiliateTickets,
   ticketProducts,

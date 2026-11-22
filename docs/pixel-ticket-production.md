@@ -3,7 +3,7 @@
 Pixel turns a **Quill script** and the product's **own images** into a
 silent, captioned 1080×1920 MP4. It uses the same FFmpeg engine as Pixel
 Studio. **Video only:** Pixel publishes nothing, and the full campaign
-(`campaign-v1`) stays off until Vera (DV-006A) exists. A finished video is
+(`campaign-v1`) stays off until automatic pinned result handoffs and frozen media/rights selections are verified. A finished video is
 labelled **"Technically verified — Awaiting Vera QA"**.
 
 ## Using it
@@ -248,3 +248,9 @@ FFmpeg at any moment**. The run passes only if:
   checked with `canPlayType` only. File delivery, ranges and headers are
   fully tested.
 - One render at a time per computer, by design.
+
+## Vera review boundary (DV-006A)
+
+Completed Pixel deliverables can now be reviewed through `vera-review-v1`, without rerendering. Pixel technical verification remains separate from Vera QA and human approval. Vera independently decodes the MP4, samples disclosure/captions near the start, middle and end of every scene, and pins the original render manifest. Pixel deliverable records and files remain immutable. Historical videos keep their original lineage.
+
+See [Vera quality assurance](vera-quality-assurance.md) for the rules, limitations, recovery and campaign readiness audit.

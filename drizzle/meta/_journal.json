@@ -43,6 +43,13 @@
       "when": 1795319006547,
       "tag": "0005_pixel_deliverables",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1795327954941,
+      "tag": "0006_vera_reviews",
+      "breakpoints": true
     }
   ]
 }

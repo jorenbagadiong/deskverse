@@ -474,14 +474,20 @@ describe("render queue", () => {
 
   it("refuses duplicate starts and jobs that aren't drafts", async () => {
     let release!: () => void
+    let begin!: () => void
+    const started = new Promise<void>((resolve) => (begin = resolve))
     const queue = new RenderQueue(
       storage,
-      () => new Promise((r) => (release = () => r(OUTPUT))),
+      () =>
+        new Promise((r) => {
+          release = () => r(OUTPUT)
+          begin()
+        }),
     )
     const { job } = await preparedJob()
     await queue.enqueue(job.id)
     await expect(queue.enqueue(job.id)).rejects.toBeInstanceOf(QueueError)
-    await new Promise((r) => setTimeout(r, 10))
+    await started
     release()
     await queue.whenIdle()
     await expect(queue.enqueue(job.id)).rejects.toBeInstanceOf(StorageError)

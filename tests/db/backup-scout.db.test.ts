@@ -300,6 +300,7 @@ describe("backup and restore with Scout research", () => {
           "0003_scout_research",
           "0004_quill_scripts",
           "0005_pixel_deliverables",
+          "0006_vera_reviews",
         ])
         const kept = (
           await pool.query("SELECT kind, payload FROM task_results")

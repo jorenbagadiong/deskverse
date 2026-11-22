@@ -7,6 +7,7 @@ import { pipeline } from "node:stream/promises"
 
 import pg from "pg"
 
+import { getReview } from "@/server/vera/store"
 import { isRenderJobId } from "@/lib/video/ids"
 import {
   BACKUP_FORMAT,
@@ -362,6 +363,27 @@ export interface TicketVideoRecord {
   sha256: string
 }
 
+/** Vera stores compact durable evidence in PostgreSQL; sampled raw frames are disposable. */
+async function verifyVeraRecords(client: pg.Client) {
+  if (
+    !(
+      await client.query(
+        "SELECT to_regclass('public.vera_reviews') IS NOT NULL AS present",
+      )
+    ).rows[0].present
+  )
+    return
+  const reviews = (await client.query("SELECT id, ticket_id FROM vera_reviews"))
+    .rows
+  for (const r of reviews) {
+    const review = await getReview(client, r.ticket_id, r.id)
+    if (!review || review.integrity !== "verified")
+      throw new BackupError(
+        "A Vera review fails its checksum; restore its original records before backing up.",
+      )
+  }
+}
+
 async function ticketVideoRecords(
   client: pg.Client,
 ): Promise<TicketVideoRecord[]> {
@@ -670,6 +692,7 @@ export async function createBackup(
       throw new BackupError(
         "The database schema isn't current. Run yarn db:migrate (or update the code) before backing up.",
       )
+    await verifyVeraRecords(client)
     const version = await client.query<{ v: string }>(
       "SELECT current_setting('server_version') AS v",
     )
@@ -1001,6 +1024,7 @@ export async function restoreBackup({
     const exists = await client.query<{ present: boolean }>(
       "SELECT to_regclass('public.worker_tasks') IS NOT NULL AS present",
     )
+    await verifyVeraRecords(client)
     if (exists.rows[0].present)
       await client.query(
         "UPDATE worker_tasks SET lease_expires_at = now() WHERE status = 'running'",

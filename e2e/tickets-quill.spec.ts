@@ -280,9 +280,7 @@ test("writes evidence-linked scripts from chosen research; a product without eno
     },
   })
   expect(campaign.status()).toBe(503)
-  expect((await campaign.json()).message).toMatch(
-    /Vera \(DV-006A\) isn't built/,
-  )
+  expect((await campaign.json()).message).toMatch(/result handoffs/)
 
   // Scripts survive an application restart.
   await control("restart")

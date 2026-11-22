@@ -386,7 +386,7 @@ describe("planning a video run", () => {
       code: "unavailable",
       message: CAMPAIGN_UNAVAILABLE,
     })
-    expect(campaign.message).toMatch(/Vera \(DV-006A\) isn't built/)
+    expect(campaign.message).toMatch(/result handoffs/)
     expect(campaign.message).not.toMatch(/Pixel \(DV-005C\)/)
   })
 
@@ -786,9 +786,7 @@ describe("backup and restore with ticket videos", () => {
           checkProcesses: false,
         })
         expect(manifest.formatVersion).toBe(3)
-        expect(manifest.database.migrations.current).toBe(
-          "0005_pixel_deliverables",
-        )
+        expect(manifest.database.migrations.current).toBe("0006_vera_reviews")
         expect(manifest.ticketVideos?.deliverables).toBe(1)
         expect(
           manifest.ticketVideos?.files.some(

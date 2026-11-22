@@ -1,3 +1,6 @@
+import { veraPlanHooks, type ReviewSelection } from "@/server/vera/plan"
+import { veraTools } from "@/server/vera/tools"
+import { HttpError } from "@/server/tickets/http"
 import { pixelPlanHooks, type RenderSelection } from "@/server/pixel/plan"
 import {
   availability,
@@ -146,6 +149,28 @@ function parseRenders(raw: unknown): RenderSelection[] | undefined {
   })
 }
 
+function parseReviews(raw: unknown): ReviewSelection[] | undefined {
+  if (raw === undefined) return undefined
+  if (!Array.isArray(raw) || raw.length < 1 || raw.length > 100)
+    throw invalid([], "Send reviews as [{ productId, deliverableId }].")
+  return raw.map((item) => {
+    if (
+      !item ||
+      typeof item !== "object" ||
+      Array.isArray(item) ||
+      Object.keys(item).some(
+        (k) => !["productId", "deliverableId"].includes(k),
+      ) ||
+      typeof item.productId !== "string" ||
+      !UUID.test(item.productId) ||
+      typeof item.deliverableId !== "string" ||
+      !UUID.test(item.deliverableId)
+    )
+      throw invalid([], "Choose one valid deliverable per product.")
+    return { productId: item.productId, deliverableId: item.deliverableId }
+  })
+}
+
 /**
  * GET  /api/tickets/:ticketId/runs  → { availability, runs }
  * POST /api/tickets/:ticketId/runs  { requestId, ticketVersion, mode, workflow?, verification? }
@@ -195,6 +220,7 @@ export async function POST(
           "verification",
           "scripts",
           "renders",
+          "reviews",
         ].includes(k),
     )
     if (
@@ -214,6 +240,23 @@ export async function POST(
       )
     const scripts = parseScripts(body.scripts)
     const renders = parseRenders(body.renders)
+    const reviews = parseReviews(body.reviews)
+    if (
+      (scripts && body.workflow !== "quill-script-v1") ||
+      (renders && body.workflow !== "pixel-render-v1") ||
+      (reviews && body.workflow !== "vera-review-v1")
+    )
+      throw invalid([], "Input selections must match their workflow.")
+    if (body.workflow === "vera-review-v1") {
+      if (!reviews)
+        throw invalid([], "Choose completed Pixel deliverables to review.")
+      if (!(await veraTools()))
+        throw new HttpError(
+          503,
+          "qa-unavailable",
+          "Install local FFmpeg and FFprobe before starting QA.",
+        )
+    }
     const verification = parseVerification(body.verification, body.mode)
     const available = availability()
     const { runId, created } = await planRun(pool(), {
@@ -228,6 +271,7 @@ export async function POST(
       verification,
       scripts,
       ...(renders ? pixelPlanHooks(ticketId, renders) : {}),
+      ...(reviews ? veraPlanHooks(ticketId, reviews) : {}),
     })
     return jsonResponse({ runId }, created ? 201 : 200)
   })

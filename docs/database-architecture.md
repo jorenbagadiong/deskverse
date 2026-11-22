@@ -521,4 +521,10 @@ another connection is open.
 
 **DV-004B (Affiliate Tickets), DV-004C (the orchestrator) and DV-005A
 (Scout research) and DV-005B (Quill scriptwriting) are built on this
-foundation.** The next milestone is **DV-005C, Pixel**. See [ROADMAP.md](ROADMAP.md).
+foundation.** **DV-005C Pixel and DV-006A Vera** now extend this foundation. See [ROADMAP.md](ROADMAP.md).
+
+## Vera migration and backup (DV-006A)
+
+`0006_vera_reviews` adds immutable `vera_reviews` and `vera_findings` plus the `vera_review` task result kind. Database triggers enforce ownership, exact pinned deliverable, current unexpired fence, immutable findings and atomic task/result/review completion. Format-3 backups include these tables and recompute report/finding checksums on backup and restore. Derived raw frame samples are disposable; retained metrics/hashes and original videos form the audit evidence. Formats 1/2/3 remain readable.
+
+See [Vera quality assurance](vera-quality-assurance.md) for the rules, limitations, recovery and campaign readiness audit.

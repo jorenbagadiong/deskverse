@@ -11,7 +11,7 @@ research, scripts, rendering, review, publishing or analytics.
 `scout-research-v1`. See [§16](#16-dv-005a-additions).
 
 - **The full campaign is refused** ("Full campaign automation isn't
-  available yet") until Vera exists (DV-006A).
+  available yet") until automatic versioned result handoffs and frozen media/rights selections pass campaign E2E verification.
   Research-only runs (Scout) are allowed when source retrieval is on,
   scriptwriting-only runs (Quill, DV-005B, `quill-script-v1`) always, and
   video-only runs (Pixel, DV-005C, `pixel-render-v1`) when FFmpeg is ready;
@@ -501,3 +501,21 @@ It checks:
   the render gate with Pixel Studio under `DESKVERSE_DATA_DIR`.
 - The full campaign message now names only Vera (DV-006A).
 - Details: [Pixel ticket production](pixel-ticket-production.md).
+
+## DV-006A: Vera and the campaign readiness gate
+
+`vera-review-v1` registers a production `vera.review` task for each explicitly
+chosen finished video. Its frozen `veraPin` identifies the exact deliverable,
+script, report, snapshot, manifest and rights. `deliverable.persist` atomically
+commits `vera_reviews`, ordered `vera_findings`, compact `task_results` and task
+completion under the current fence. A negative QA verdict still completes a
+successfully recorded task. No second queue is added.
+
+All four handlers existing does not make `campaign-v1` executable. The separate
+`CAMPAIGN_READY` gate remains false, and `selectWorkflow` refuses production
+campaign planning regardless of caller availability flags. Dependency promotion
+currently queues descendants without resolving upstream results. Missing work:
+Scout report → Quill pin, Quill script → Pixel immutable manifest from approved
+frozen images/rights, Pixel deliverable → Vera pin; transactional ownership and
+idempotency checks at each boundary; real multiprocess campaign verification.
+See the [full handoff audit and recovery rules](vera-quality-assurance.md).

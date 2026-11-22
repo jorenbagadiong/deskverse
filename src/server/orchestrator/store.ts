@@ -26,7 +26,6 @@ import type {
   RunSummary,
 } from "@/lib/orchestrator/types"
 import {
-  MISSING_PRODUCTION_CAPABILITIES,
   PRODUCTION_WORKFLOW,
   QUILL_WORKFLOW,
   RESEARCH_WORKFLOW,
@@ -194,20 +193,8 @@ export interface PlanInput {
  * lock DV-004B's edits take), so the snapshot matches `ticketVersion`
  * exactly. A repeated requestId returns the original run.
  */
-const NAMES: Record<string, string> = {
-  "pixel.render": "Pixel",
-  "vera.review": "Vera",
-}
-
-const missingNames = MISSING_PRODUCTION_CAPABILITIES.map(
-  (c) => `${NAMES[c.stage] ?? c.stage} (${c.milestone.split(" ")[0]})`,
-)
-
-export const CAMPAIGN_UNAVAILABLE = `Full campaign automation isn't available yet: ${
-  missingNames.length === 1
-    ? `${missingNames[0]} isn't built`
-    : `${missingNames.slice(0, -1).join(", ")}, and ${missingNames.at(-1)} aren't built`
-}. Nothing was started. Research-only (Scout), scriptwriting-only (Quill) and video-only (Pixel) runs are available separately.`
+export const CAMPAIGN_UNAVAILABLE =
+  "Full campaign automation isn't available yet: automatic Scout → Quill, Quill → Pixel and Pixel → Vera result handoffs, frozen media selections and rights acknowledgements have not been implemented and verified. Nothing was started. Use Scout, Quill, Pixel and Vera workflows separately."
 
 export const RESEARCH_UNAVAILABLE =
   "Scout research isn't switched on: source retrieval is off. Set DESKVERSE_SCOUT_RETRIEVAL=on in .env.local, restart the app and the worker, then try again. Nothing was started."
@@ -230,7 +217,7 @@ function selectWorkflow(input: PlanInput): WorkflowDefinition {
       "unavailable",
       "Verification runs only run in the isolated test environment (yarn orchestrator:verify, yarn test:e2e:db).",
     )
-  if (workflow.id === PRODUCTION_WORKFLOW.id && !input.productionAvailable)
+  if (workflow.id === PRODUCTION_WORKFLOW.id)
     throw new OrchestratorError("unavailable", CAMPAIGN_UNAVAILABLE)
   if (
     workflow.mode === "production" &&
@@ -406,6 +393,14 @@ export async function planRun(
   input: PlanInput,
 ): Promise<{ runId: string; created: boolean }> {
   const workflow = selectWorkflow(input)
+  if (
+    ["pixel-render-v1", "vera-review-v1"].includes(workflow.id) &&
+    !input.prepare
+  )
+    throw new OrchestratorError(
+      "invalid",
+      "This workflow requires explicit pinned input selections.",
+    )
   const maxAttempts = Math.min(
     Math.max(input.retry?.maxAttempts ?? DEFAULT_RETRY_POLICY.maxAttempts, 1),
     MAX_ATTEMPTS_LIMIT,

@@ -86,9 +86,9 @@ test("says the full campaign isn't available; verification is labelled test-only
   await expect(section.getByTestId("automation-unavailable")).toContainText(
     "Full campaign automation isn't available yet.",
   )
-  // Scout (DV-005A), Quill (DV-005B) and Pixel (DV-005C) exist; Vera doesn't.
+  // All handlers exist; automatic pinned handoffs are still unverified.
   await expect(section.getByTestId("automation-unavailable")).toContainText(
-    "Vera (DV-006A)",
+    "Automatic result handoffs",
   )
   for (const built of ["Scout (DV-005A)", "Quill (DV-005B)", "Pixel (DV-005C)"])
     await expect(

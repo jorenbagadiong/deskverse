@@ -12,6 +12,7 @@ import {
   PIXEL_WORKFLOW,
   QUILL_WORKFLOW,
   RESEARCH_WORKFLOW,
+  VERA_WORKFLOW,
 } from "@/server/orchestrator/workflows"
 import { readScoutConfig } from "@/server/scout/config"
 import { invalid, jsonBody, notFound } from "@/server/tickets/http"
@@ -36,6 +37,7 @@ export function availableWorkflows(): string[] {
     QUILL_WORKFLOW.id,
     // Pixel (DV-005C): the worker registers it whenever FFmpeg is installed.
     PIXEL_WORKFLOW.id,
+    VERA_WORKFLOW.id,
   ]
 }
 

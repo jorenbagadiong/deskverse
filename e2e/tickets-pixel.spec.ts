@@ -290,9 +290,7 @@ test("renders a real video from the chosen script and images; preview, download 
     },
   })
   expect(campaign.status()).toBe(503)
-  expect((await campaign.json()).message).toMatch(
-    /Vera \(DV-006A\) isn't built/,
-  )
+  expect((await campaign.json()).message).toMatch(/result handoffs/)
 })
 
 test("cancels a render in progress; a damaged image needs input and Retry renders after the repair", async ({
