@@ -192,6 +192,7 @@ export class Worker {
         taskId: claim.taskId,
         runId: claim.runId,
         ticketId: claim.ticketId,
+        fence: claim.fence,
         stage: claim.stage,
         attempt: claim.attempt,
         maxAttempts: claim.maxAttempts,

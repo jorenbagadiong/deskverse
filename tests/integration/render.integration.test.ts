@@ -23,6 +23,10 @@ import { RenderQueue } from "@/server/video/render-queue"
 import { renderVideo } from "@/server/video/render-service"
 import { createVideoStorage, StorageError } from "@/server/video/storage"
 import { createUploadVerifier } from "@/server/video/upload-verify"
+import { testLease } from "../support/test-lease"
+
+/** A real render-gate lease (DV-005C): renderVideo requires one. */
+const lease = await testLease()
 
 const commands = { ffmpeg: "ffmpeg", ffprobe: "ffprobe" }
 const fonts = { bold: loadVideoFont("bold"), medium: loadVideoFont("medium") }
@@ -172,6 +176,7 @@ describe("real FFmpeg rendering", () => {
             storage,
             spawn: spawnTool,
             run: createRunner({ timeoutMs: 30_000 }),
+            lease,
             getCapabilities: async () => capabilities,
             commands,
             fonts,

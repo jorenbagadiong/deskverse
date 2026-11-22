@@ -2,6 +2,7 @@ import "../load-env"
 
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
+import os from "node:os"
 import path from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 import { parseArgs } from "node:util"
@@ -198,6 +199,11 @@ async function pipeline() {
           HOME: process.env.HOME,
           DATABASE_URL: url,
           DATABASE_TEST_URL: "",
+          // Never the owner's data folder (its render lock or videos): this run renders nothing.
+          DESKVERSE_DATA_DIR: path.join(
+            os.tmpdir(),
+            `deskverse-scout-smoke-verify-${process.pid}`,
+          ),
           DESKVERSE_SCOUT_RETRIEVAL: "on",
           DESKVERSE_WORKER_POLL_MS: "200",
         } as unknown as NodeJS.ProcessEnv,

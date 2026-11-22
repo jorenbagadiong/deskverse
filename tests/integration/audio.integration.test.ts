@@ -35,6 +35,10 @@ import {
   createAudioInspector,
   createUploadVerifier,
 } from "@/server/video/upload-verify"
+import { testLease } from "../support/test-lease"
+
+/** A real render-gate lease (DV-005C): renderVideo requires one. */
+const lease = await testLease()
 
 const commands = { ffmpeg: "ffmpeg", ffprobe: "ffprobe" }
 const fonts = { bold: loadVideoFont("bold"), medium: loadVideoFont("medium") }
@@ -212,6 +216,7 @@ async function render(
         storage,
         spawn: recordingSpawn,
         run: createRunner({ timeoutMs: 60_000 }),
+        lease,
         getCapabilities: async () => capabilities,
         commands,
         fonts,

@@ -100,35 +100,37 @@ move the repo into the Linux home directory.
 
 ## Development commands
 
-| Command                    | What it does                                           |
-| -------------------------- | ------------------------------------------------------ |
-| `yarn dev`                 | Start the dev server (Turbopack)                       |
-| `yarn build`               | Production build                                       |
-| `yarn start`               | Serve the production build locally                     |
-| `yarn lint`                | ESLint (Next.js core-web-vitals + TypeScript)          |
-| `yarn typecheck`           | Generate route types, then `tsc --noEmit`              |
-| `yarn format`              | Prettier write (sorts Tailwind classes too)            |
-| `yarn format:check`        | Prettier check                                         |
-| `yarn test`                | Vitest unit tests (office, design, video engine)       |
-| `yarn test:integration`    | Real FFmpeg render tests, video + audio (needs FFmpeg) |
-| `yarn test:db`             | Real PostgreSQL tests on the test database only        |
-| `yarn test:e2e`            | Playwright browser tests (builds + serves locally)     |
-| `yarn test:e2e:db`         | Affiliate Ticket browser tests on a scratch database   |
-| `yarn check`               | lint + typecheck + format check + tests                |
-| `yarn db:migrate`          | Apply versioned migrations to `DATABASE_URL`           |
-| `yarn db:check`            | Read-only database status                              |
-| `yarn db:generate`         | Create a new migration from `src/server/db/schema.ts`  |
-| `yarn db:backup`           | Offline backup: database + Pixel job files + manifest  |
-| `yarn db:backup:verify`    | Re-check a backup's checksums                          |
-| `yarn db:restore`          | Restore into an empty database and a new data folder   |
-| `yarn tickets:reconcile`   | Check ticket media against the database (`--apply`)    |
-| `yarn worker:start`        | Run the orchestrator worker (a separate process)       |
-| `yarn worker:check`        | Read-only worker, database and handler status          |
-| `yarn orchestrator:verify` | 10-product crash verification on a scratch database    |
-| `yarn scout:check`         | Read-only Scout diagnostics (research, model, worker)  |
-| `yarn scout:verify`        | Scout crash verification (scratch DB, fixture sites)   |
-| `yarn scout:smoke`         | Bounded live check of one public reference page        |
-| `yarn quill:verify`        | Quill crash verification (scratch DB, fixture reports) |
+| Command                    | What it does                                                      |
+| -------------------------- | ----------------------------------------------------------------- |
+| `yarn dev`                 | Start the dev server (Turbopack)                                  |
+| `yarn build`               | Production build                                                  |
+| `yarn start`               | Serve the production build locally                                |
+| `yarn lint`                | ESLint (Next.js core-web-vitals + TypeScript)                     |
+| `yarn typecheck`           | Generate route types, then `tsc --noEmit`                         |
+| `yarn format`              | Prettier write (sorts Tailwind classes too)                       |
+| `yarn format:check`        | Prettier check                                                    |
+| `yarn test`                | Vitest unit tests (office, design, video engine)                  |
+| `yarn test:integration`    | Real FFmpeg render tests, video + audio (needs FFmpeg)            |
+| `yarn test:db`             | Real PostgreSQL tests on the test database only                   |
+| `yarn test:e2e`            | Playwright browser tests (builds + serves locally)                |
+| `yarn test:e2e:db`         | Affiliate Ticket browser tests on a scratch database              |
+| `yarn check`               | lint + typecheck + format check + tests                           |
+| `yarn db:migrate`          | Apply versioned migrations to `DATABASE_URL`                      |
+| `yarn db:check`            | Read-only database status                                         |
+| `yarn db:generate`         | Create a new migration from `src/server/db/schema.ts`             |
+| `yarn db:backup`           | Offline backup: database + Pixel jobs + ticket media and videos   |
+| `yarn db:backup:verify`    | Re-check a backup's checksums                                     |
+| `yarn db:restore`          | Restore into an empty database and a new data folder              |
+| `yarn tickets:reconcile`   | Check ticket media against the database (`--apply`)               |
+| `yarn worker:start`        | Run the orchestrator worker (a separate process)                  |
+| `yarn worker:check`        | Read-only worker, database and handler status                     |
+| `yarn orchestrator:verify` | 10-product crash verification on a scratch database               |
+| `yarn scout:check`         | Read-only Scout diagnostics (research, model, worker)             |
+| `yarn scout:verify`        | Scout crash verification (scratch DB, fixture sites)              |
+| `yarn scout:smoke`         | Bounded live check of one public reference page                   |
+| `yarn quill:verify`        | Quill crash verification (scratch DB, fixture reports)            |
+| `yarn pixel:verify`        | Pixel multi-process render verification (scratch DB, real FFmpeg) |
+| `yarn pixel:reconcile`     | Check ticket videos against the database (`--repair`)             |
 
 ## Project structure
 
@@ -170,15 +172,17 @@ src/
   server/               Server-only: process runner, local-only guards, FFmpeg detection,
                         command builder, renderer, queue, private job storage
     db/                 PostgreSQL config, pool, Drizzle schema, migrations, health, test guards
-    backup/             Offline backup, verify and restore (format 2: + ticket media)
+    backup/             Offline backup, verify and restore (format 3: + ticket media and videos)
     tickets/            Ticket repository (transactions + events), media storage and checks
     orchestrator/       Runs, frozen inputs, task graph, claims/leases, worker, handlers (DV-004C)
     scout/              Scout research (DV-005A): safe retrieval (net/), extraction, claim
                         analysis, optional local model, handler, report storage
     quill/              Quill scriptwriting (DV-005B): claim selection, templates, validation,
                         optional local model, handler, script storage
+    pixel/              Pixel ticket videos (DV-005C): render manifests, Quill-to-Pixel adapter,
+                        disclosure-frame check, handler, deliverables, reconcile
 drizzle/                Versioned SQL migrations (committed)
-scripts/                yarn db:*, tickets:*, worker:*, orchestrator:*, scout:* commands, setup-local.sh,
+scripts/                yarn db:*, tickets:*, worker:*, orchestrator:*, scout:*, quill:*, pixel:* commands, setup-local.sh,
                         e2e/ database test server, scout/ fixture sites (tests only)
 assets/fonts/inter/     Inter Bold + Medium (SIL OFL 1.1) for video captions
 docs/                   ROADMAP.md, brand-guidelines.md, animation-guidelines.md,
@@ -293,6 +297,38 @@ software WebGL and logs a deprecation warning, which the suite treats as a
 failure by design. Everything else passes. Run the office tests where Chrome
 has a GPU (for example native Windows). Details and the exact list:
 [E2E environment notes](docs/e2e-environment.md).
+
+## DV-005C scope: Pixel, ticket video production ✅
+
+Pixel renders a silent, captioned vertical video from a Quill script and
+the product's own images. **Video only:** nothing is published, and the
+full campaign stays unavailable until Vera (DV-006A).
+
+- **Pick the script and images:** in a Ready ticket's **Pixel Videos**
+  section, choose a script and 3–6 images per product (confirm media
+  rights if they're unspecified), then press **Start render** (worker:
+  `yarn worker:start`, FFmpeg inside Ubuntu).
+- **Exactly what Quill wrote:** captions, subtexts, durations and the
+  affiliate disclosure come from the script's Pixel storyboard, checked
+  scene by scene before rendering. Narration isn't voiced (no TTS); visual
+  directions are guidance.
+- **Stale input is refused:** images added or changed after a script need
+  new research and a new script (mark Ready, run Scout, run Quill, then
+  Pixel). The section says so.
+- **One render at a time per computer:** a crash-safe render gate shared
+  with Pixel Studio, which also works without PostgreSQL. Pixel Studio's
+  own jobs, uploads and videos are untouched (ticket videos live in
+  `<data>/ticket-renders`).
+- **Verified before it's kept:** FFprobe (H.264, 1080×1920, 30 fps, no
+  audio), the disclosure found in real frames of every scene, and a
+  SHA-256. Each video is a versioned, immutable deliverable, committed
+  with its task (migration `0005_pixel_deliverables`), labelled
+  **Technically verified — Awaiting Vera QA**.
+- **Crash-safe:** a verified output survives a worker crash and is reused;
+  stale workers can't commit; `yarn pixel:reconcile` finds abandoned
+  renders. Backups (format 3) include the videos.
+
+Details: [Pixel ticket production](docs/pixel-ticket-production.md).
 
 ## DV-005B scope: Quill, evidence-grounded scriptwriting ✅
 

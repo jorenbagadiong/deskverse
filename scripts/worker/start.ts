@@ -14,6 +14,15 @@ import { Worker } from "@/server/orchestrator/worker"
 import { readScoutConfig, testNetworkAllowed } from "@/server/scout/config"
 import { quillTestHooks, readQuillConfig } from "@/server/quill/ollama"
 import { createQuillHandler } from "@/server/quill/handler"
+import { createPixelHandler } from "@/server/pixel/handler"
+import {
+  getFfmpegCapabilities,
+  resolveExecutable,
+} from "@/server/video/ffmpeg-capabilities"
+import { fontDirectory, loadVideoFont } from "@/server/video/font-metrics"
+import { RenderGate } from "@/server/video/render-gate"
+import { renderThreads } from "@/server/video/render-queue"
+import { resolveDataRoot } from "@/server/video/storage"
 import { createScoutHandler } from "@/server/scout/handler"
 import { parseTestNetwork, testNetwork } from "@/server/scout/net/test-network"
 
@@ -72,11 +81,50 @@ const pool = createPool(db.config, {
   max: config.slots + 3,
   applicationName: "deskverse-worker",
 })
+// Pixel (DV-005C): the same data folder, render gate and FFmpeg as Pixel Studio.
+const dataRoot = resolveDataRoot()
+const ffmpeg = resolveExecutable("ffmpeg", process.env.DESKVERSE_FFMPEG_PATH)
+const ffprobe = resolveExecutable("ffprobe", process.env.DESKVERSE_FFPROBE_PATH)
+let pixelTest:
+  | {
+      crashAt: "during-render" | "after-output" | "before-commit"
+      product: string
+    }[]
+  | null = null
+if (process.env.DESKVERSE_PIXEL_TEST) {
+  if (
+    !/^deskverse_test(_[a-z0-9_]{1,40})?$/.test(db.config.database) ||
+    !db.config.user.includes("test")
+  ) {
+    console.error(
+      "✗ DESKVERSE_PIXEL_TEST only runs on a test database (deskverse_test_*). Refusing to start.",
+    )
+    process.exit(1)
+  }
+  pixelTest = JSON.parse(process.env.DESKVERSE_PIXEL_TEST)
+}
+const pixel =
+  ffmpeg.ok && ffprobe.ok
+    ? createPixelHandler({
+        pool,
+        dataRoot,
+        gate: new RenderGate(dataRoot, { log: (l) => console.log(l) }),
+        commands: { ffmpeg: ffmpeg.command, ffprobe: ffprobe.command },
+        getCapabilities: () => getFfmpegCapabilities(),
+        fonts: { bold: loadVideoFont("bold"), medium: loadVideoFont("medium") },
+        fontDir: fontDirectory(),
+        threads: renderThreads(),
+        log: (l) => console.log(l),
+        test: pixelTest,
+      })
+    : null
 const registry = createRegistry({
   verification,
   production: [
     // Quill (DV-005B) reads only the database, so it is always available.
     createQuillHandler({ pool, config: quill, test: quillTest }),
+    // Pixel (DV-005C) needs FFmpeg and FFprobe.
+    ...(pixel ? [pixel] : []),
     ...(scout.retrieval
       ? [
           createScoutHandler({
@@ -116,6 +164,11 @@ else
   )
 console.log(
   `[worker] Quill scriptwriting: ${quill.generation === "ollama" ? (quill.ollama ? `template + local model ${quill.ollama.model}` : `template only (local model unusable: ${quill.ollamaProblem})`) : "template mode (no AI model)"}`,
+)
+console.log(
+  pixel
+    ? `[worker] Pixel ticket videos: on (render gate ${dataRoot}/locks/render.lock, shared with Pixel Studio)`
+    : "[worker] Pixel ticket videos: off (FFmpeg/FFprobe not found; see DESKVERSE_FFMPEG_PATH)",
 )
 console.log(
   `[worker] full campaign unavailable until ${MISSING_PRODUCTION_CAPABILITIES.map((c) => `${c.stage}: ${c.milestone}`).join("; ")}`,

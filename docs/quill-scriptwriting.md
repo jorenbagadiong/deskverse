@@ -50,8 +50,8 @@ works with no model installed.
   One task per **selected** product; products progress independently.
 - Quill reads only the database, so it is always registered and always
   available. It doesn't need Scout's retrieval switch.
-- The full campaign (`campaign-v1`) is **still refused** with a 503 naming
-  Pixel (DV-005C) and Vera (DV-006A). Scout research (`scout-research-v1`)
+- The full campaign (`campaign-v1`) is **still refused** with a 503,
+  which since DV-005C names only Vera (DV-006A). Scout research (`scout-research-v1`)
   is unchanged.
 
 ## 3. Choosing research, and when it's refused
@@ -221,9 +221,11 @@ Three separate checks, shown separately:
    3–6). Otherwise: "Pixel needs 3–6 product images; this product has N."
 
 Quill never creates Pixel jobs, uploads assets or starts FFmpeg, and its
-scene JSON is not a trusted Pixel render project. DV-005C will map the
-script into Pixel through Pixel's own server-side validation and the
-cross-process render gate.
+scene JSON is not a trusted Pixel render project. Since DV-005C, Pixel
+maps a chosen script into its own project: it re-runs Quill's validator
+and its own server-side validation, then checks fidelity scene by scene
+before rendering inside the render gate. See
+[Pixel ticket production](pixel-ticket-production.md).
 
 ## 9. Storage, versions, integrity
 
@@ -334,6 +336,8 @@ DV-004B, DV-004C and DV-005A backups restore and migrate forward to 0004.
 - Statement claims are used verbatim; long ones are skipped rather than
   shortened.
 - English only. No manual editing, voice-over or preview.
-- **DV-005C** will turn a valid, Pixel-compatible script plus 3–6 product
-  images into a Pixel render through Pixel's own validation and a render
-  gate shared with Pixel Studio, keeping the disclosure on every scene.
+- **DV-005C (done)** turns a valid, Pixel-compatible script plus 3–6 of
+  the product's images into a verified video. The disclosure is confirmed
+  in real frames of every scene. Pixel keeps this stale-input policy:
+  images added after a script need new Scout research and a new Quill
+  script. See [Pixel ticket production](pixel-ticket-production.md).

@@ -9,6 +9,7 @@ import {
   createRegistry,
   MISSING_PRODUCTION_CAPABILITIES,
   productionAvailable,
+  PIXEL_WORKFLOW,
   QUILL_WORKFLOW,
   RESEARCH_WORKFLOW,
 } from "@/server/orchestrator/workflows"
@@ -33,6 +34,8 @@ export function availableWorkflows(): string[] {
   return [
     ...(readScoutConfig().retrieval ? [RESEARCH_WORKFLOW.id] : []),
     QUILL_WORKFLOW.id,
+    // Pixel (DV-005C): the worker registers it whenever FFmpeg is installed.
+    PIXEL_WORKFLOW.id,
   ]
 }
 

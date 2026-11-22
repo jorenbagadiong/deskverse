@@ -1,3 +1,4 @@
+import { pixelPlanHooks, type RenderSelection } from "@/server/pixel/plan"
 import {
   availability,
   availableWorkflows,
@@ -98,6 +99,53 @@ function parseScripts(raw: unknown) {
   })
 }
 
+/** Pixel (DV-005C): [{ productId, scriptId, assetIds: 3–6, rightsAcknowledged? }], 1–100. */
+function parseRenders(raw: unknown): RenderSelection[] | undefined {
+  if (raw === undefined) return undefined
+  const bad = () =>
+    invalid(
+      [
+        {
+          path: "renders",
+          message: "Choose a script and 3–6 images per product.",
+        },
+      ],
+      "Send renders as [{ productId, scriptId, assetIds, rightsAcknowledged? }].",
+    )
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > 100) throw bad()
+  return raw.map((item) => {
+    if (
+      !item ||
+      typeof item !== "object" ||
+      Object.keys(item).some(
+        (k) =>
+          !["productId", "scriptId", "assetIds", "rightsAcknowledged"].includes(
+            k,
+          ),
+      ) ||
+      typeof item.productId !== "string" ||
+      !UUID.test(item.productId) ||
+      typeof item.scriptId !== "string" ||
+      !UUID.test(item.scriptId) ||
+      !Array.isArray(item.assetIds) ||
+      item.assetIds.length < 3 ||
+      item.assetIds.length > 6 ||
+      item.assetIds.some(
+        (id: unknown) => typeof id !== "string" || !UUID.test(id),
+      ) ||
+      (item.rightsAcknowledged !== undefined &&
+        typeof item.rightsAcknowledged !== "boolean")
+    )
+      throw bad()
+    return {
+      productId: item.productId as string,
+      scriptId: item.scriptId as string,
+      assetIds: item.assetIds as string[],
+      rightsAcknowledged: item.rightsAcknowledged === true,
+    }
+  })
+}
+
 /**
  * GET  /api/tickets/:ticketId/runs  → { availability, runs }
  * POST /api/tickets/:ticketId/runs  { requestId, ticketVersion, mode, workflow?, verification? }
@@ -107,6 +155,8 @@ function parseScripts(raw: unknown) {
  *   (503 capability-unavailable) until Quill, Pixel and Vera exist.
  *   mode "production" + workflow "quill-script-v1" + scripts (DV-005B):
  *   Quill scriptwriting only, from the chosen, verified, current reports.
+ *   mode "production" + workflow "pixel-render-v1" + renders (DV-005C):
+ *   Pixel video only, from a chosen verified Quill script and 3–6 images.
  *   mode "verification": only in an isolated test environment.
  *   201 { runId } (200 if the requestId was already used).
  */
@@ -144,6 +194,7 @@ export async function POST(
           "workflow",
           "verification",
           "scripts",
+          "renders",
         ].includes(k),
     )
     if (
@@ -159,9 +210,10 @@ export async function POST(
     )
       throw invalid(
         [],
-        "Send { requestId, ticketVersion, mode, workflow?, verification?, scripts? }.",
+        "Send { requestId, ticketVersion, mode, workflow?, verification?, scripts?, renders? }.",
       )
     const scripts = parseScripts(body.scripts)
+    const renders = parseRenders(body.renders)
     const verification = parseVerification(body.verification, body.mode)
     const available = availability()
     const { runId, created } = await planRun(pool(), {
@@ -175,6 +227,7 @@ export async function POST(
       verificationAllowed: available.verification,
       verification,
       scripts,
+      ...(renders ? pixelPlanHooks(ticketId, renders) : {}),
     })
     return jsonResponse({ runId }, created ? 201 : 200)
   })

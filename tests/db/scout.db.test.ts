@@ -176,6 +176,7 @@ async function runHandler(claim: Claim): Promise<HandlerOutcome> {
     taskId: claim.taskId,
     runId: claim.runId,
     ticketId: claim.ticketId,
+    fence: claim.fence,
     stage: claim.stage,
     attempt: claim.attempt,
     maxAttempts: claim.maxAttempts,
@@ -237,7 +238,8 @@ describe("research-only workflow", () => {
       message: CAMPAIGN_UNAVAILABLE,
     })
     // Scout (DV-005A) and Quill (DV-005B) exist; Pixel and Vera don't.
-    expect(campaign.message).toMatch(/Pixel \(DV-005C\), and Vera \(DV-006A\)/)
+    expect(campaign.message).toMatch(/Vera \(DV-006A\) isn't built/)
+    expect(campaign.message).not.toMatch(/Pixel \(DV-005C\)/)
     expect(campaign.message).not.toMatch(/Quill \(DV-005B\)|Scout \(DV-005A\)/)
     expect((await refuse({ workflow: undefined })).message).toBe(
       CAMPAIGN_UNAVAILABLE,

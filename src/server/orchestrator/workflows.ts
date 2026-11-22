@@ -119,8 +119,31 @@ export const QUILL_WORKFLOW: WorkflowDefinition = {
 }
 
 /**
- * The full production chain. Not runnable until Quill, Pixel and Vera
- * have production handlers. Publishing (Relay) will use recovery "inspect": a crashed
+ * Video production only (DV-005C): Pixel renders one video per selected
+ * product from an explicitly chosen, verified Quill script and 3–6 pinned
+ * ticket images (the render manifest). Render class: one at a time across
+ * all workers, and the installation-wide render gate also excludes Pixel
+ * Studio. Rendering has no external side effects: a crashed attempt is
+ * safe to repeat (a verified output may be reused).
+ */
+export const PIXEL_WORKFLOW: WorkflowDefinition = {
+  id: "pixel-render-v1",
+  mode: "production",
+  title: "Video production only (Pixel)",
+  stages: [
+    {
+      stage: "pixel.render",
+      label: "Pixel: video",
+      dependsOn: [],
+      resourceClass: "render",
+      recovery: "retry",
+    },
+  ],
+}
+
+/**
+ * The full production chain. Not runnable until Vera (DV-006A) has a
+ * production handler. Publishing (Relay) will use recovery "inspect": a crashed
  * attempt might already have published, so it is never retried blindly.
  */
 export const PRODUCTION_WORKFLOW: WorkflowDefinition = {
@@ -161,10 +184,6 @@ export const PRODUCTION_WORKFLOW: WorkflowDefinition = {
 
 /** Milestones that will provide the remaining production handlers (Scout DV-005A and Quill DV-005B are built). */
 export const MISSING_PRODUCTION_CAPABILITIES = [
-  {
-    stage: "pixel.render",
-    milestone: "DV-005C (needs a render gate shared with Pixel Studio)",
-  },
   { stage: "vera.review", milestone: "DV-006A" },
 ] as const
 
@@ -172,6 +191,7 @@ export const WORKFLOWS: readonly WorkflowDefinition[] = [
   VERIFICATION_WORKFLOW,
   RESEARCH_WORKFLOW,
   QUILL_WORKFLOW,
+  PIXEL_WORKFLOW,
   PRODUCTION_WORKFLOW,
 ]
 
@@ -199,6 +219,8 @@ export interface HandlerContext {
   taskId: string
   runId: string
   ticketId: string
+  /** The claim's fencing token (for writes that must come from the lease holder). */
+  fence: number
   stage: string
   /** Counted attempt number (1-based). */
   attempt: number
@@ -220,7 +242,8 @@ export interface CommitContext {
   fence: number
 }
 
-export type ResultKind = "verification" | "scout_research" | "quill_script"
+export type ResultKind =
+  "verification" | "scout_research" | "quill_script" | "pixel_video"
 
 export type HandlerOutcome =
   | {

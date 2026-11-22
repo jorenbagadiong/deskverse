@@ -506,9 +506,65 @@ describe("backup manifest format 2", () => {
         ticketMedia: { source: "tickets", assets: 2, files: [ticketFile] },
       }),
     ).toContain("ticket media count doesn't match its file list")
-    expect(manifestProblems({ ...base, formatVersion: 3 })[0]).toMatch(
-      /reads 1 and 2/,
+    expect(manifestProblems({ ...base, formatVersion: 4 })[0]).toMatch(
+      /reads 1, 2 and 3/,
     )
+  })
+  it("accepts format 3 with ticket videos and refuses an inconsistent or unsafe video section", () => {
+    const ticketMedia = { source: "tickets", assets: 1, files: [ticketFile] }
+    const job = `ticket-renders/video/jobs/job_${"c".repeat(32)}`
+    const file = (p: string) => ({
+      path: `${job}/${p}`,
+      bytes: 1,
+      sha256: "d".repeat(64),
+    })
+    const ticketVideos = {
+      source: "ticket-renders/video/jobs",
+      deliverables: 1,
+      bytes: 3,
+      files: [file("job.json"), file("project.json"), file("output/video.mp4")],
+    }
+    expect(
+      manifestProblems({
+        ...base,
+        formatVersion: 3,
+        ticketMedia,
+        ticketVideos,
+      }),
+    ).toEqual([])
+    expect(
+      manifestProblems({ ...base, formatVersion: 3, ticketMedia }),
+    ).toContain("ticket video section is missing or invalid")
+    expect(
+      manifestProblems({
+        ...base,
+        formatVersion: 2,
+        ticketMedia,
+        ticketVideos,
+      }),
+    ).toContain("only a version 3 backup can contain ticket videos")
+    for (const bad of [
+      "output/../../x.mp4",
+      "output/other.mp4",
+      "work/frame.png",
+      "assets/asset_x.sh",
+    ])
+      expect(
+        manifestProblems({
+          ...base,
+          formatVersion: 3,
+          ticketMedia,
+          ticketVideos: { ...ticketVideos, files: [file(bad)] },
+        }),
+      ).toContain("ticket video file list has an invalid entry")
+    expect(
+      manifestProblems({
+        ...base,
+        formatVersion: 3,
+        ticketMedia,
+        ticketVideos: { ...ticketVideos, deliverables: 2 },
+      }),
+    ).toContain("ticket video count doesn't match its file list")
   })
 })
 

@@ -36,6 +36,13 @@
       "when": 1795302732745,
       "tag": "0004_quill_scripts",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1795319006547,
+      "tag": "0005_pixel_deliverables",
+      "breakpoints": true
     }
   ]
 }

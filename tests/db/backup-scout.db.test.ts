@@ -299,6 +299,7 @@ describe("backup and restore with Scout research", () => {
         expect(await runMigrations(pool, journal, migrationsFolder())).toEqual([
           "0003_scout_research",
           "0004_quill_scripts",
+          "0005_pixel_deliverables",
         ])
         const kept = (
           await pool.query("SELECT kind, payload FROM task_results")

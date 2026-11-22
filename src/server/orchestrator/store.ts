@@ -163,6 +163,27 @@ export interface PlanInput {
   availableWorkflows?: readonly string[]
   /** Quill (DV-005B): the Scout report to write each product's script from. */
   scripts?: readonly { productId: string; reportId: string }[]
+  /**
+   * Workflow-specific planning (DV-005C, Pixel): runs inside the planning
+   * transaction with the products' current frozen inputs; returns the task
+   * params per selected product (others get no task) or throws an
+   * OrchestratorError to refuse the whole run.
+   */
+  prepare?: (
+    c: pg.PoolClient,
+    snapshots: Awaited<ReturnType<typeof currentProductSnapshots>>["snapshots"],
+  ) => Promise<Map<string, Record<string, unknown>>>
+  /** Called for each created task, in the same transaction (e.g. to pin a render manifest). */
+  onTask?: (
+    c: pg.PoolClient,
+    task: {
+      taskId: string
+      runId: string
+      snapshotId: string
+      productId: string
+      params: Record<string, unknown>
+    },
+  ) => Promise<void>
   verification?: VerificationOptions
   retry?: Partial<RetryPolicy>
 }
@@ -178,12 +199,15 @@ const NAMES: Record<string, string> = {
   "vera.review": "Vera",
 }
 
-export const CAMPAIGN_UNAVAILABLE = `Full campaign automation isn't available yet: ${MISSING_PRODUCTION_CAPABILITIES.map(
-  (c, i, all) =>
-    `${i === all.length - 1 ? "and " : ""}${NAMES[c.stage] ?? c.stage} (${c.milestone.split(" ")[0]})`,
-).join(
-  ", ",
-)} aren't built. Nothing was started. Research-only (Scout) and scriptwriting-only (Quill) runs are available separately.`
+const missingNames = MISSING_PRODUCTION_CAPABILITIES.map(
+  (c) => `${NAMES[c.stage] ?? c.stage} (${c.milestone.split(" ")[0]})`,
+)
+
+export const CAMPAIGN_UNAVAILABLE = `Full campaign automation isn't available yet: ${
+  missingNames.length === 1
+    ? `${missingNames[0]} isn't built`
+    : `${missingNames.slice(0, -1).join(", ")}, and ${missingNames.at(-1)} aren't built`
+}. Nothing was started. Research-only (Scout), scriptwriting-only (Quill) and video-only (Pixel) runs are available separately.`
 
 export const RESEARCH_UNAVAILABLE =
   "Scout research isn't switched on: source retrieval is off. Set DESKVERSE_SCOUT_RETRIEVAL=on in .env.local, restart the app and the worker, then try again. Nothing was started."
@@ -311,7 +335,7 @@ export async function currentProductSnapshots(c: Queryable, ticketId: string) {
 }
 
 /** What a Quill task pins: the exact Scout report it must write from. */
-export interface ReportPin {
+export interface ReportPin extends Record<string, unknown> {
   reportId: string
   reportVersion: number
   reportChecksum: string
@@ -481,10 +505,14 @@ export async function planRun(
 
     // Quill (DV-005B): only the selected products, each pinned to a verified,
     // still-current Scout report.
-    const pins =
+    const pins: Map<string, Record<string, unknown>> | null =
       workflow.id === QUILL_WORKFLOW.id
         ? await pinScoutReports(c, input, snapshots)
-        : null
+        : input.prepare
+          ? await input.prepare(c, snapshots)
+          : null
+    if (pins && pins.size === 0)
+      throw new OrchestratorError("invalid", "Choose at least one product.")
     let taskCount = 0
     for (const { product, data, checksum } of snapshots) {
       const pin = pins?.get(product.id)
@@ -536,6 +564,13 @@ export async function planRun(
         ).rows[0]
         ids.set(stage.stage, task.id)
         taskCount++
+        await input.onTask?.(c, {
+          taskId: task.id,
+          runId: run.id,
+          snapshotId: snapshot.id,
+          productId: product.id,
+          params,
+        })
         for (const dep of stage.dependsOn)
           await c.query(
             "INSERT INTO task_dependencies (run_id, task_id, depends_on_task_id) VALUES ($1, $2, $3)",

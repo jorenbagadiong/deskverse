@@ -1,4 +1,4 @@
-# Database architecture (DV-004A, DV-004B)
+# Database architecture (DV-004A onwards)
 
 Deskverse stores **Affiliate Tickets** in a local PostgreSQL database on
 your own computer:
@@ -13,6 +13,9 @@ your own computer:
   ([scout-research.md](scout-research.md)).
 - **DV-005B** added Quill's script tables
   ([quill-scriptwriting.md](quill-scriptwriting.md)).
+- **DV-005C** added Pixel's render manifests and video deliverables, and
+  backup format 3 with the ticket videos
+  ([pixel-ticket-production.md](pixel-ticket-production.md)).
 
 **PostgreSQL isn't needed for Pixel Studio or the office.** They work exactly
 as before with the database stopped, missing or misconfigured. Pixel Studio's
@@ -211,13 +214,14 @@ How it works:
 
 Schema:
 
-| Migration                              | Adds                                                                                                                                                                                                                                                                                                                                                                         |
-| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `0000_init` (DV-004A)                  | `app_metadata (key text PK, value jsonb, created_at, updated_at)` + the `database.initialized` row                                                                                                                                                                                                                                                                           |
-| `0001_affiliate_tickets` (DV-004B)     | `affiliate_tickets`, `ticket_products`, `ticket_references`, `ticket_assets`, `ticket_events` (see [affiliate-tickets.md §3](affiliate-tickets.md#3-data-model))                                                                                                                                                                                                             |
-| `0002_campaign_orchestrator` (DV-004C) | `campaign_runs`, `run_product_snapshots`, `worker_tasks`, `task_dependencies`, `task_attempts`, `task_results`, `run_events`, plus triggers keeping snapshots, results and dependencies immutable and refusing dependency cycles (see [orchestrator.md §2](orchestrator.md#2-data-model))                                                                                    |
-| `0003_scout_research` (DV-005A)        | `scout_reports`, `scout_sources`, `scout_evidence`, `scout_claims`, `scout_claim_evidence`, `orchestrator_workers`; widens `task_results.kind` to `verification`/`scout_research`; triggers keeping research immutable and accepting it only from the task's current lease holder (see [scout-research.md §11](scout-research.md#11-storage-versions-integrity-and-backups)) |
-| `0004_quill_scripts` (DV-005B)         | `quill_scripts`, `quill_scenes`, `quill_scene_claims`; widens `task_results.kind` with `quill_script`; triggers keeping scripts immutable, accepting them only from the lease holder for the pinned report, and refusing ineligible Scout claims (see [quill-scriptwriting.md §9](quill-scriptwriting.md#9-storage-versions-integrity))                                      |
+| Migration                              | Adds                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0000_init` (DV-004A)                  | `app_metadata (key text PK, value jsonb, created_at, updated_at)` + the `database.initialized` row                                                                                                                                                                                                                                                                                                                                                            |
+| `0001_affiliate_tickets` (DV-004B)     | `affiliate_tickets`, `ticket_products`, `ticket_references`, `ticket_assets`, `ticket_events` (see [affiliate-tickets.md §3](affiliate-tickets.md#3-data-model))                                                                                                                                                                                                                                                                                              |
+| `0002_campaign_orchestrator` (DV-004C) | `campaign_runs`, `run_product_snapshots`, `worker_tasks`, `task_dependencies`, `task_attempts`, `task_results`, `run_events`, plus triggers keeping snapshots, results and dependencies immutable and refusing dependency cycles (see [orchestrator.md §2](orchestrator.md#2-data-model))                                                                                                                                                                     |
+| `0003_scout_research` (DV-005A)        | `scout_reports`, `scout_sources`, `scout_evidence`, `scout_claims`, `scout_claim_evidence`, `orchestrator_workers`; widens `task_results.kind` to `verification`/`scout_research`; triggers keeping research immutable and accepting it only from the task's current lease holder (see [scout-research.md §11](scout-research.md#11-storage-versions-integrity-and-backups))                                                                                  |
+| `0004_quill_scripts` (DV-005B)         | `quill_scripts`, `quill_scenes`, `quill_scene_claims`; widens `task_results.kind` with `quill_script`; triggers keeping scripts immutable, accepting them only from the lease holder for the pinned report, and refusing ineligible Scout claims (see [quill-scriptwriting.md §9](quill-scriptwriting.md#9-storage-versions-integrity))                                                                                                                       |
+| `0005_pixel_deliverables` (DV-005C)    | `pixel_render_jobs` (one immutable render manifest per `pixel.render` task: pinned script, report, snapshot and image checksums) and `pixel_deliverables` (versioned, immutable MP4 records); widens `task_results.kind` with `pixel_video`; triggers keeping manifests and deliverables immutable and accepting a deliverable only from the task's current fence for its own manifest (see [pixel-ticket-production.md](pixel-ticket-production.md#handler)) |
 
 `0001` was applied to a fresh scratch database by `yarn test:db` before it
 was applied to the development database. It creates tables only; nothing
@@ -342,7 +346,15 @@ deskverse-backup-20261121T123456Z/
   database.dump      pg_dump custom format, --no-owner --no-privileges
   media/video/jobs/<jobId>/job.json, project.json, assets/…, output/video.mp4
   media/tickets/<ticketId>/assets/<assetId>.<ext>     (format 2, DV-004B)
+  media/ticket-renders/video/jobs/<jobId>/job.json, project.json, assets/…, output/video.mp4
+                                                     (format 3, DV-005C)
 ```
+
+**Ticket videos (format 3)** are the Pixel job folders of every
+`pixel_deliverables` record. Each MP4 must match its record's size and
+SHA-256 when it is copied, or the backup stops ("run `yarn
+pixel:reconcile`"). After a restore, every deliverable must match its
+restored file again. Abandoned or unfinished ticket renders are left out.
 
 **Ticket attachments (format 2)** are the files `ticket_assets` registers,
 no more and no less:
@@ -418,8 +430,8 @@ Compatibility:
 
 - `pg_restore` must be the same major version as the dump or newer; the
   manifest records both the server and `pg_dump` versions.
-- The backup format is versioned. DV-004B writes `formatVersion: 2` and
-  reads 1 and 2; any other version is refused.
+- The backup format is versioned. DV-005C writes `formatVersion: 3` and
+  reads 1, 2 and 3 (DV-004B wrote 2); any other version is refused.
 - **DV-004A backups (format 1) still restore.** `backup-tickets.db.test.ts`
   checks this with a real format 1 backup written by DV-004A's own code
   (taken from commit `81fca88` with `git show`). It is restored with

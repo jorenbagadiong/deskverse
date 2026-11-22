@@ -28,6 +28,7 @@ import type { PublishingPreferences } from "@/lib/tickets/types"
  * orchestrator (runs, frozen inputs, tasks, attempts, results, events).
  * DV-005A: Scout research (reports, sources, evidence, claims) and worker
  * check-ins. DV-005B: Quill scripts (scripts, scenes, scene claims).
+ * DV-005C: Pixel render jobs (pinned manifests) and video deliverables.
  *
  * The ticket tables hold the OWNER'S input only. Future workers (Scout,
  * Quill, Pixel…) will write their results to separate deliverable tables
@@ -589,7 +590,7 @@ export const taskResults = pgTable(
   (t) => [
     check(
       "task_results_kind_check",
-      sql`${t.kind} IN ('verification', 'scout_research', 'quill_script')`,
+      sql`${t.kind} IN ('verification', 'scout_research', 'quill_script', 'pixel_video')`,
     ),
     check(
       "task_results_size_check",
@@ -1117,6 +1118,181 @@ export const quillSceneClaims = pgTable(
   ],
 )
 
+// ---------------------------------------------------------------------------
+// Pixel ticket videos (DV-005C)
+// ---------------------------------------------------------------------------
+
+/**
+ * One render of one product for one pixel.render task. The manifest
+ * columns (script, research, snapshot, images, settings) are pinned when
+ * the run is planned and can never change (trigger in 0005); the state
+ * columns describe the render's progress and which Pixel job holds it.
+ */
+export const pixelRenderJobs = pgTable(
+  "pixel_render_jobs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    runId: uuid("run_id").notNull(),
+    ticketId: uuid("ticket_id").notNull(),
+    taskId: uuid("task_id").notNull().unique(),
+    snapshotId: uuid("snapshot_id").notNull(),
+    productId: uuid("product_id").notNull(),
+    scriptId: uuid("script_id")
+      .notNull()
+      .references(() => quillScripts.id, { onDelete: "restrict" }),
+    scriptVersion: integer("script_version").notNull(),
+    scriptChecksum: text("script_checksum").notNull(),
+    reportId: uuid("report_id").notNull(),
+    reportVersion: integer("report_version").notNull(),
+    reportChecksum: text("report_checksum").notNull(),
+    snapshotChecksum: text("snapshot_checksum").notNull(),
+    /** Ticket image IDs in render order (3–6) and their SHA-256s. */
+    assetIds: uuid("asset_ids").array().notNull(),
+    assetSha256: text("asset_sha256").array().notNull(),
+    /** The owner confirmed they may use the images (media rights were "unspecified"). */
+    rightsAcknowledged: boolean("rights_acknowledged").notNull(),
+    renderConfig: text("render_config").notNull(),
+    /** SHA-256 of the canonical manifest above. */
+    manifestChecksum: text("manifest_checksum").notNull(),
+    // Mutable render state (written under the task's fence).
+    state: text("state").notNull().default("planned"),
+    pixelJobId: text("pixel_job_id"),
+    attemptFence: bigint("attempt_fence", { mode: "number" }),
+    progress: jsonb("progress").$type<Record<string, unknown>>(),
+    error: text("error"),
+    createdAt: timestamps.createdAt,
+    updatedAt: timestamps.updatedAt,
+  },
+  (t) => [
+    foreignKey({
+      name: "pixel_render_jobs_task_fk",
+      columns: [t.taskId, t.runId],
+      foreignColumns: [workerTasks.id, workerTasks.runId],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "pixel_render_jobs_snapshot_fk",
+      columns: [t.snapshotId, t.runId],
+      foreignColumns: [runProductSnapshots.id, runProductSnapshots.runId],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "pixel_render_jobs_run_fk",
+      columns: [t.runId, t.ticketId],
+      foreignColumns: [campaignRuns.id, campaignRuns.ticketId],
+    }).onDelete("restrict"),
+    unique("pixel_render_jobs_id_task_unique").on(t.id, t.taskId),
+    check(
+      "pixel_render_jobs_assets_check",
+      sql`cardinality(${t.assetIds}) BETWEEN 3 AND 6 AND cardinality(${t.assetSha256}) = cardinality(${t.assetIds})`,
+    ),
+    check(
+      "pixel_render_jobs_checksums_check",
+      sql`${t.scriptChecksum} ~ '^[0-9a-f]{64}$' AND ${t.reportChecksum} ~ '^[0-9a-f]{64}$' AND ${t.snapshotChecksum} ~ '^[0-9a-f]{64}$' AND ${t.manifestChecksum} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      "pixel_render_jobs_config_check",
+      sql`${t.renderConfig} = 'pixel-ticket-render/1'`,
+    ),
+    check(
+      "pixel_render_jobs_state_check",
+      sql`${t.state} IN ('planned', 'waiting_for_renderer', 'rendering', 'verifying', 'completed', 'failed', 'cancelled')`,
+    ),
+    check(
+      "pixel_render_jobs_job_check",
+      sql`${t.pixelJobId} IS NULL OR ${t.pixelJobId} ~ '^job_[0-9a-f]{32}$'`,
+    ),
+    check(
+      "pixel_render_jobs_text_check",
+      sql`(${t.error} IS NULL OR char_length(${t.error}) <= 500) AND (${t.progress} IS NULL OR pg_column_size(${t.progress}) <= 1024)`,
+    ),
+    index("pixel_render_jobs_ticket_idx").on(t.ticketId, t.createdAt),
+    index("pixel_render_jobs_run_idx").on(t.runId),
+  ],
+)
+
+/**
+ * A finished, technically verified video (immutable). One per completed
+ * pixel.render task; `deliverable_version` counts videos per product.
+ * Status is always "technically verified, awaiting Vera QA": nothing here
+ * is QA-approved.
+ */
+export const pixelDeliverables = pgTable(
+  "pixel_deliverables",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    renderJobId: uuid("render_job_id").notNull(),
+    runId: uuid("run_id").notNull(),
+    ticketId: uuid("ticket_id").notNull(),
+    taskId: uuid("task_id").notNull().unique(),
+    productId: uuid("product_id").notNull(),
+    scriptId: uuid("script_id").notNull(),
+    scriptVersion: integer("script_version").notNull(),
+    scriptChecksum: text("script_checksum").notNull(),
+    deliverableVersion: integer("deliverable_version").notNull(),
+    /** Pixel job in the private ticket-render storage holding the MP4. */
+    pixelJobId: text("pixel_job_id").notNull().unique(),
+    sha256: text("sha256").notNull(),
+    byteSize: bigint("byte_size", { mode: "number" }).notNull(),
+    width: integer("width").notNull(),
+    height: integer("height").notNull(),
+    durationMs: integer("duration_ms").notNull(),
+    fps: integer("fps").notNull(),
+    videoCodec: text("video_codec").notNull(),
+    pixelFormat: text("pixel_format").notNull(),
+    audio: boolean("audio").notNull(),
+    encoder: text("encoder").notNull(),
+    /** Disclosure checked in real frames of every scene. */
+    disclosureVerified: boolean("disclosure_verified").notNull(),
+    checks: jsonb("checks").$type<Record<string, unknown>>().notNull(),
+    status: text("status").notNull(),
+    fence: bigint("fence", { mode: "number" }).notNull(),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }).notNull(),
+    createdAt: timestamps.createdAt,
+  },
+  (t) => [
+    foreignKey({
+      name: "pixel_deliverables_render_job_fk",
+      columns: [t.renderJobId, t.taskId],
+      foreignColumns: [pixelRenderJobs.id, pixelRenderJobs.taskId],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "pixel_deliverables_run_fk",
+      columns: [t.runId, t.ticketId],
+      foreignColumns: [campaignRuns.id, campaignRuns.ticketId],
+    }).onDelete("restrict"),
+    unique("pixel_deliverables_product_version_unique").on(
+      t.productId,
+      t.deliverableVersion,
+    ),
+    check(
+      "pixel_deliverables_version_check",
+      sql`${t.deliverableVersion} >= 1`,
+    ),
+    check(
+      "pixel_deliverables_sha_check",
+      sql`${t.sha256} ~ '^[0-9a-f]{64}$' AND ${t.scriptChecksum} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      "pixel_deliverables_job_check",
+      sql`${t.pixelJobId} ~ '^job_[0-9a-f]{32}$'`,
+    ),
+    // The fixed Pixel format, and only silent videos in DV-005C.
+    check(
+      "pixel_deliverables_format_check",
+      sql`${t.width} = 1080 AND ${t.height} = 1920 AND ${t.fps} = 30 AND ${t.videoCodec} = 'h264' AND ${t.pixelFormat} = 'yuv420p' AND NOT ${t.audio} AND ${t.durationMs} BETWEEN 14900 AND 30100 AND ${t.byteSize} > 0`,
+    ),
+    check("pixel_deliverables_disclosure_check", sql`${t.disclosureVerified}`),
+    check(
+      "pixel_deliverables_status_check",
+      sql`${t.status} = 'technically_verified_awaiting_qa'`,
+    ),
+    check(
+      "pixel_deliverables_checks_check",
+      sql`pg_column_size(${t.checks}) <= 8192 AND char_length(${t.encoder}) <= 40`,
+    ),
+    index("pixel_deliverables_ticket_idx").on(t.ticketId, t.createdAt),
+  ],
+)
+
 export const schema = {
   appMetadata,
   affiliateTickets,
@@ -1140,4 +1316,6 @@ export const schema = {
   quillScripts,
   quillScenes,
   quillSceneClaims,
+  pixelRenderJobs,
+  pixelDeliverables,
 }

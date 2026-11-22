@@ -41,6 +41,7 @@ import {
   type VideoFontWeight,
 } from "@/server/video/font-metrics"
 import { readImageDimensions } from "@/server/video/image-sniff"
+import { isGenuineLease, type RenderLease } from "@/server/video/render-gate"
 import {
   resolveInside,
   StorageError,
@@ -81,6 +82,12 @@ export class RenderFailure extends Error {
 
 export interface RenderDeps {
   storage: VideoStorage
+  /**
+   * A held lease of the installation-wide render gate (DV-005C). Every
+   * FFmpeg process of the render runs through it, so the gate stays shut
+   * until the last one exits. Rendering without a genuine lease is refused.
+   */
+  lease: RenderLease
   spawn: Spawner
   run: Runner
   getCapabilities: () => Promise<FfmpegCapabilityReport>
@@ -169,6 +176,13 @@ export async function renderVideo(
   /** Cancels the render: every FFmpeg/FFprobe process is stopped and awaited. */
   signal?: AbortSignal,
 ): Promise<RenderOutput> {
+  if (!isGenuineLease(deps.lease))
+    throw new RenderFailure(
+      "render-failed",
+      "Rendering refused: the render gate isn't held, so another render could overlap.",
+    )
+  // Every FFmpeg process inherits the gate (see render-gate.ts).
+  deps = { ...deps, spawn: deps.lease.wrap(deps.spawn) }
   const clock = deps.clock ?? Date.now
   const started = clock()
   const { storage } = deps

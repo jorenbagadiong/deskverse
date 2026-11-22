@@ -214,6 +214,8 @@ function startWorker() {
         DESKVERSE_WORKER_SHUTDOWN_GRACE_MS: "1000",
         DESKVERSE_SCOUT_RETRIEVAL: "on",
         DESKVERSE_SCOUT_TEST_NETWORK: JSON.stringify({ port: sites!.port }),
+        // Pixel (DV-005C): the same temporary media folder as the app.
+        DESKVERSE_DATA_DIR: dataDir,
         DESKVERSE_SCOUT_HOST_INTERVAL_MS: "0",
         DESKVERSE_SCOUT_REQUEST_TIMEOUT_MS: "5000",
         NODE_ENV: "production",

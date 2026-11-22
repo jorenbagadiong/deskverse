@@ -24,6 +24,7 @@ Pixel Studio test.
 | DV-004C on `main` (base `8a69223`), ordinary suite |     69 |     24 |                                24 / 24 |
 | DV-005A on `main` (base `f0f6690`), ordinary suite |     69 |     24 |                                24 / 24 |
 | DV-005B on `main` (base `6c9c821`), ordinary suite |     69 |     24 |                                24 / 24 |
+| DV-005C on `main` (base `13487da`), ordinary suite |     69 |     24 |                                24 / 24 |
 
 All runs fail the same 24 office tests. At DV-003A, the 22 passing tests
 were the 17 Pixel Studio tests, the 4 page smoke tests and the no-WebGL
@@ -71,7 +72,14 @@ tests). Both suites need `E2E_CHANNEL=chromium` in this WSL setup. At
 DV-005B the database suite has 30 tests (adding 6 Quill Scripts tests in
 `e2e/tickets-quill.spec.ts`, with the real worker writing scripts from
 fixture-site research): 30 passed. The ordinary suite: 69 passed, 24
-failed (the same office tests).
+failed (the same office tests). At DV-005C the database suite has 36 tests (adding 6
+Pixel Videos tests in `e2e/tickets-pixel.spec.ts`, with the real worker
+rendering real videos with FFmpeg): 36 passed. The ordinary suite: 69
+passed, 24 failed (the same office tests, each with the software WebGL
+warning). The bundled Playwright Chromium has no H.264 decoder
+(`canPlayType` returns ""), so in-browser playback of the MP4s is **not
+tested**; their delivery (type, `nosniff`, `no-store`, ranges, download)
+is.
 
 ## Environment
 

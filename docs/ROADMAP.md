@@ -2,7 +2,7 @@
 
 **Version 1.1:** Affiliate Ticket architecture (approved 2026-11-21)
 **Environment:** your own computer, Windows 11 + WSL2 Ubuntu
-**Current milestone:** DV-005B, Quill scriptwriting (complete); next is DV-005C
+**Current milestone:** DV-005C, Pixel ticket video production (complete); next is DV-006A
 
 ## 1. Vision
 
@@ -65,22 +65,23 @@ approval required · one approved video per day._
 
 ## 4. Completed milestones
 
-| Milestone              | Description                      | Status                                                                                                                        |
-| ---------------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| DV-001                 | Brand and design system          | Complete                                                                                                                      |
-| DV-002 / DV-002B       | Interactive 3D office            | Implemented; further phases planned                                                                                           |
-| DV-003A                | Pixel Studio foundation          | Complete                                                                                                                      |
-| DV-003B                | Real FFmpeg video rendering      | Complete                                                                                                                      |
-| DV-003C                | Voiceover and music              | Complete                                                                                                                      |
-| DV-003D1               | Render management and recovery   | Complete                                                                                                                      |
-| DV-003D2               | Cinematic effects and EXIF       | Complete                                                                                                                      |
-| DV-003D3               | Audio refinements                | Complete                                                                                                                      |
-| WebP compatibility fix | WebP upload validation           | Complete                                                                                                                      |
-| DV-004A                | Local PostgreSQL foundation      | Complete (see [database architecture](database-architecture.md))                                                              |
-| DV-004B                | Affiliate Ticket management      | Complete (see [Affiliate Tickets](affiliate-tickets.md))                                                                      |
-| DV-004C                | Durable campaign orchestrator    | Complete: infrastructure, verified with deterministic test runs (see [orchestrator](orchestrator.md))                         |
-| DV-005A                | Scout: evidence-backed research  | Complete: research-only runs; full campaign still off (see [Scout research](scout-research.md))                               |
-| DV-005B                | Quill: evidence-grounded scripts | Complete: scriptwriting-only runs from chosen Scout reports; no rendering (see [Quill scriptwriting](quill-scriptwriting.md)) |
+| Milestone              | Description                      | Status                                                                                                                                         |
+| ---------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| DV-001                 | Brand and design system          | Complete                                                                                                                                       |
+| DV-002 / DV-002B       | Interactive 3D office            | Implemented; further phases planned                                                                                                            |
+| DV-003A                | Pixel Studio foundation          | Complete                                                                                                                                       |
+| DV-003B                | Real FFmpeg video rendering      | Complete                                                                                                                                       |
+| DV-003C                | Voiceover and music              | Complete                                                                                                                                       |
+| DV-003D1               | Render management and recovery   | Complete                                                                                                                                       |
+| DV-003D2               | Cinematic effects and EXIF       | Complete                                                                                                                                       |
+| DV-003D3               | Audio refinements                | Complete                                                                                                                                       |
+| WebP compatibility fix | WebP upload validation           | Complete                                                                                                                                       |
+| DV-004A                | Local PostgreSQL foundation      | Complete (see [database architecture](database-architecture.md))                                                                               |
+| DV-004B                | Affiliate Ticket management      | Complete (see [Affiliate Tickets](affiliate-tickets.md))                                                                                       |
+| DV-004C                | Durable campaign orchestrator    | Complete: infrastructure, verified with deterministic test runs (see [orchestrator](orchestrator.md))                                          |
+| DV-005A                | Scout: evidence-backed research  | Complete: research-only runs; full campaign still off (see [Scout research](scout-research.md))                                                |
+| DV-005B                | Quill: evidence-grounded scripts | Complete: scriptwriting-only runs from chosen Scout reports; no rendering (see [Quill scriptwriting](quill-scriptwriting.md))                  |
+| DV-005C                | Pixel: ticket video production   | Complete: video-only runs; verified MP4s awaiting Vera QA; full campaign still off (see [Pixel ticket production](pixel-ticket-production.md)) |
 
 DV-001 to DV-003 are separate from the Affiliate Ticket system they support; DV-004A onwards build it.
 
@@ -130,16 +131,25 @@ no duplicate outputs after interruption or recovery.
   optional local Ollama wording is validated. Runs as `quill-script-v1`;
   the full campaign stays unavailable. See
   [Quill scriptwriting](quill-scriptwriting.md).
-- **DV-005C: Pixel (video production)** ← next. Connect the existing FFmpeg
-  pipeline to Affiliate Tickets, turning validated scripts and product media
-  into versioned MP4 deliverables.
-
-_Acceptance:_ one Affiliate Ticket progresses automatically from valid
-inputs to a verified video, without separate manual worker commands.
+- **DV-005C: Pixel (video production)** (complete). Renders silent,
+  captioned 1080×1920 MP4s from a chosen Quill script and 3–6 of the
+  product's own images, with Pixel Studio's engine inside one
+  computer-wide render gate shared with Pixel Studio (one FFmpeg render at
+  a time, crash-safe). Each video is checked with FFprobe, the disclosure
+  is confirmed in real frames, and it is committed as a versioned,
+  immutable deliverable "Technically verified — Awaiting Vera QA". Runs as
+  `pixel-render-v1`; the full campaign stays unavailable until Vera. See
+  [Pixel ticket production](pixel-ticket-production.md).
+  _Acceptance:_ one Affiliate Ticket progresses automatically from valid
+  inputs to a verified video, without separate manual worker commands.
+  _Status:_ each stage now runs and is verified on its own (research-only,
+  scriptwriting-only and video-only runs). The automatic chain
+  (`campaign-v1`) stays off until Vera (DV-006A) exists, so this phase's
+  acceptance isn't met yet.
 
 ### Phase 4: Review and approval
 
-- **DV-006A: Vera (quality review).** Check product claims, disclosures,
+- **DV-006A: Vera (quality review)** ← next. Check product claims, disclosures,
   media rights, captions, technical output and audio/video timing. Failed
   outputs go back for a limited number of revisions, or ask for human input.
 - **DV-006B: Approval Inbox.** `/approvals` with:

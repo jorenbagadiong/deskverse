@@ -32,6 +32,10 @@ import { buildTrustedProject } from "@/server/video/project"
 import { renderVideo } from "@/server/video/render-service"
 import { createVideoStorage } from "@/server/video/storage"
 import { createAudioInspector } from "@/server/video/upload-verify"
+import { testLease } from "../support/test-lease"
+
+/** A real render-gate lease (DV-005C): renderVideo requires one. */
+const lease = await testLease()
 
 const enabled = process.env.DESKVERSE_BENCH === "1"
 const commands = { ffmpeg: "ffmpeg", ffprobe: "ffprobe" }
@@ -227,6 +231,7 @@ async function bench(
           return spawnTool(command, args, options)
         },
         run: createRunner({ timeoutMs: 60_000 }),
+        lease,
         getCapabilities: async () => capabilities,
         commands,
         fonts,

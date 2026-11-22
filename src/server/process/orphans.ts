@@ -13,7 +13,10 @@ import path from "node:path"
  * - run with their working directory inside Pixel Studio's private job
  *   storage (renders always run with cwd = the job's work directory).
  *
- * Anything else is left alone. Returns the stopped process IDs.
+ * Anything else is left alone, and so is any PID in `skip` (since DV-005C
+ * the caller passes the render gate's holders: a process holding the gate
+ * belongs to a live render, Studio's or a ticket worker's). Returns the
+ * stopped process IDs.
  *
  * The /proc reads are runtime OS paths, not project files, so they're marked
  * `turbopackIgnore` to keep Next's output tracing from including the project.
@@ -23,7 +26,13 @@ export async function stopOrphanedRenders(
   {
     procRoot = "/proc",
     waitMs = 2000,
-  }: { procRoot?: string; waitMs?: number } = {},
+    skip = new Set<number>(),
+  }: {
+    procRoot?: string
+    waitMs?: number
+    /** Never touch these (DV-005C: processes holding the render gate). */
+    skip?: ReadonlySet<number>
+  } = {},
 ): Promise<number[]> {
   if (process.platform !== "linux") return []
   let root: string
@@ -42,7 +51,7 @@ export async function stopOrphanedRenders(
   for (const name of entries) {
     if (!/^\d+$/.test(name)) continue
     const pid = Number(name)
-    if (pid === process.pid) continue
+    if (pid === process.pid || skip.has(pid)) continue
     try {
       const cwd = await fs.readlink(
         /*turbopackIgnore: true*/ path.join(procRoot, name, "cwd"),

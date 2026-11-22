@@ -223,6 +223,7 @@ describe("handlers and configuration", () => {
       taskId: "t",
       runId: "r",
       ticketId: "k",
+      fence: 1,
       stage: "verify.collect",
       attempt: 1,
       maxAttempts: 3,

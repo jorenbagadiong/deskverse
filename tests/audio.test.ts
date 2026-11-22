@@ -56,6 +56,10 @@ import {
   type AudioFacts,
   type VideoStorage,
 } from "@/server/video/storage"
+import { testLease } from "./support/test-lease"
+
+/** A real render-gate lease (DV-005C): renderVideo requires one. */
+const lease = await testLease()
 
 const fonts = { bold: loadVideoFont("bold"), medium: loadVideoFont("medium") }
 const product: ProductInfo = {
@@ -1206,6 +1210,7 @@ describe("render service audio stage (mocked FFmpeg)", () => {
     storage,
     spawn: fakeSpawn(),
     run,
+    lease,
     getCapabilities: async () => READY,
     commands: { ffmpeg: "ffmpeg", ffprobe: "ffprobe" },
     fonts,
@@ -1287,6 +1292,7 @@ describe("render service audio stage (mocked FFmpeg)", () => {
         id,
         deps({
           spawn,
+          lease,
           getCapabilities: async () => ({
             ...READY,
             aacEncoder: null,

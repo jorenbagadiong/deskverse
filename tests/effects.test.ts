@@ -64,6 +64,10 @@ import {
   type RenderDeps,
 } from "@/server/video/render-service"
 import { createVideoStorage, type VideoStorage } from "@/server/video/storage"
+import { testLease } from "./support/test-lease"
+
+/** A real render-gate lease (DV-005C): renderVideo requires one. */
+const lease = await testLease()
 
 const fonts = { bold: loadVideoFont("bold"), medium: loadVideoFont("medium") }
 
@@ -741,6 +745,7 @@ function deps(overrides: Partial<RenderDeps> = {}): RenderDeps {
     storage,
     spawn: fakeSpawn(),
     run: async () => ({ ok: true, stdout: probeJson, stderr: "" }),
+    lease,
     getCapabilities: async () => READY,
     commands: { ffmpeg: "ffmpeg", ffprobe: "ffprobe" },
     fonts,
@@ -786,6 +791,7 @@ describe("render service with effects (mocked FFmpeg)", () => {
         id,
         deps({
           spawn,
+          lease,
           getCapabilities: async () => ({
             ...READY,
             filters: filters(["pad"]),

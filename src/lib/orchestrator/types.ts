@@ -86,6 +86,7 @@ export const RUNS_CHANGED_EVENT = "deskverse:runs-changed"
 export function runTitle(run: { mode: RunMode; workflow: string }) {
   if (run.mode === "verification") return "Verification run (test only)"
   if (run.workflow === "scout-research-v1") return "Research run (Scout only)"
+  if (run.workflow === "pixel-render-v1") return "Video run (Pixel only)"
   if (run.workflow === "quill-script-v1")
     return "Scriptwriting run (Quill only)"
   return "Workflow run"

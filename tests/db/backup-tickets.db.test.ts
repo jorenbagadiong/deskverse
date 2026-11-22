@@ -193,7 +193,7 @@ describe("format 2 backups with Affiliate Ticket attachments", () => {
     const result = await backup()
     backupDir = result.dir
     const m = result.manifest
-    expect(m.formatVersion).toBe(2)
+    expect(m.formatVersion).toBe(3)
     expect(m.ticketMedia).toMatchObject({
       source: "tickets",
       assets: 2,

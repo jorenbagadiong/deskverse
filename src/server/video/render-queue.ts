@@ -11,6 +11,11 @@ import type {
 import { stopOrphanedRenders } from "@/server/process/orphans"
 import { createRunner, spawnTool } from "@/server/process/run-executable"
 import {
+  GateCancelled,
+  RenderGate,
+  type RenderLease,
+} from "@/server/video/render-gate"
+import {
   getFfmpegCapabilities,
   resolveExecutable,
 } from "@/server/video/ffmpeg-capabilities"
@@ -66,7 +71,17 @@ export type RenderFn = (
   onProgress: (progress: RenderProgress) => void,
   /** Aborted when the user cancels; the render must stop its processes. */
   signal: AbortSignal,
+  /** The render gate lease (DV-005C), when the queue has a gate. */
+  lease?: RenderLease,
 ) => Promise<RenderOutput>
+
+/** The installation-wide render gate, as the queue uses it (DV-005C). */
+export interface QueueGate {
+  acquire(
+    owner: { kind: "studio"; jobId: string; storageRoot: string },
+    signal: AbortSignal,
+  ): Promise<RenderLease>
+}
 
 interface ActiveRender {
   id: string
@@ -88,6 +103,7 @@ export class RenderQueue {
     private readonly storage: VideoStorage,
     private readonly render: RenderFn,
     private readonly log: (message: string) => void = () => {},
+    private readonly gate?: QueueGate,
   ) {}
 
   /**
@@ -99,7 +115,12 @@ export class RenderQueue {
    */
   async recover({
     stopOrphans,
-  }: { stopOrphans?: () => Promise<number[]> } = {}) {
+    activeElsewhere,
+  }: {
+    stopOrphans?: () => Promise<number[]>
+    /** A job another live process is rendering right now (from the gate's owner record). */
+    activeElsewhere?: () => Promise<string | null>
+  } = {}) {
     if (stopOrphans) {
       const stopped = await stopOrphans().catch(() => [])
       if (stopped.length > 0)
@@ -108,8 +129,9 @@ export class RenderQueue {
         )
     }
     const leftovers = await this.storage.findJobs(["queued", "rendering"])
+    const elsewhere = (await activeElsewhere?.().catch(() => null)) ?? null
     for (const id of leftovers) {
-      if (this.isTracked(id)) continue
+      if (this.isTracked(id) || id === elsewhere) continue
       await this.storage
         .transitionJob(id, "failed", {
           error: { code: "interrupted", message: INTERRUPTED_MESSAGE },
@@ -285,7 +307,18 @@ export class RenderQueue {
     // It's this job's turn: never show it as waiting behind itself.
     this.progress.set(next, { phase: "preparing" })
     this.updateWaitingPositions()
+    let lease: RenderLease | undefined
     try {
+      // DV-005C: one render at a time across ALL processes (Studio servers
+      // and ticket workers). The job stays queued until the gate is ours.
+      if (this.gate) {
+        this.progress.set(next, { phase: "waiting", position: 1 })
+        lease = await this.gate.acquire(
+          { kind: "studio", jobId: next, storageRoot: this.storage.root },
+          controller.signal,
+        )
+        this.progress.set(next, { phase: "preparing" })
+      }
       await this.storage.transitionJob(next, "rendering")
       const output = await this.render(
         next,
@@ -293,6 +326,7 @@ export class RenderQueue {
           if (!controller.signal.aborted) this.progress.set(next, p)
         },
         controller.signal,
+        lease,
       )
       // A cancel that arrived after FFmpeg finished but before publication
       // wins: the job becomes "cancelled", never cancelled → completed.
@@ -300,7 +334,11 @@ export class RenderQueue {
       await this.storage.transitionJob(next, "completed", { output })
     } catch (error) {
       await this.storage.discardOutput(next).catch(() => undefined)
-      if (error instanceof RenderCancelled || controller.signal.aborted) {
+      if (
+        error instanceof RenderCancelled ||
+        error instanceof GateCancelled ||
+        controller.signal.aborted
+      ) {
         await this.storage.cleanupWork(next).catch(() => undefined)
         await this.storage
           .transitionJob(next, "cancelled")
@@ -328,6 +366,7 @@ export class RenderQueue {
           )
       }
     } finally {
+      await lease?.release().catch(() => undefined)
       this.progress.delete(next)
       this.active = null
       markSettled()
@@ -371,9 +410,10 @@ export function getRenderService() {
       process.env.DESKVERSE_FFPROBE_PATH,
     )
     const log = (message: string) => console.error(message)
+    const gate = new RenderGate(resolveDataRoot(), { log })
     const queue = new RenderQueue(
       storage,
-      (jobId, onProgress, signal) => {
+      (jobId, onProgress, signal, lease) => {
         if (!ffmpeg.ok || !ffprobe.ok)
           throw new RenderFailure(
             "ffmpeg-unavailable",
@@ -383,6 +423,7 @@ export function getRenderService() {
           jobId,
           {
             storage,
+            lease: lease!,
             spawn: spawnTool,
             run: createRunner({ timeoutMs: 30_000 }),
             getCapabilities: () => getFfmpegCapabilities(),
@@ -401,9 +442,23 @@ export function getRenderService() {
         )
       },
       log,
+      gate,
     )
     await queue.recover({
-      stopOrphans: () => stopOrphanedRenders(path.join(storage.root, "jobs")),
+      // Ownership-aware (DV-005C): first stop renders whose owner died (only
+      // processes holding the gate, only when no live owner holds it), then
+      // legacy pre-gate leftovers in Studio's own job folders, never a
+      // process holding the gate (a live Studio or ticket render).
+      stopOrphans: () =>
+        stopAbandonedRenders(gate, path.join(storage.root, "jobs")),
+      activeElsewhere: async () => {
+        const status = await gate.status()
+        return status.held &&
+          status.owner?.kind === "studio" &&
+          status.owner.storageRoot === storage.root
+          ? status.owner.jobId
+          : null
+      },
     })
     // Abandoned drafts (uploads never rendered) older than a day, and stray
     // scratch files. Failed, cancelled and completed jobs are never removed
@@ -418,6 +473,20 @@ export function getRenderService() {
     throw error
   })
   return g[KEY]
+}
+
+/**
+ * Pixel Studio's startup recovery (DV-005C, ownership-aware): stops renders
+ * whose owning process died (only gate holders, only when no live owner
+ * holds the gate), then legacy pre-gate leftovers in Studio's own job
+ * folders, skipping every process that holds the gate (a live Studio or
+ * ticket render). Unrelated FFmpeg processes are never touched.
+ */
+export async function stopAbandonedRenders(gate: RenderGate, jobsDir: string) {
+  const reaped = await gate.reapAbandoned()
+  const holders = new Set((await gate.holders()).map((h) => h.pid))
+  const legacy = await stopOrphanedRenders(jobsDir, { skip: holders })
+  return [...reaped, ...legacy]
 }
 
 export function isStorageError(error: unknown, code?: StorageError["code"]) {

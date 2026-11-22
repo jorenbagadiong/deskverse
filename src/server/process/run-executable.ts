@@ -157,6 +157,11 @@ export interface SpawnOptions {
    */
   signal?: AbortSignal
   killGraceMs?: number
+  /**
+   * File descriptors the child inherits as fd 3, 4… (DV-005C: the render
+   * gate's lock, so the gate stays shut while any render process lives).
+   */
+  extraFds?: readonly number[]
 }
 
 export type SpawnResult =
@@ -190,6 +195,7 @@ export const spawnTool: Spawner = (
     maxStderrBytes = 64 * 1024,
     signal,
     killGraceMs = 2_000,
+    extraFds = [],
   },
 ) =>
   new Promise<SpawnResult>((resolve) => {
@@ -235,7 +241,7 @@ export const spawnTool: Spawner = (
       child = spawn(command, [...args], {
         cwd,
         shell: false,
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: ["ignore", "pipe", "pipe", ...extraFds],
         windowsHide: true,
         env: minimalEnvironment() as NodeJS.ProcessEnv,
       })

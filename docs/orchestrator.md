@@ -11,10 +11,11 @@ research, scripts, rendering, review, publishing or analytics.
 `scout-research-v1`. See [§16](#16-dv-005a-additions).
 
 - **The full campaign is refused** ("Full campaign automation isn't
-  available yet") until Pixel and Vera exist (DV-005C, DV-006A).
-  Research-only runs (Scout) are allowed when source retrieval is on, and
-  scriptwriting-only runs (Quill, DV-005B, `quill-script-v1`) always; see
-  [§17](#17-dv-005b-additions).
+  available yet") until Vera exists (DV-006A).
+  Research-only runs (Scout) are allowed when source retrieval is on,
+  scriptwriting-only runs (Quill, DV-005B, `quill-script-v1`) always, and
+  video-only runs (Pixel, DV-005C, `pixel-render-v1`) when FFmpeg is ready;
+  see [§17](#17-dv-005b-additions) and [§18](#18-dv-005c-additions).
 - **Everything is verified with deterministic verification handlers.**
   Their results are labelled as test results everywhere, and they only run
   in isolated test environments.
@@ -248,17 +249,19 @@ disconnected workers). An interrupted task is **never** marked successful:
 Per worker process: `DESKVERSE_WORKER_SLOTS` (default 3). Per product: one
 running task at a time.
 
-**Pixel Studio is unchanged.** Its in-process queue (1 active, 3 waiting,
-files on disk) still works without PostgreSQL. The worker imports no render
-code and starts no FFmpeg. The `render` class is tested only with the
-synthetic `verify.exclusive` step: tests prove that two render-class _tasks_
-never overlap. They do **not** prove machine-wide FFmpeg serialisation.
+**Pixel Studio** keeps its in-process queue (1 active, 3 waiting, files on
+disk) and still works without PostgreSQL. The `render` class limits
+render-class _tasks_ to one at a time across workers.
 
-**Before any ticket-driven render handler exists (DV-005C),** a render gate
-shared between Pixel Studio and the worker must be added and verified. A
-PostgreSQL-only lock can't be the sole guard, because Pixel Studio must keep
-working with PostgreSQL down. Until then the production `pixel.render` stage
-has no handler and can't run.
+**Machine-wide FFmpeg serialisation (DV-005C)** comes from the render gate
+in `src/server/video/render-gate.ts`, not from PostgreSQL. It is an
+OS-level `flock(2)` on `<data>/locks/render.lock`, shared by Pixel Studio
+and every worker, and inherited by FFmpeg so that an orphaned render keeps
+it held. Pixel Studio must keep working with PostgreSQL down, so a
+database lock can't be the guard. Real-FFmpeg tests show at most one
+render at a time across Studio/Studio, Studio/ticket, ticket/ticket and
+five processes, including through SIGKILL. See
+[Pixel ticket production](pixel-ticket-production.md#render-gate-one-ffmpeg-render-per-computer).
 
 ## 9. Frozen inputs and media retention
 
@@ -408,10 +411,8 @@ It checks:
 
 ## 15. Limitations and next steps
 
-- **Two production handlers (Scout, Quill).** The full campaign is refused
-  until DV-005C and DV-006A.
-- **The real render gate isn't built.** The shared Pixel Studio + worker
-  render gate is needed before DV-005C, as described in §8.
+- **Three production handlers (Scout, Quill, Pixel).** The full campaign is
+  refused until DV-006A (Vera).
 - **The Workflow section polls** (every 2 s) rather than receiving pushed
   updates.
 - **Worker identities are per process** (`worker-<pid>-<random>`). Since
@@ -474,3 +475,29 @@ It checks:
   (used by planning and by the "is this research still current?" check).
 - The full campaign message now names only Pixel (DV-005C) and Vera
   (DV-006A).
+
+## 18. DV-005C additions
+
+- **`pixel-render-v1`:** one `pixel.render` task (resource class
+  `render`, recovery `retry`) per **selected** product. `planRun` takes
+  `renders: [{ productId, scriptId, assetIds, rightsAcknowledged? }]`.
+- **Planning hooks:** `PlanInput.prepare` validates each choice against
+  the frozen snapshot and returns the task params. `onTask` writes the
+  render manifest (`pixel_render_jobs`) in the same transaction. Stale
+  scripts or images give `stale-research` (409), with the steps to fix
+  them.
+- **Fencing:** `HandlerContext` now includes `fence`. Pixel fences its
+  progress writes with it, and the deliverable trigger refuses a stale
+  fence.
+- **Deliverable:** `pixel_video` results (`task_results.kind`) via the
+  same transactional `deliverable.persist`. The video record is
+  `pixel_deliverables` (immutable, versioned per product).
+- **Failures:**
+  - FFmpeg timeouts and render failures are transient;
+  - verification failures are permanent;
+  - changed or missing images need input;
+  - cancelling stops FFmpeg and releases the gate.
+- **Worker:** registers `pixel.render` when FFmpeg is found. It shares
+  the render gate with Pixel Studio under `DESKVERSE_DATA_DIR`.
+- The full campaign message now names only Vera (DV-006A).
+- Details: [Pixel ticket production](pixel-ticket-production.md).

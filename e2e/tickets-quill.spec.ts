@@ -281,7 +281,7 @@ test("writes evidence-linked scripts from chosen research; a product without eno
   })
   expect(campaign.status()).toBe(503)
   expect((await campaign.json()).message).toMatch(
-    /Pixel \(DV-005C\), and Vera \(DV-006A\) aren't built/,
+    /Vera \(DV-006A\) isn't built/,
   )
 
   // Scripts survive an application restart.

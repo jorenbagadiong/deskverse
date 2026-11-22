@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process"
 import { randomUUID } from "node:crypto"
+import os from "node:os"
 import path from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 
@@ -74,6 +75,11 @@ function workerProcess(
         HOME: process.env.HOME,
         DATABASE_URL: url,
         DATABASE_TEST_URL: "",
+        // Never the owner's data folder (its render lock or videos): this run renders nothing.
+        DESKVERSE_DATA_DIR: path.join(
+          os.tmpdir(),
+          `deskverse-scout-verify-${process.pid}`,
+        ),
         DESKVERSE_SCOUT_RETRIEVAL: "on",
         DESKVERSE_SCOUT_TEST_NETWORK: JSON.stringify({
           port: fixturePort,

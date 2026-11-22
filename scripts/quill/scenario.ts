@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process"
 import { randomUUID } from "node:crypto"
+import os from "node:os"
 import path from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 
@@ -77,6 +78,11 @@ function workerProcess(db: DatabaseConfig, name: string, log: string[]) {
         HOME: process.env.HOME,
         DATABASE_URL: url,
         DATABASE_TEST_URL: "",
+        // Never the owner's data folder (its render lock or videos): this run renders nothing.
+        DESKVERSE_DATA_DIR: path.join(
+          os.tmpdir(),
+          `deskverse-quill-verify-${process.pid}`,
+        ),
         DESKVERSE_QUILL_TEST: JSON.stringify({
           delayMs: 1200,
           crashBeforeCommit: CRASH,

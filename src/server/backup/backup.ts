@@ -17,6 +17,7 @@ import {
   MEDIA_DIR,
   MEDIA_SOURCE,
   TICKET_MEDIA_SOURCE,
+  TICKET_VIDEO_SOURCE,
   manifestProblems,
   type BackupManifest,
   type ManifestFile,
@@ -354,6 +355,92 @@ export async function planTicketMediaBackup(
   return plan
 }
 
+/** A committed ticket video (DV-005C) and its MP4's recorded facts. */
+export interface TicketVideoRecord {
+  pixelJobId: string
+  bytes: number
+  sha256: string
+}
+
+async function ticketVideoRecords(
+  client: pg.Client,
+): Promise<TicketVideoRecord[]> {
+  const exists = await client.query<{ present: boolean }>(
+    "SELECT to_regclass('public.pixel_deliverables') IS NOT NULL AS present",
+  )
+  if (!exists.rows[0].present) return []
+  const result = await client.query<{
+    pixel_job_id: string
+    byte_size: string
+    sha256: string
+  }>(
+    "SELECT pixel_job_id, byte_size, sha256 FROM pixel_deliverables ORDER BY pixel_job_id",
+  )
+  return result.rows.map((r) => ({
+    pixelJobId: r.pixel_job_id,
+    bytes: Number(r.byte_size),
+    sha256: r.sha256,
+  }))
+}
+
+/**
+ * Lists the files of every committed ticket video's Pixel job (format 3):
+ * job.json, project.json, input images and output/video.mp4. Each MP4 must
+ * exist as a regular file (no symlinks) of the recorded size, else the
+ * backup stops (run yarn pixel:reconcile). Scratch folders are left out.
+ */
+export async function planTicketVideoBackup(
+  dataRoot: string,
+  records: TicketVideoRecord[],
+) {
+  const files: {
+    source: string
+    relative: string
+    expect?: TicketVideoRecord
+  }[] = []
+  for (const record of records) {
+    if (!isRenderJobId(record.pixelJobId))
+      throw new BackupError("A ticket video record has an invalid job id.")
+    const relative = `${TICKET_VIDEO_SOURCE}/${record.pixelJobId}`
+    const dir = path.join(dataRoot, ...relative.split("/"))
+    const stat = await lstatOrNull(dir)
+    if (!stat || !stat.isDirectory() || stat.isSymbolicLink())
+      throw new BackupError(
+        `The folder of ticket video ${record.pixelJobId} is missing, so nothing was backed up (run yarn pixel:reconcile).`,
+      )
+    for (const name of ["job.json", "project.json"]) {
+      const f = await lstatOrNull(path.join(dir, name))
+      if (f?.isFile())
+        files.push({
+          source: path.join(dir, name),
+          relative: `${relative}/${name}`,
+        })
+    }
+    const assets = path.join(dir, "assets")
+    const entries = await fs
+      .readdir(assets, { withFileTypes: true })
+      .catch(() => [])
+    for (const e of entries.sort((a, b) => a.name.localeCompare(b.name)))
+      if (e.isFile() && /^asset_[0-9a-f]{32}\.(jpg|png|webp)$/.test(e.name))
+        files.push({
+          source: path.join(assets, e.name),
+          relative: `${relative}/assets/${e.name}`,
+        })
+    const video = path.join(dir, "output", "video.mp4")
+    const v = await lstatOrNull(video)
+    if (!v || !v.isFile() || v.isSymbolicLink() || v.size !== record.bytes)
+      throw new BackupError(
+        `The MP4 of ticket video ${record.pixelJobId} is missing or changed, so nothing was backed up (run yarn pixel:reconcile).`,
+      )
+    files.push({
+      source: video,
+      relative: `${relative}/output/video.mp4`,
+      expect: record,
+    })
+  }
+  return files
+}
+
 async function ticketAssetRecords(
   client: pg.Client,
 ): Promise<TicketAssetRecord[]> {
@@ -591,10 +678,12 @@ export async function createBackup(
       serverVersion: version.rows[0].v.split(" ")[0],
       tables: await tableCounts(client),
       ticketAssets: await ticketAssetRecords(client),
+      ticketVideos: await ticketVideoRecords(client),
     }
   })
   // Checked before anything is written.
   const ticketPlan = await planTicketMediaBackup(dataRoot, facts.ticketAssets)
+  const videoPlan = await planTicketVideoBackup(dataRoot, facts.ticketVideos)
 
   // 3. Write into a .partial folder; rename only when complete and verified.
   const stamp = now()
@@ -651,6 +740,25 @@ export async function createBackup(
       ticketBytes += copied.bytes
     }
 
+    const videoFiles: ManifestFile[] = []
+    let videoBytes = 0
+    for (const file of videoPlan) {
+      const copied = await copyWithHash(
+        file.source,
+        path.join(workDir, MEDIA_DIR, ...file.relative.split("/")),
+      )
+      if (
+        file.expect &&
+        (copied.sha256 !== file.expect.sha256 ||
+          copied.bytes !== file.expect.bytes)
+      )
+        throw new BackupError(
+          `${file.relative} doesn't match the checksum recorded when it was verified, so nothing was backed up (run yarn pixel:reconcile).`,
+        )
+      videoFiles.push({ path: file.relative, ...copied })
+      videoBytes += copied.bytes
+    }
+
     const manifest: BackupManifest = {
       format: BACKUP_FORMAT,
       formatVersion: BACKUP_FORMAT_VERSION,
@@ -690,6 +798,12 @@ export async function createBackup(
           staging: ticketPlan.staging,
           unrecognized: ticketPlan.unrecognized,
         },
+      },
+      ticketVideos: {
+        source: TICKET_VIDEO_SOURCE,
+        deliverables: facts.ticketVideos.length,
+        files: videoFiles,
+        bytes: videoBytes,
       },
     }
     await writeManifest(workDir, manifest)
@@ -779,6 +893,7 @@ export async function verifyBackup(dir: string): Promise<string[]> {
   for (const file of [
     ...manifest.media.files,
     ...(manifest.ticketMedia?.files ?? []),
+    ...(manifest.ticketVideos?.files ?? []),
   ]) {
     listed.add(file.path)
     const full = path.join(dir, MEDIA_DIR, ...file.path.split("/"))
@@ -897,6 +1012,7 @@ export async function restoreBackup({
   const allFiles = [
     ...manifest.media.files,
     ...(manifest.ticketMedia?.files ?? []),
+    ...(manifest.ticketVideos?.files ?? []),
   ]
   for (const file of allFiles) {
     const parts = file.path.split("/")
@@ -916,6 +1032,7 @@ export async function restoreBackup({
       status: await migrationStatus(client, journal),
       tables: await tableCounts(client),
       ticketAssets: await ticketAssetRecords(client),
+      ticketVideos: await ticketVideoRecords(client),
     }),
   )
   if (restored.status.current !== manifest.database.migrations.current)
@@ -941,6 +1058,23 @@ export async function restoreBackup({
       if (!file || file.sha256 !== record.sha256 || file.bytes !== record.bytes)
         throw new BackupError(
           "A restored ticket media record doesn't match its restored file.",
+        )
+    }
+  }
+  // Format 3: every restored ticket video record has exactly its restored MP4.
+  if (manifest.ticketVideos) {
+    const files = new Map(manifest.ticketVideos.files.map((f) => [f.path, f]))
+    if (restored.ticketVideos.length !== manifest.ticketVideos.deliverables)
+      throw new BackupError(
+        "The restored database's ticket videos don't match the backed-up files.",
+      )
+    for (const record of restored.ticketVideos) {
+      const file = files.get(
+        `${TICKET_VIDEO_SOURCE}/${record.pixelJobId}/output/video.mp4`,
+      )
+      if (!file || file.sha256 !== record.sha256 || file.bytes !== record.bytes)
+        throw new BackupError(
+          "A restored ticket video record doesn't match its restored MP4.",
         )
     }
   }
