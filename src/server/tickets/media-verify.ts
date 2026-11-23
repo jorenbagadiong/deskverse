@@ -27,6 +27,7 @@ export class MediaRejected extends Error {
 
 export interface MediaTools {
   run: Runner
+  runVideoDecode?: Runner
   ffmpeg: string
   ffprobe: string
 }
@@ -161,7 +162,7 @@ export function videoPacketCheckArgs(file: string) {
     "-i",
     `file:${file}`,
     "-map",
-    "0:v:0",
+    "0:V:0",
     "-c",
     "copy",
     "-f",
@@ -170,24 +171,29 @@ export function videoPacketCheckArgs(file: string) {
   ]
 }
 
-/** Decodes the first video frame. */
+/** Decode every picture. FFmpeg emits aggregate progress, not per-frame output. */
 export function videoDecodeArgs(file: string) {
   return [
     "-nostdin",
     ...QUIET,
+    "-nostats",
+    "-progress",
+    "pipe:1",
     "-protocol_whitelist",
     "file",
     "-xerror",
+    "-err_detect",
+    "explode",
+    "-threads",
+    "2",
     "-f",
     "mp4",
     "-i",
     `file:${file}`,
     "-map",
-    "0:v:0",
-    "-frames:v",
-    "1",
+    "0:V:0",
     "-f",
-    "framecrc",
+    "null",
     "-",
   ]
 }
@@ -266,11 +272,22 @@ export async function verifyVideo(
     throw new MediaRejected(
       "The video is damaged or cut off (FFmpeg couldn't read all of it).",
     )
-  const decoded = await tools.run(tools.ffmpeg, videoDecodeArgs(file))
-  const frames = decoded.ok
-    ? decoded.stdout.split("\n").filter((l) => l.trim() && !l.startsWith("#"))
-    : []
-  if (!decoded.ok || frames.length !== 1 || decoded.stderr.trim() !== "")
-    throw new MediaRejected("The video's first frame doesn't decode cleanly.")
+  const decoded = await (tools.runVideoDecode ?? tools.run)(
+    tools.ffmpeg,
+    videoDecodeArgs(file),
+  )
+  if (!decoded.ok && decoded.reason === "timed-out")
+    throw new MediaRejected(
+      "The video took too long to validate. Try a shorter or lower-resolution MP4.",
+    )
+  if (
+    !decoded.ok ||
+    decoded.stderr.trim() !== "" ||
+    !decoded.stdout.trimEnd().endsWith("\nprogress=end") ||
+    !/^frame=\d*[1-9]\d*\s*$/m.test(decoded.stdout)
+  )
+    throw new MediaRejected(
+      "The video doesn't decode cleanly from start to finish.",
+    )
   return video
 }

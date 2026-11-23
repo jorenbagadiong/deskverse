@@ -119,6 +119,12 @@ export async function mediaTools(): Promise<MediaTools> {
     )
   return {
     run: createRunner({ timeoutMs: 60_000, maxOutputBytes: 4 * 1024 * 1024 }),
+    // A five-minute clip can take longer than a probe. Give only the full
+    // decode a larger wall-clock budget, with a small progress/error buffer.
+    runVideoDecode: createRunner({
+      timeoutMs: 180_000,
+      maxOutputBytes: 256 * 1024,
+    }),
     ffmpeg: ffmpeg.command,
     ffprobe: ffprobe.command,
   }

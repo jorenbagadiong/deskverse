@@ -25,7 +25,11 @@ import {
   TicketMediaError,
   type TicketMediaLimits,
 } from "@/server/tickets/media"
-import { MediaRejected } from "@/server/tickets/media-verify"
+import {
+  MediaRejected,
+  type MediaTools,
+  videoDecodeArgs,
+} from "@/server/tickets/media-verify"
 import {
   addProduct,
   createTicket,
@@ -95,6 +99,14 @@ beforeAll(async () => {
     ],
     f("clip.mp4"),
   )
+  fixtures.unsupportedCodec = await ffmpeg(
+    [...pattern, "-t", "1", "-c:v", "mpeg2video"],
+    f("unsupported-codec.mp4"),
+  )
+  fixtures.noVideo = await ffmpeg(
+    ["-f", "lavfi", "-i", "anullsrc", "-t", "1", "-c:a", "aac"],
+    f("no-video.mp4"),
+  )
   fixtures.mov = await ffmpeg(
     [...pattern, "-t", "1", "-c:v", "libx264", "-f", "mov"],
     f("clip.mov"),
@@ -155,6 +167,7 @@ function upload(
   extra: {
     limits?: TicketMediaLimits
     fileName?: string
+    mediaTools?: MediaTools
     beforeRecord?: () => void
   } = {},
 ) {
@@ -167,7 +180,7 @@ function upload(
     declaredType,
     fileName: extra.fileName ?? "upload",
     limits: extra.limits ?? DEFAULT_MEDIA_LIMITS,
-    tools,
+    tools: extra.mediaTools ?? tools,
     beforeRecord: extra.beforeRecord,
   })
 }
@@ -327,6 +340,99 @@ describe("ticket media uploads", () => {
       }),
     )
     expect(long.message).toMatch(/8 s long\. Clips can be at most 5 s/)
+  })
+
+  it("decodes every frame of a valid MP4", async () => {
+    const result = await tools.run(
+      tools.ffmpeg,
+      videoDecodeArgs(path.join(temp, "clip.mp4")),
+    )
+    expect(result).toMatchObject({ ok: true, stderr: "" })
+    if (result.ok) {
+      expect(result.stdout).toMatch(/^frame=60$/m)
+      expect(result.stdout.trimEnd()).toMatch(/progress=end$/)
+    }
+    const ids = await setup()
+    expect(await upload(ids, fixtures.mp4, "video/mp4")).toMatchObject({
+      kind: "video",
+      mimeType: "video/mp4",
+    })
+  })
+
+  it("rejects a damaged later H.264 sample and leaves no files or asset rows", async () => {
+    const inspected = await tools.run(tools.ffprobe, [
+      "-v",
+      "error",
+      "-select_streams",
+      "v:0",
+      "-show_packets",
+      "-show_entries",
+      "packet=pos,size",
+      "-of",
+      "json",
+      path.join(temp, "clip.mp4"),
+    ])
+    expect(inspected.ok).toBe(true)
+    if (!inspected.ok) throw new Error("Could not inspect the H.264 fixture")
+    const { packets } = JSON.parse(inspected.stdout) as {
+      packets: { pos: string; size: string }[]
+    }
+    expect(packets.length).toBeGreaterThan(30)
+    // Damage late slice payloads while preserving their NAL lengths,
+    // headers, and the earlier samples.
+    const bytes = Buffer.from(fixtures.mp4)
+    let damaged = 0
+    for (const packet of packets.slice(Math.floor(packets.length * 0.75))) {
+      const offset = Number(packet.pos)
+      const length = bytes.readUInt32BE(offset)
+      if (length < 128 || length + 4 > Number(packet.size)) continue
+      bytes.fill(0xff, offset + 32, offset + 4 + length - 16)
+      damaged++
+    }
+    expect(damaged).toBeGreaterThan(0)
+
+    const ids = await setup()
+    const error = await rejectedWith(upload(ids, bytes, "video/mp4"))
+    expect(error).toBeInstanceOf(MediaRejected)
+    expect(error.message).toMatch(/doesn't decode cleanly/)
+    expect(
+      await filesUnder(path.join(dataRoot, "tickets", ids.ticketId)),
+    ).toEqual([])
+    expect((await getTicket(db, ids.ticketId))!.products[0].assets).toEqual([])
+  })
+
+  it.each([
+    ["unsupported video codec", "unsupportedCodec", /unsupported codec/],
+    ["no video stream", "noVideo", /no video picture/],
+  ] as const)("rejects an MP4 with %s", async (_, fixture, message) => {
+    const ids = await setup()
+    const error = await rejectedWith(
+      upload(ids, fixtures[fixture], "video/mp4"),
+    )
+    expect(error).toBeInstanceOf(MediaRejected)
+    expect(error.message).toMatch(message)
+    expect(
+      await filesUnder(path.join(dataRoot, "tickets", ids.ticketId)),
+    ).toEqual([])
+    expect((await getTicket(db, ids.ticketId))!.products[0].assets).toEqual([])
+  })
+
+  it("bounds a real FFmpeg decode and cleans up when it times out", async () => {
+    const ids = await setup()
+    const error = await rejectedWith(
+      upload(ids, fixtures.mp4, "video/mp4", {
+        mediaTools: {
+          ...tools,
+          runVideoDecode: createRunner({ timeoutMs: 1 }),
+        },
+      }),
+    )
+    expect(error).toBeInstanceOf(MediaRejected)
+    expect(error.message).toMatch(/too long to validate/)
+    expect(
+      await filesUnder(path.join(dataRoot, "tickets", ids.ticketId)),
+    ).toEqual([])
+    expect((await getTicket(db, ids.ticketId))!.products[0].assets).toEqual([])
   })
 
   it("enforces the size limit while streaming, before reading the whole upload", async () => {
