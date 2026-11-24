@@ -528,3 +528,11 @@ foundation.** **DV-005C Pixel and DV-006A Vera** now extend this foundation. See
 `0006_vera_reviews` adds immutable `vera_reviews` and `vera_findings` plus the `vera_review` task result kind. Database triggers enforce ownership, exact pinned deliverable, current unexpired fence, immutable findings and atomic task/result/review completion. Format-3 backups include these tables and recompute report/finding checksums on backup and restore. Derived raw frame samples are disposable; retained metrics/hashes and original videos form the audit evidence. Formats 1/2/3 remain readable.
 
 See [Vera quality assurance](vera-quality-assurance.md) for the rules, limitations, recovery and campaign readiness audit.
+
+### Human approval decisions (DV-006B)
+
+Migration `0007_approval_inbox` adds an append-only decision history with
+exact video and Vera report pins, human checklist snapshots and decision
+timestamps. Format-3 backups include the new table and its row count alongside
+the existing Pixel media and Vera reports. See the [Approval Inbox](approval-inbox.md)
+for the transition rules, local access model and verification procedure.

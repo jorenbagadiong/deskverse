@@ -240,9 +240,7 @@ export function PixelSection({ ticket }: { ticket: TicketDetail }) {
         productId: p.productId,
         scriptId: usableScript(p.productId)!.scriptId,
         assetIds: selectedImages(p.productId),
-        ...(p.mediaRights === "unspecified"
-          ? { rightsAcknowledged: true }
-          : {}),
+        ...(rights[p.productId] ? { rightsAcknowledged: true } : {}),
       })),
     })
     if (ok) startRequest.current = null
@@ -424,7 +422,7 @@ export function PixelSection({ ticket }: { ticket: TicketDetail }) {
                       </ul>
                     </fieldset>
                   ) : null}
-                  {p.mediaRights === "unspecified" && script ? (
+                  {script ? (
                     <label className="flex items-start gap-2 text-sm">
                       <input
                         type="checkbox"
@@ -438,8 +436,9 @@ export function PixelSection({ ticket }: { ticket: TicketDetail }) {
                       />
                       <span>
                         I confirm I may use these images in a published video.
-                        (This records your confirmation; it doesn&apos;t prove
-                        permission.)
+                        {p.mediaRights === "unspecified"
+                          ? " (This records your confirmation; it doesn't prove permission.)"
+                          : " The Approval Inbox requires this confirmation."}
                       </span>
                     </label>
                   ) : null}

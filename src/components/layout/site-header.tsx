@@ -6,14 +6,15 @@ import { brand } from "@/config/brand"
 import { cn } from "@/lib/utils"
 
 const nav = [
-  // Hidden on the narrowest phones (under 400 px), so the menu and theme
+  // Hidden on narrow screens, so the menu and theme
   // switcher fit: the logo is also a home link, and the design-system
   // showcase is the least needed page on a phone.
-  { href: "/", label: "Overview", className: "max-[399px]:hidden" },
+  { href: "/", label: "Overview", className: "max-[549px]:hidden" },
   { href: "/tickets", label: "Tickets" },
+  { href: "/approvals", label: "Approvals" },
   { href: "/office", label: "Office" },
   { href: "/studio/pixel", label: "Studio" },
-  { href: "/brand", label: "Brand", className: "max-[399px]:hidden" },
+  { href: "/brand", label: "Brand", className: "max-[549px]:hidden" },
 ]
 
 export function SiteHeader() {
@@ -23,16 +24,19 @@ export function SiteHeader() {
         <Link href="/" aria-label={`${brand.name} home`} className="rounded-md">
           <Logo
             markClassName="size-7"
-            wordmarkClassName="hidden text-lg min-[400px]:inline"
+            wordmarkClassName="hidden text-lg min-[550px]:inline"
           />
         </Link>
-        <nav aria-label="Main" className="flex items-center gap-1 text-sm">
+        <nav
+          aria-label="Main"
+          className="flex min-w-0 items-center gap-1 overflow-x-auto text-sm"
+        >
           {nav.map((item) => (
             <Link
               key={item.href}
               href={item.href}
               className={cn(
-                "rounded-md px-2 py-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
+                "rounded-md px-1.5 py-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground sm:px-2",
                 "className" in item && item.className,
               )}
             >
@@ -40,7 +44,7 @@ export function SiteHeader() {
             </Link>
           ))}
         </nav>
-        <ThemeSwitcher className="ml-auto" />
+        <ThemeSwitcher className="ml-auto shrink-0" />
       </div>
     </header>
   )

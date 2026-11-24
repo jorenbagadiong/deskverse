@@ -748,3 +748,13 @@ Select a completed video in **Vera Quality Review** and choose **Start Review**.
 FFmpeg/FFprobe run locally; reviews never modify videos. `yarn vera:verify`
 exercises 1/3/10 products, process crashes and isolated format-3 backup/restore.
 No approval inbox, publishing, scheduling or external AI is added.
+
+### Approval Inbox (DV-006B)
+
+Open `/approvals` from the local Deskverse navigation to review exact video
+versions, Vera findings and human decisions. Complete the checklist before
+approving each video, including videos selected for a bulk decision. A recorded
+approval is labelled **Human Approved — Not Scheduled**.
+
+Run `yarn approvals:verify` against a guarded scratch database on Linux or WSL.
+See the [Approval Inbox guide](docs/approval-inbox.md) for policy, history and backups.

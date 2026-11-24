@@ -322,3 +322,9 @@ a killed run are removed at the next start.
   Scout again before writing new scripts. See
   [Quill scriptwriting](quill-scriptwriting.md).
 - **Next: DV-005C, Pixel.**
+
+### Human review of completed videos
+
+The [Approval Inbox](approval-inbox.md) lets the local owner inspect completed
+Pixel videos and Vera assessments. Ticket or product edits can invalidate
+the current approval while leaving its audit event available in history.

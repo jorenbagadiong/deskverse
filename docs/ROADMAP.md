@@ -2,7 +2,7 @@
 
 **Version 1.1:** Affiliate Ticket architecture (approved 2026-11-21)
 **Environment:** your own computer, Windows 11 + WSL2 Ubuntu
-**Current milestone:** DV-006A, Vera automated quality assurance (complete; automatic campaign handoffs remain outstanding). DV-006B remains out of scope.
+**Current milestone:** DV-006B, Human Approval Inbox (complete). Automatic campaign handoffs remain outstanding.
 
 ## 1. Vision
 
@@ -156,12 +156,10 @@ no duplicate outputs after interruption or recovery.
   from successful task completion. No automatic content revision loop or human
   approval. See [Vera quality assurance](vera-quality-assurance.md) for checks,
   test evidence and limitations. Full campaign handoffs remain outstanding.
-- **DV-006B: Approval Inbox.** `/approvals` with:
-  - video previews, scripts, QA results and affiliate links;
-  - approval decisions and revision requests;
-  - version tracking and bulk selection.
-
-  Approvals apply only to specific deliverable versions.
+- **DV-006B: Approval Inbox** (complete). `/approvals` records
+  explicit decisions against exact Pixel and Vera versions. The inbox provides
+  a per-video checklist, audit history and independently evaluated bulk review.
+  See [Approval Inbox](approval-inbox.md) for eligibility and operations.
 
 _Acceptance:_ six approved products can proceed independently while other
 products are processing, blocked or under revision.

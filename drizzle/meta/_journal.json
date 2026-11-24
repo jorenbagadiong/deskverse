@@ -50,6 +50,13 @@
       "when": 1795327954941,
       "tag": "0006_vera_reviews",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1795406141306,
+      "tag": "0007_approval_inbox",
+      "breakpoints": true
     }
   ]
 }

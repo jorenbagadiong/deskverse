@@ -69,24 +69,39 @@ export async function seedVideos(options: {
           : "owned",
     })),
   })
+  await renderVeraFixtureVideos(
+    options,
+    t.ticketId,
+    t.products.map((p) => ({
+      productId: p.productId,
+      scriptId: p.scriptId!,
+      assetIds: p.assetIds,
+      rightsAcknowledged: true,
+    })),
+  )
+  const deliverables = (
+    await options.pool.query(
+      "SELECT * FROM pixel_deliverables WHERE ticket_id=$1 ORDER BY created_at",
+      [t.ticketId],
+    )
+  ).rows
+  return { ...t, deliverables }
+}
+export async function renderVeraFixtureVideos(
+  options: { pool: pg.Pool; dataRoot: string },
+  ticketId: string,
+  selections: Parameters<typeof pixelPlanHooks>[1],
+) {
   const run = await planRun(options.pool, {
-    ticketId: t.ticketId,
-    ticketVersion: await ticketVersion(options.pool, t.ticketId),
+    ticketId: ticketId,
+    ticketVersion: await ticketVersion(options.pool, ticketId),
     requestId: randomUUID(),
     mode: "production",
     workflow: PIXEL_WORKFLOW.id,
     productionAvailable: false,
     verificationAllowed: false,
     availableWorkflows: [PIXEL_WORKFLOW.id],
-    ...pixelPlanHooks(
-      t.ticketId,
-      t.products.map((p) => ({
-        productId: p.productId,
-        scriptId: p.scriptId!,
-        assetIds: p.assetIds,
-        rightsAcknowledged: true,
-      })),
-    ),
+    ...pixelPlanHooks(ticketId, selections),
   })
   const w = worker(options.pool, [
     createPixelHandler({
@@ -101,19 +116,23 @@ export async function seedVideos(options: {
     }),
   ])
   try {
-    if ((await settle(options.pool, run.runId)) !== "completed")
-      throw Error("Real Pixel fixture render failed")
+    const status = await settle(options.pool, run.runId)
+    if (status !== "completed") {
+      const failure = (
+        await options.pool.query(
+          "SELECT failure_message FROM worker_tasks WHERE run_id=$1 AND failure_message IS NOT NULL LIMIT 1",
+          [run.runId],
+        )
+      ).rows[0]?.failure_message
+      throw Error(
+        `Real Pixel fixture render failed (${status}): ${failure ?? "no task failure detail"}`,
+      )
+    }
   } finally {
     await w.stop()
   }
-  const deliverables = (
-    await options.pool.query(
-      "SELECT * FROM pixel_deliverables WHERE ticket_id=$1 ORDER BY created_at",
-      [t.ticketId],
-    )
-  ).rows
-  return { ...t, deliverables }
 }
+
 export async function planVera(
   pool: pg.Pool,
   dataRoot: string,

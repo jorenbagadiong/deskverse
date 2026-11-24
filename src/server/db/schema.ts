@@ -1327,6 +1327,16 @@ export const veraReviews = pgTable(
       foreignColumns: [campaignRuns.id, campaignRuns.ticketId],
     }).onDelete("restrict"),
     unique("vera_reviews_version_unique").on(t.deliverableId, t.reviewVersion),
+    unique("vera_reviews_approval_pin_unique").on(
+      t.id,
+      t.ticketId,
+      t.productId,
+      t.deliverableId,
+      t.deliverableVersion,
+      t.deliverableSha256,
+      t.reviewVersion,
+      t.checksum,
+    ),
     check(
       "vera_reviews_version_check",
       sql`${t.reviewVersion} >= 1 AND ${t.deliverableVersion} >= 1`,
@@ -1380,7 +1390,125 @@ export const veraFindings = pgTable(
   ],
 )
 
+export const approvalDecisions = pgTable(
+  "approval_decisions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ticketId: uuid("ticket_id").notNull(),
+    productId: uuid("product_id").notNull(),
+    deliverableId: uuid("deliverable_id")
+      .notNull()
+      .references(() => pixelDeliverables.id, { onDelete: "restrict" }),
+    deliverableVersion: integer("deliverable_version").notNull(),
+    deliverableSha256: text("deliverable_sha256").notNull(),
+    reviewId: uuid("review_id").notNull(),
+    reviewVersion: integer("review_version").notNull(),
+    reviewChecksum: text("review_checksum").notNull(),
+    kind: text("kind").notNull(),
+    contract: text("contract").notNull(),
+    policy: text("policy").notNull(),
+    checklist: jsonb("checklist"),
+    notes: text("notes").notNull(),
+    reason: text("reason").notNull(),
+    revision: jsonb("revision"),
+    previousId: uuid("previous_id"),
+    requestId: uuid("request_id").notNull().unique(),
+    requestHash: text("request_hash").notNull(),
+    eligibilityAtDecision: jsonb("eligibility_at_decision").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .default(sql`clock_timestamp()`)
+      .notNull(),
+  },
+  (t) => [
+    unique("approval_decisions_deliverable_id_unique").on(
+      t.deliverableId,
+      t.id,
+    ),
+    unique("approval_decisions_previous_unique").on(
+      t.deliverableId,
+      t.previousId,
+    ),
+    uniqueIndex("approval_decisions_root_unique")
+      .on(t.deliverableId)
+      .where(sql`${t.previousId} IS NULL`),
+    index("approval_decisions_history_idx").on(
+      t.deliverableId,
+      t.createdAt.desc(),
+      t.id.desc(),
+    ),
+    foreignKey({
+      name: "approval_decisions_previous_fk",
+      columns: [t.deliverableId, t.previousId],
+      foreignColumns: [t.deliverableId, t.id],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "approval_decisions_review_pin_fk",
+      columns: [
+        t.reviewId,
+        t.ticketId,
+        t.productId,
+        t.deliverableId,
+        t.deliverableVersion,
+        t.deliverableSha256,
+        t.reviewVersion,
+        t.reviewChecksum,
+      ],
+      foreignColumns: [
+        veraReviews.id,
+        veraReviews.ticketId,
+        veraReviews.productId,
+        veraReviews.deliverableId,
+        veraReviews.deliverableVersion,
+        veraReviews.deliverableSha256,
+        veraReviews.reviewVersion,
+        veraReviews.checksum,
+      ],
+    }).onDelete("restrict"),
+    check(
+      "approval_decisions_kind_check",
+      sql`${t.kind} IN ('approved', 'revision_requested', 'rejected', 'withdrawn')`,
+    ),
+    check(
+      "approval_decisions_contract_check",
+      sql`${t.contract} = 'approval-decision/1'`,
+    ),
+    check(
+      "approval_decisions_policy_check",
+      sql`${t.policy} = 'approval-policy/1'`,
+    ),
+    check(
+      "approval_decisions_notes_check",
+      sql`char_length(${t.notes}) <= 2000`,
+    ),
+    check(
+      "approval_decisions_reason_check",
+      sql`char_length(${t.reason}) <= 2000 AND (${t.kind} = 'approved' OR length(btrim(${t.reason})) > 0)`,
+    ),
+    check(
+      "approval_decisions_revision_check",
+      sql`((${t.kind} = 'revision_requested') = (${t.revision} IS NOT NULL)) AND (${t.revision} IS NULL OR (pg_column_size(${t.revision}) <= 16384 AND jsonb_typeof(${t.revision}) = 'object'))`,
+    ),
+    check(
+      "approval_decisions_previous_self_check",
+      sql`${t.previousId} <> ${t.id}`,
+    ),
+    check(
+      "approval_decisions_receipt_check",
+      sql`jsonb_typeof(${t.eligibilityAtDecision}) = 'object' AND pg_column_size(${t.eligibilityAtDecision}) <= 8192`,
+    ),
+    check(
+      "approval_decisions_request_hash_check",
+      sql`${t.requestHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      "approval_decisions_checklist_check",
+      sql`((${t.kind} = 'approved') = (${t.checklist} IS NOT NULL)) AND (${t.checklist} IS NULL OR ${t.checklist} = '{"watched":true,"imagery":true,"presentation":true,"claims":true,"disclosure":true,"rights":true,"affiliate":true}'::jsonb)`,
+    ),
+  ],
+)
+
 export const schema = {
+  approvalDecisions,
   veraReviews,
   veraFindings,
   appMetadata,

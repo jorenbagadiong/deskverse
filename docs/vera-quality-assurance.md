@@ -284,3 +284,9 @@ The independently usable DV-006A QA milestone is complete. DV-006B can consume
 these immutable exact-version reports; it still needs to implement human
 approval, rights/visual judgment and revision management. Full automatic
 campaign readiness remains false.
+
+## Human approval
+
+Open the [Approval Inbox](approval-inbox.md) after Vera completes. The owner reviews
+the exact Pixel video and latest assessment, then records an explicit decision.
+A newer assessment can change current approval eligibility while preserving history.
