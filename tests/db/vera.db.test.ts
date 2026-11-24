@@ -20,6 +20,7 @@ import { journal } from "@/server/db/journal"
 import { migrationsFolder, runMigrations } from "@/server/db/migrations"
 import { createDatabase, createPool } from "@/server/db/pool"
 import {
+  campaignWorkerAvailable,
   cancelRun,
   claimTask,
   completeTask,
@@ -27,6 +28,7 @@ import {
   planRun,
 } from "@/server/orchestrator/store"
 import {
+  CAMPAIGN_READY,
   HandlerAborted,
   createRegistry,
   productionAvailable,
@@ -187,7 +189,7 @@ describe("Vera durable workflow", () => {
       ),
     ).rejects.toThrow(/completed|evidence/)
   })
-  it("isolates ticket/product choices and enforces campaign gate even with every handler registered", async () => {
+  it("isolates ticket/product choices and requires a campaign worker beyond registered handlers", async () => {
     await expect(
       planVera(pool, root, seed.ticketId, [
         {
@@ -202,8 +204,11 @@ describe("Vera durable workflow", () => {
       stage: s.stage,
     }))
     const registry = createRegistry({ verification: false, production: all })
-    expect(workflowAvailable(registry, PRODUCTION_WORKFLOW)).toBe(false)
-    expect(productionAvailable(registry)).toBe(false)
+    expect(workflowAvailable(registry, PRODUCTION_WORKFLOW)).toBe(
+      CAMPAIGN_READY,
+    )
+    expect(productionAvailable(registry)).toBe(CAMPAIGN_READY)
+    expect(await campaignWorkerAvailable(pool)).toBe(false)
     await expect(
       planRun(pool, {
         ticketId: seed.ticketId,

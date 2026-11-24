@@ -786,7 +786,9 @@ describe("backup and restore with ticket videos", () => {
           checkProcesses: false,
         })
         expect(manifest.formatVersion).toBe(3)
-        expect(manifest.database.migrations.current).toBe("0007_approval_inbox")
+        expect(manifest.database.migrations.current).toBe(
+          "0008_automatic_campaign_handoffs",
+        )
         expect(manifest.ticketVideos?.deliverables).toBe(1)
         expect(
           manifest.ticketVideos?.files.some(

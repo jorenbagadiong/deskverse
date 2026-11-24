@@ -160,7 +160,8 @@ export const VERA_WORKFLOW: WorkflowDefinition = {
   ],
 }
 /** Registration alone never enables campaigns: all automatic handoffs remain unverified. */
-export const CAMPAIGN_READY = false
+export const CAMPAIGN_READY = true
+export const CAMPAIGN_WORKER_CAPABILITY = "campaign.handoffs"
 export const CAMPAIGN_BLOCKER =
   "Automatic Scout → Quill report pinning, Quill → Pixel script/media manifest pinning and Pixel → Vera deliverable pinning are not implemented or end-to-end verified. Campaign media selections and rights acknowledgements must be frozen up front."
 
@@ -202,7 +203,11 @@ export const PRODUCTION_WORKFLOW: WorkflowDefinition = {
 
 /** Full campaign blockers, independent of the registered production handlers. */
 export const MISSING_PRODUCTION_CAPABILITIES = [
-  { stage: "campaign.handoffs", milestone: "Unverified automatic handoffs" },
+  {
+    stage: "campaign.handoffs",
+    milestone:
+      "Automatic result handoffs and frozen inputs are awaiting release verification.",
+  },
 ] as const
 
 export const WORKFLOWS: readonly WorkflowDefinition[] = [

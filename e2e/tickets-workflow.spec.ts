@@ -76,26 +76,32 @@ async function startRun(
 const workflow = (page: Page) => page.getByRole("region", { name: "Workflow" })
 const runStatus = (page: Page) => workflow(page).getByTestId("run-status")
 
-test("says the full campaign isn't available; verification is labelled test-only and needs a Ready ticket", async ({
+test("requires an explicit campaign request and labels verification as test-only", async ({
   page,
   request,
 }) => {
   const ticket = await makeTicket(request, "Workflow availability", 1, true)
   await page.goto(`/tickets/${ticket.id}`)
   const section = workflow(page)
-  await expect(section.getByTestId("automation-unavailable")).toContainText(
-    "Full campaign automation isn't available yet.",
-  )
-  // All handlers exist; automatic pinned handoffs are still unverified.
-  await expect(section.getByTestId("automation-unavailable")).toContainText(
-    "Automatic result handoffs",
-  )
-  for (const built of ["Scout (DV-005A)", "Quill (DV-005B)", "Pixel (DV-005C)"])
+  const { availability } = await (
+    await request.get(`/api/tickets/${ticket.id}/runs`)
+  ).json()
+  if (availability.production) {
     await expect(
-      section.getByTestId("automation-unavailable"),
-    ).not.toContainText(built)
+      section.getByText(
+        "Mark this ticket Ready to start an automatic campaign.",
+      ),
+    ).toBeVisible()
+  } else {
+    await expect(section.getByTestId("automation-unavailable")).toContainText(
+      "Full campaign automation isn't available yet.",
+    )
+    await expect(section.getByTestId("automation-unavailable")).toContainText(
+      "Automatic result handoffs",
+    )
+  }
   await expect(
-    page.getByRole("button", { name: /start (ai )?processing/i }),
+    page.getByRole("button", { name: "Start Automatic Campaign" }),
   ).toHaveCount(0)
   const start = section.getByRole("button", {
     name: "Start verification run (test only)",

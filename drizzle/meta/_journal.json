@@ -57,6 +57,13 @@
       "when": 1795406141306,
       "tag": "0007_approval_inbox",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1795496759511,
+      "tag": "0008_automatic_campaign_handoffs",
+      "breakpoints": true
     }
   ]
 }

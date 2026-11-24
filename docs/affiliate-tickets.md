@@ -328,3 +328,8 @@ a killed run are removed at the next start.
 The [Approval Inbox](approval-inbox.md) lets the local owner inspect completed
 Pixel videos and Vera assessments. Ticket or product edits can invalidate
 the current approval while leaving its audit event available in history.
+
+## Automatic campaigns
+
+The Workflow section accepts an automatic campaign for selected Ready ticket products with explicit ordered images and media-use confirmation.
+See [Automatic campaign handoffs](automatic-campaign-handoffs.md).

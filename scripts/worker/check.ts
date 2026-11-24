@@ -7,11 +7,8 @@ import {
   readOrchestratorConfig,
   verificationAllowed,
 } from "@/server/orchestrator/config"
-import {
-  createRegistry,
-  MISSING_PRODUCTION_CAPABILITIES,
-  productionAvailable,
-} from "@/server/orchestrator/workflows"
+import { createRegistry, CAMPAIGN_READY } from "@/server/orchestrator/workflows"
+import { campaignWorkerAvailable } from "@/server/orchestrator/store"
 import { readScoutConfig } from "@/server/scout/config"
 
 /**
@@ -36,9 +33,6 @@ run(async () => {
   )
   const scout = readScoutConfig()
   console.log(
-    `Campaign:     ${productionAvailable(registry) ? "available" : `full campaign not available yet (${MISSING_PRODUCTION_CAPABILITIES.map((c) => c.milestone).join(", ")})`}`,
-  )
-  console.log(
     `Scout:        ${scout.retrieval ? "research on (scout-research-v1)" : "research off (DESKVERSE_SCOUT_RETRIEVAL isn't on)"}; extraction ${scout.extraction}${scout.extraction === "ollama" && !scout.ollama ? ` (unusable: ${scout.ollamaProblem})` : ""}; run yarn scout:check for details`,
   )
   console.log(
@@ -50,6 +44,12 @@ run(async () => {
     applicationName: "deskverse-worker-check",
   })
   try {
+    const campaign = CAMPAIGN_READY
+      ? (await campaignWorkerAvailable(pool))
+        ? "available"
+        : "no compatible worker has checked in"
+      : "release verification pending"
+    console.log(`Campaign:     ${campaign}`)
     const runs = await pool.query<{ status: string; n: number }>(
       "SELECT status, count(*)::int AS n FROM campaign_runs GROUP BY status ORDER BY status",
     )

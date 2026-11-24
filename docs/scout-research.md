@@ -467,3 +467,8 @@ sensitive, not time-sensitive, not identifiers, free of conflicts and
 backed by real supporting evidence become copy. Scout's `sellingPoints`
 guide the order, but their claim keys are re-checked. Quill never changes
 Scout reports. See [Quill scriptwriting](quill-scriptwriting.md).
+
+## Automatic campaigns
+
+In an automatic campaign, the exact report written by each Scout task is pinned to its dependent Quill task.
+See [Automatic campaign handoffs](automatic-campaign-handoffs.md).

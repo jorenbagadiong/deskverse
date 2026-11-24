@@ -1,3 +1,4 @@
+import { CAMPAIGN_WORKER_CAPABILITY } from "@/server/orchestrator/workflows"
 import { randomBytes } from "node:crypto"
 import { setTimeout as sleep } from "node:timers/promises"
 
@@ -41,6 +42,7 @@ import {
  */
 
 export interface WorkerOptions {
+  campaignCapable?: boolean
   pool: pg.Pool
   registry: HandlerRegistry
   /** Concurrent tasks in this process. */
@@ -67,6 +69,7 @@ interface Active {
 
 export class Worker {
   readonly id = newWorkerId()
+  private readonly campaignCapable: boolean
   private readonly pool: pg.Pool
   private readonly registry: HandlerRegistry
   private readonly slots: number
@@ -83,6 +86,7 @@ export class Worker {
   private wake: (() => void) | null = null
 
   constructor(options: WorkerOptions) {
+    this.campaignCapable = options.campaignCapable === true
     this.pool = options.pool
     this.registry = options.registry
     this.slots = Math.max(1, Math.min(options.slots ?? 3, 16))
@@ -111,7 +115,9 @@ export class Worker {
         await checkInWorker(this.pool, {
           workerId: this.id,
           pid: process.pid,
-          stages,
+          stages: this.campaignCapable
+            ? [...stages, CAMPAIGN_WORKER_CAPABILITY]
+            : stages,
         }).then(
           () => (this.lastCheckIn = Date.now()),
           () => {},
@@ -122,6 +128,7 @@ export class Worker {
           const claim = await claimTask(this.pool, {
             workerId: this.id,
             stages,
+            campaignCapable: this.campaignCapable,
             leaseMs: this.leaseMs,
             limits: this.limits,
           })

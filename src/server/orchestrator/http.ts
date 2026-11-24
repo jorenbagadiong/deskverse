@@ -4,16 +4,19 @@ import type { WorkflowAvailability } from "@/lib/orchestrator/types"
 import { isUuid } from "@/lib/tickets/validation"
 import { getPool } from "@/server/db/client"
 import { readDatabaseConfig } from "@/server/db/config"
-import { verificationAllowed } from "@/server/orchestrator/config"
 import {
-  createRegistry,
+  campaignTestingAllowed,
+  verificationAllowed,
+} from "@/server/orchestrator/config"
+import {
+  CAMPAIGN_READY,
   MISSING_PRODUCTION_CAPABILITIES,
-  productionAvailable,
   PIXEL_WORKFLOW,
   QUILL_WORKFLOW,
   RESEARCH_WORKFLOW,
   VERA_WORKFLOW,
 } from "@/server/orchestrator/workflows"
+import { campaignWorkerAvailable } from "@/server/orchestrator/store"
 import { readScoutConfig } from "@/server/scout/config"
 import { invalid, jsonBody, notFound } from "@/server/tickets/http"
 
@@ -41,19 +44,31 @@ export function availableWorkflows(): string[] {
   ]
 }
 
-export function availability(): WorkflowAvailability {
+export async function availability(): Promise<WorkflowAvailability> {
   const config = readDatabaseConfig()
+  const database = config.ok ? config.config : null
+  const testing = campaignTestingAllowed(process.env, database)
+  const worker =
+    (CAMPAIGN_READY || testing) && (await campaignWorkerAvailable(pool()))
   return {
-    production: productionAvailable(createRegistry({ verification: false })),
+    production: CAMPAIGN_READY && worker,
+    ...(testing ? { campaignTesting: worker } : {}),
     research: availableWorkflows().includes(RESEARCH_WORKFLOW.id),
-    missing: MISSING_PRODUCTION_CAPABILITIES.map((c) => ({
-      stage: c.stage,
-      milestone: c.milestone,
-    })),
-    verification: verificationAllowed(
-      process.env,
-      config.ok ? config.config : null,
-    ),
+    missing: worker
+      ? []
+      : CAMPAIGN_READY || testing
+        ? [
+            {
+              stage: "campaign.worker",
+              milestone:
+                "Start a compatible worker with Scout, Quill, Pixel and Vera available.",
+            },
+          ]
+        : MISSING_PRODUCTION_CAPABILITIES.map(({ stage, milestone }) => ({
+            stage,
+            milestone,
+          })),
+    verification: verificationAllowed(process.env, database),
   }
 }
 

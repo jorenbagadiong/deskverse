@@ -290,3 +290,8 @@ campaign readiness remains false.
 Open the [Approval Inbox](approval-inbox.md) after Vera completes. The owner reviews
 the exact Pixel video and latest assessment, then records an explicit decision.
 A newer assessment can change current approval eligibility while preserving history.
+
+## Automatic campaigns
+
+In an automatic campaign, Vera takes its exact review pin from the completed Pixel task. A passing verdict still requires a human approval decision.
+See [Automatic campaign handoffs](automatic-campaign-handoffs.md).

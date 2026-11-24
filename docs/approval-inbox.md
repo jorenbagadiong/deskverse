@@ -136,3 +136,8 @@ history and all six eligible approvals from a populated format-3 backup.
 Ordinary Chromium completed with 71 passes. The same 24 office tests as
 the clean baseline reported the software-WebGL warning. See the
 [E2E environment notes](e2e-environment.md) for the affected tests.
+
+## Automatic campaigns
+
+Automatic campaigns feed the same candidates and eligibility rules. Their Vera reviews never create human decisions.
+See [Automatic campaign handoffs](automatic-campaign-handoffs.md).

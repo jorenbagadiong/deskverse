@@ -856,7 +856,9 @@ describe("backup and restore", () => {
           deskverseVersion: "test",
           checkProcesses: false,
         })
-        expect(manifest.database.migrations.current).toBe("0007_approval_inbox")
+        expect(manifest.database.migrations.current).toBe(
+          "0008_automatic_campaign_handoffs",
+        )
         expect(manifest.database.tables).toMatchObject({
           quill_scripts: 1,
           scout_reports: 1,
@@ -943,6 +945,7 @@ describe("backup and restore", () => {
           "0005_pixel_deliverables",
           "0006_vera_reviews",
           "0007_approval_inbox",
+          "0008_automatic_campaign_handoffs",
         ])
         expect((await verifyScoutReport(pool, reportId))?.intact).toBe(true)
         const { runId } = await planQuill(t.ticketId, [

@@ -127,3 +127,13 @@ export function verificationAllowed(env: Env, database: DatabaseConfig | null) {
     database.user.includes("test")
   )
 }
+
+/** Real campaign verification is opt-in and only available to guarded test databases. */
+export function campaignTestingAllowed(
+  env: Env,
+  database: DatabaseConfig | null,
+) {
+  return (
+    env.DESKVERSE_CAMPAIGN_TEST === "1" && verificationAllowed(env, database)
+  )
+}

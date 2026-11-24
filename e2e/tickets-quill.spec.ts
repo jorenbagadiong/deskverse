@@ -270,7 +270,7 @@ test("writes evidence-linked scripts from chosen research; a product without eno
   expect(JSON.stringify(body)).not.toMatch(
     /\/home\/|postgres(ql)?:\/\/|password/i,
   )
-  // The full campaign stays refused.
+  // A campaign still requires explicit product, image and rights selections.
   const campaign = await request.post(`/api/tickets/${ticket.id}/runs`, {
     data: {
       requestId: rid(),
@@ -279,8 +279,10 @@ test("writes evidence-linked scripts from chosen research; a product without eno
       workflow: "campaign-v1",
     },
   })
-  expect(campaign.status()).toBe(503)
-  expect((await campaign.json()).message).toMatch(/result handoffs/)
+  expect(campaign.status()).toBe(400)
+  expect((await campaign.json()).message).toMatch(
+    /Choose products, ordered images and media-use confirmations/,
+  )
 
   // Scripts survive an application restart.
   await control("restart")

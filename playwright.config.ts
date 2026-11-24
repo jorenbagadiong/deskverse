@@ -50,7 +50,7 @@ const channel =
  *   (scripts/e2e/database-server.ts). Never reused, never E2E_BASE_URL.
  */
 const TICKET_SPECS =
-  /tickets(-mobile|-keyboard|-workflow|-research|-quill|-pixel|-vera|-approvals)?\.spec\.ts$/
+  /tickets(-mobile|-keyboard|-workflow|-research|-quill|-pixel|-vera|-approvals|-campaign)?\.spec\.ts$/
 /** Never matches: a project with nothing to run in this suite. */
 const NOTHING = /^$/
 const only = (ordinary: RegExp, database: RegExp) =>
@@ -105,7 +105,9 @@ export default defineConfig({
       use: { viewport: { width: 1280, height: 900 } },
       ...only(
         /^(?!.*(fallback|mobile)\.spec).*\.spec\.ts$/,
-        /tickets(-keyboard|-workflow|-research|-quill|-pixel|-vera|-approvals)?\.spec\.ts$/,
+        process.env.E2E_CAMPAIGN === "1"
+          ? /tickets-campaign\.spec\.ts$/
+          : /tickets(-keyboard|-workflow|-research|-quill|-pixel|-vera|-approvals)?\.spec\.ts$/,
       ),
     },
     {
@@ -115,7 +117,12 @@ export default defineConfig({
         isMobile: true,
         hasTouch: true,
       },
-      ...only(/mobile\.spec/, /tickets-mobile\.spec\.ts$/),
+      ...only(
+        /mobile\.spec/,
+        process.env.E2E_CAMPAIGN === "1"
+          ? NOTHING
+          : /tickets-mobile\.spec\.ts$/,
+      ),
     },
     {
       name: "mobile-360",
@@ -124,7 +131,12 @@ export default defineConfig({
         isMobile: true,
         hasTouch: true,
       },
-      ...only(/mobile\.spec/, /tickets-mobile\.spec\.ts$/),
+      ...only(
+        /mobile\.spec/,
+        process.env.E2E_CAMPAIGN === "1"
+          ? NOTHING
+          : /tickets-mobile\.spec\.ts$/,
+      ),
     },
     {
       name: "no-webgl",

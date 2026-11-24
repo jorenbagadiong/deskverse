@@ -280,7 +280,7 @@ test("renders a real video from the chosen script and images; preview, download 
   expect((await fetch(`${CONTROL}/restart`, { method: "POST" })).ok).toBe(true)
   await page.goto(`/tickets/${t.id}`)
   await expect(pixel(page).getByTestId("awaiting-qa").first()).toBeVisible()
-  // The full campaign stays refused (Vera).
+  // A campaign still requires explicit product, image and rights selections.
   const campaign = await request.post(`/api/tickets/${t.id}/runs`, {
     data: {
       requestId: rid(),
@@ -289,8 +289,10 @@ test("renders a real video from the chosen script and images; preview, download 
       workflow: "campaign-v1",
     },
   })
-  expect(campaign.status()).toBe(503)
-  expect((await campaign.json()).message).toMatch(/result handoffs/)
+  expect(campaign.status()).toBe(400)
+  expect((await campaign.json()).message).toMatch(
+    /Choose products, ordered images and media-use confirmations/,
+  )
 })
 
 test("cancels a render in progress; a damaged image needs input and Retry renders after the repair", async ({

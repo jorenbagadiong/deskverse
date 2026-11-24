@@ -269,7 +269,7 @@ test("researches a batch: evidence-backed claims, conflicts, and honest needs-in
     ).status(),
   ).toBe(404)
 
-  // The full campaign stays refused.
+  // A campaign still requires explicit product, image and rights selections.
   const campaign = await request.post(`/api/tickets/${ticket.id}/runs`, {
     data: {
       requestId: rid(),
@@ -278,9 +278,9 @@ test("researches a batch: evidence-backed claims, conflicts, and honest needs-in
       workflow: "campaign-v1",
     },
   })
-  expect(campaign.status()).toBe(503)
+  expect(campaign.status()).toBe(400)
   expect((await campaign.json()).message).toMatch(
-    /Full campaign automation isn't available yet/,
+    /Choose products, ordered images and media-use confirmations/,
   )
 })
 

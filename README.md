@@ -24,8 +24,8 @@ don't need PostgreSQL: they work with it stopped or not installed.
 Vera now performs **automated quality review (DV-006A)** on an explicitly
 selected completed Pixel version. The ticket workspace shows real video checks,
 source evidence, rights gaps, actionable findings and historical reviews. QA
-pass still awaits human approval. `campaign-v1` stays disabled until automatic
-result handoffs and frozen media/rights selections are implemented and verified.
+pass still awaits human approval. `campaign-v1` can run all four agents for
+selected products when a compatible worker is online.
 See [Vera quality assurance](docs/vera-quality-assurance.md).
 
 ## Tech stack
@@ -758,3 +758,11 @@ approval is labelled **Human Approved — Not Scheduled**.
 
 Run `yarn approvals:verify` against a guarded scratch database on Linux or WSL.
 See the [Approval Inbox guide](docs/approval-inbox.md) for policy, history and backups.
+
+### Automatic campaign handoffs (DV-006C)
+
+The Workflow section supports an ordered, owner-confirmed Scout → Quill →
+Pixel → Vera campaign with exact persisted handoffs. Use a Ready ticket and a
+compatible Linux or WSL worker. See
+[Automatic campaign handoffs](docs/automatic-campaign-handoffs.md) for the
+launch contract, worker requirements and verification commands.

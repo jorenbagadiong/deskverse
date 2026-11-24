@@ -55,6 +55,7 @@ export async function seeded(
   title: string,
   n = 4,
   rights = "owned",
+  runStandalone = true,
 ) {
   let ticket = (
     await (
@@ -99,6 +100,15 @@ export async function seeded(
       })
     ).json()
   ).ticket
+  const ready = {
+    id: ticket.id as string,
+    version: ticket.version as number,
+    productId: productId as string,
+    assetIds: ticket.products[0].assets.map(
+      (asset: { id: string }) => asset.id,
+    ) as string[],
+  }
+  if (!runStandalone) return ready
   expect(
     (
       await request.post(`/api/tickets/${ticket.id}/runs`, {
@@ -129,9 +139,5 @@ export async function seeded(
     ).status(),
   ).toBe(201)
   await waitRun(request, ticket.id, "quill-script-v1")
-  return {
-    id: ticket.id as string,
-    version: ticket.version as number,
-    productId: productId as string,
-  }
+  return ready
 }

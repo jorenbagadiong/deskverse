@@ -163,6 +163,7 @@ async function startApp() {
         DESKVERSE_DATA_DIR: dataDir,
         // Deterministic verification runs (DV-004C): this scratch database only.
         DESKVERSE_ORCHESTRATOR_VERIFICATION: "1",
+        DESKVERSE_CAMPAIGN_TEST: process.env.E2E_CAMPAIGN === "1" ? "1" : "",
         // Scout research (DV-005A): offered by the app; the worker does it.
         DESKVERSE_SCOUT_RETRIEVAL: "on",
       },
@@ -207,6 +208,7 @@ function startWorker() {
         DATABASE_URL: urlFor(db),
         DATABASE_TEST_URL: "",
         DESKVERSE_ORCHESTRATOR_VERIFICATION: "1",
+        DESKVERSE_CAMPAIGN_TEST: process.env.E2E_CAMPAIGN === "1" ? "1" : "",
         DESKVERSE_WORKER_LEASE_MS: "2000",
         DESKVERSE_WORKER_POLL_MS: "100",
         DESKVERSE_ORCHESTRATOR_RETRY_BASE_MS: "200",

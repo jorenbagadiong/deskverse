@@ -519,3 +519,8 @@ Scout report → Quill pin, Quill script → Pixel immutable manifest from appro
 frozen images/rights, Pixel deliverable → Vera pin; transactional ownership and
 idempotency checks at each boundary; real multiprocess campaign verification.
 See the [full handoff audit and recovery rules](vera-quality-assurance.md).
+
+## Automatic campaigns
+
+The campaign adds transactional dependent pins to the existing completion path. Each product keeps its own chain and uses the same run controls.
+See [Automatic campaign handoffs](automatic-campaign-handoffs.md).

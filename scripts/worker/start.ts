@@ -3,13 +3,16 @@ import "../load-env"
 import { readDatabaseConfig } from "@/server/db/config"
 import { createPool } from "@/server/db/pool"
 import {
+  campaignTestingAllowed,
   readOrchestratorConfig,
   verificationAllowed,
 } from "@/server/orchestrator/config"
 import {
+  CAMPAIGN_READY,
   createRegistry,
-  MISSING_PRODUCTION_CAPABILITIES,
+  PRODUCTION_WORKFLOW,
 } from "@/server/orchestrator/workflows"
+import { createRunner } from "@/server/process/run-executable"
 import { Worker } from "@/server/orchestrator/worker"
 import { readScoutConfig, testNetworkAllowed } from "@/server/scout/config"
 import { quillTestHooks, readQuillConfig } from "@/server/quill/ollama"
@@ -47,8 +50,9 @@ if (!db.ok) {
   console.error(`✗ ${db.message}`)
   process.exit(1)
 }
+const database = db.config
 const config = readOrchestratorConfig()
-const verification = verificationAllowed(process.env, db.config)
+const verification = verificationAllowed(process.env, database)
 if (process.env.DESKVERSE_ORCHESTRATOR_VERIFICATION === "1" && !verification) {
   console.error(
     "✗ Verification handlers only run on a test database (deskverse_test_*). Refusing to start.",
@@ -57,7 +61,7 @@ if (process.env.DESKVERSE_ORCHESTRATOR_VERIFICATION === "1" && !verification) {
 }
 if (
   process.env.DESKVERSE_SCOUT_TEST_NETWORK &&
-  !testNetworkAllowed(process.env, db.config)
+  !testNetworkAllowed(process.env, database)
 ) {
   console.error(
     "✗ Scout's fixture network only runs on a test database (deskverse_test_*). Refusing to start.",
@@ -68,7 +72,7 @@ const scout = readScoutConfig()
 const quill = readQuillConfig()
 let quillTest: ReturnType<typeof quillTestHooks> = null
 try {
-  quillTest = quillTestHooks(process.env, db.config)
+  quillTest = quillTestHooks(process.env, database)
 } catch {
   console.error(
     "✗ DESKVERSE_QUILL_TEST only runs on a test database (deskverse_test_*). Refusing to start.",
@@ -78,7 +82,7 @@ try {
 const fixture = process.env.DESKVERSE_SCOUT_TEST_NETWORK
   ? parseTestNetwork(process.env.DESKVERSE_SCOUT_TEST_NETWORK)
   : null
-const pool = createPool(db.config, {
+const pool = createPool(database, {
   max: config.slots + 3,
   applicationName: "deskverse-worker",
 })
@@ -94,8 +98,8 @@ let pixelTest:
   | null = null
 if (process.env.DESKVERSE_PIXEL_TEST) {
   if (
-    !/^deskverse_test(_[a-z0-9_]{1,40})?$/.test(db.config.database) ||
-    !db.config.user.includes("test")
+    !/^deskverse_test(_[a-z0-9_]{1,40})?$/.test(database.database) ||
+    !database.user.includes("test")
   ) {
     console.error(
       "✗ DESKVERSE_PIXEL_TEST only runs on a test database (deskverse_test_*). Refusing to start.",
@@ -153,55 +157,79 @@ const registry = createRegistry({
       : []),
   ],
 })
-const worker = new Worker({ pool, registry, ...config }).start()
-
-console.log(
-  `[worker] ${worker.id} started (pid ${process.pid}) on ${db.config.database}`,
-)
-const stages = [...registry.values()]
-console.log(
-  stages.length > 0
-    ? `[worker] handlers: ${stages.map((h) => `${h.stage} (${h.kind === "verification" ? "verification only, no real work" : "production"})`).join(", ")}`
-    : "[worker] no handlers enabled; recovering leases and waiting",
-)
-if (registry.get("scout.research"))
-  console.log(
-    `[worker] Scout research: reads owner-supplied reference pages${fixture ? " (FIXTURE NETWORK: test sites only)" : ""}; extraction ${scout.extraction}${scout.extraction === "ollama" && !scout.ollama ? ` (unusable: ${scout.ollamaProblem})` : ""}`,
+async function start() {
+  const campaignCapable = Boolean(
+    (CAMPAIGN_READY || campaignTestingAllowed(process.env, database)) &&
+    PRODUCTION_WORKFLOW.stages.every(({ stage }) => registry.has(stage)) &&
+    process.platform === "linux" &&
+    (await createRunner()("flock", ["--version"])).ok &&
+    (await getFfmpegCapabilities()).status === "ready",
   )
-else
-  console.log(
-    "[worker] Scout research is off (set DESKVERSE_SCOUT_RETRIEVAL=on in .env.local to enable it)",
-  )
-console.log(
-  `[worker] Quill scriptwriting: ${quill.generation === "ollama" ? (quill.ollama ? `template + local model ${quill.ollama.model}` : `template only (local model unusable: ${quill.ollamaProblem})`) : "template mode (no AI model)"}`,
-)
-console.log(
-  pixel
-    ? `[worker] Pixel ticket videos: on (render gate ${dataRoot}/locks/render.lock, shared with Pixel Studio)`
-    : "[worker] Pixel ticket videos: off (FFmpeg/FFprobe not found; see DESKVERSE_FFMPEG_PATH)",
-)
-console.log(
-  `[worker] full campaign unavailable until ${MISSING_PRODUCTION_CAPABILITIES.map((c) => `${c.stage}: ${c.milestone}`).join("; ")}`,
-)
+  const worker = new Worker({
+    pool,
+    registry,
+    campaignCapable,
+    ...config,
+  }).start()
 
-let stopping = false
-for (const signal of ["SIGINT", "SIGTERM"] as const)
-  process.on(signal, () => {
-    if (stopping) {
-      console.log(
-        "[worker] second signal: exiting now; unfinished leases will expire and be recovered",
-      )
-      process.exit(130)
-    }
-    stopping = true
+  console.log(
+    `[worker] ${worker.id} started (pid ${process.pid}) on ${database.database}`,
+  )
+  const stages = [...registry.values()]
+  console.log(
+    stages.length > 0
+      ? `[worker] handlers: ${stages.map((h) => `${h.stage} (${h.kind === "verification" ? "verification only, no real work" : "production"})`).join(", ")}`
+      : "[worker] no handlers enabled; recovering leases and waiting",
+  )
+  if (registry.get("scout.research"))
     console.log(
-      `[worker] ${signal}: finishing running tasks (up to ${config.shutdownGraceMs} ms), claiming nothing new`,
+      `[worker] Scout research: reads owner-supplied reference pages${fixture ? " (FIXTURE NETWORK: test sites only)" : ""}; extraction ${scout.extraction}${scout.extraction === "ollama" && !scout.ollama ? ` (unusable: ${scout.ollamaProblem})` : ""}`,
     )
-    void worker
-      .stop()
-      .then(() => pool.end())
-      .then(() => {
-        console.log("[worker] stopped cleanly")
-        process.exit(0)
-      })
-  })
+  else
+    console.log(
+      "[worker] Scout research is off (set DESKVERSE_SCOUT_RETRIEVAL=on in .env.local to enable it)",
+    )
+  console.log(
+    `[worker] Quill scriptwriting: ${quill.generation === "ollama" ? (quill.ollama ? `template + local model ${quill.ollama.model}` : `template only (local model unusable: ${quill.ollamaProblem})`) : "template mode (no AI model)"}`,
+  )
+  console.log(
+    pixel
+      ? `[worker] Pixel ticket videos: on (render gate ${dataRoot}/locks/render.lock, shared with Pixel Studio)`
+      : "[worker] Pixel ticket videos: off (FFmpeg/FFprobe not found; see DESKVERSE_FFMPEG_PATH)",
+  )
+  console.log(
+    campaignCapable
+      ? "[worker] automatic campaign handoffs available"
+      : "[worker] automatic campaign handoffs unavailable (release gate or required capabilities)",
+  )
+
+  let stopping = false
+  for (const signal of ["SIGINT", "SIGTERM"] as const)
+    process.on(signal, () => {
+      if (stopping) {
+        console.log(
+          "[worker] second signal: exiting now; unfinished leases will expire and be recovered",
+        )
+        process.exit(130)
+      }
+      stopping = true
+      console.log(
+        `[worker] ${signal}: finishing running tasks (up to ${config.shutdownGraceMs} ms), claiming nothing new`,
+      )
+      void worker
+        .stop()
+        .then(() => pool.end())
+        .then(() => {
+          console.log("[worker] stopped cleanly")
+          process.exit(0)
+        })
+    })
+}
+
+void start().catch(async () => {
+  console.error(
+    "✗ The worker could not start. Check the local database and tool configuration.",
+  )
+  await pool.end()
+  process.exitCode = 1
+})

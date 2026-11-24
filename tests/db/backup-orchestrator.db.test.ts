@@ -255,6 +255,7 @@ describe("DV-004B-era backups migrate forward", () => {
           "0005_pixel_deliverables",
           "0006_vera_reviews",
           "0007_approval_inbox",
+          "0008_automatic_campaign_handoffs",
         ])
         expect(
           (

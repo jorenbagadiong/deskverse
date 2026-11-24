@@ -6,9 +6,17 @@ export type RunMode = "production" | "verification"
 export type ResourceClass = "general" | "cpu" | "render"
 export type RecoveryPolicy = "retry" | "inspect"
 
+export interface CampaignSelection {
+  productId: string
+  assetIds: string[]
+  rightsAcknowledged: true
+}
+
 export interface WorkflowAvailability {
   /** The full Scout → Quill → Pixel → Vera campaign. False until automatic pinned result handoffs are verified. */
   production: boolean
+  /** Explicit opt-in on a guarded scratch installation. */
+  campaignTesting?: boolean
   /** Research-only runs (DV-005A, workflow "scout-research-v1"). */
   research: boolean
   /** What's missing, for the explanation shown to the owner. */
@@ -49,6 +57,8 @@ export interface RunTask {
   finishedAt: string | null
   /** Whether a committed result exists (verification result or Scout report). */
   hasResult: boolean
+  retryAllowed?: boolean
+  result?: { artifactId: string; verdict?: string }
 }
 
 export interface RunProduct {
@@ -84,6 +94,7 @@ export const RUNS_CHANGED_EVENT = "deskverse:runs-changed"
 
 /** How a run is described to the owner. */
 export function runTitle(run: { mode: RunMode; workflow: string }) {
+  if (run.workflow === "campaign-v1") return "Automatic campaign"
   if (run.mode === "verification") return "Verification run (test only)"
   if (run.workflow === "scout-research-v1") return "Research run (Scout only)"
   if (run.workflow === "vera-review-v1") return "Quality review run (Vera only)"

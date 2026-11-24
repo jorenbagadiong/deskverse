@@ -2,7 +2,7 @@
 
 **Version 1.1:** Affiliate Ticket architecture (approved 2026-11-21)
 **Environment:** your own computer, Windows 11 + WSL2 Ubuntu
-**Current milestone:** DV-006B, Human Approval Inbox (complete). Automatic campaign handoffs remain outstanding.
+**Current milestone:** DV-006C, Automatic Campaign Handoffs (complete).
 
 ## 1. Vision
 
@@ -160,6 +160,11 @@ no duplicate outputs after interruption or recovery.
   explicit decisions against exact Pixel and Vera versions. The inbox provides
   a per-video checklist, audit history and independently evaluated bulk review.
   See [Approval Inbox](approval-inbox.md) for eligibility and operations.
+
+- **DV-006C: Automatic campaign handoffs** (complete). A single
+  Ready ticket action starts independent Scout, Quill, Pixel and Vera chains
+  using immutable image selections and exact upstream outputs. See
+  [Automatic campaign handoffs](automatic-campaign-handoffs.md).
 
 _Acceptance:_ six approved products can proceed independently while other
 products are processing, blocked or under revision.

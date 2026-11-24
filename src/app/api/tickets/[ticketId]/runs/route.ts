@@ -1,6 +1,7 @@
+import { parseCampaignSelections } from "@/server/campaign/launch"
 import { veraPlanHooks, type ReviewSelection } from "@/server/vera/plan"
 import { veraTools } from "@/server/vera/tools"
-import { HttpError } from "@/server/tickets/http"
+import { dataRoot, HttpError } from "@/server/tickets/http"
 import { pixelPlanHooks, type RenderSelection } from "@/server/pixel/plan"
 import {
   availability,
@@ -176,8 +177,8 @@ function parseReviews(raw: unknown): ReviewSelection[] | undefined {
  * POST /api/tickets/:ticketId/runs  { requestId, ticketVersion, mode, workflow?, verification? }
  *   mode "production" + workflow "scout-research-v1" (DV-005A): Scout
  *   research only, when source retrieval is switched on.
- *   mode "production" + workflow "campaign-v1" (the default): refused
- *   (503 capability-unavailable) until Quill, Pixel and Vera exist.
+ *   mode "production" + explicit "campaign-v1" + campaign selections:
+ *   Scout through Vera with ordered images and explicit owner confirmation.
  *   mode "production" + workflow "quill-script-v1" + scripts (DV-005B):
  *   Quill scriptwriting only, from the chosen, verified, current reports.
  *   mode "production" + workflow "pixel-render-v1" + renders (DV-005C):
@@ -197,7 +198,7 @@ export async function GET(
     )
     if (!exists.rowCount) throw notFound()
     return jsonResponse({
-      availability: availability(),
+      availability: await availability(),
       runs: await listRuns(pool(), ticketId),
     })
   })
@@ -221,6 +222,7 @@ export async function POST(
           "scripts",
           "renders",
           "reviews",
+          "campaign",
         ].includes(k),
     )
     if (
@@ -236,11 +238,28 @@ export async function POST(
     )
       throw invalid(
         [],
-        "Send { requestId, ticketVersion, mode, workflow?, verification?, scripts?, renders? }.",
+        "Send { requestId, ticketVersion, mode, workflow?, verification?, scripts?, renders?, reviews?, campaign? }.",
       )
     const scripts = parseScripts(body.scripts)
     const renders = parseRenders(body.renders)
     const reviews = parseReviews(body.reviews)
+    const campaign =
+      body.campaign === undefined
+        ? undefined
+        : parseCampaignSelections(body.campaign)
+    if (body.workflow === "campaign-v1" && !campaign)
+      throw invalid(
+        [],
+        "Choose products, ordered images and media-use confirmations.",
+      )
+    if (
+      campaign &&
+      (body.workflow !== "campaign-v1" || body.mode !== "production")
+    )
+      throw invalid(
+        [],
+        "Campaign selections require an explicit campaign-v1 production request.",
+      )
     if (
       (scripts && body.workflow !== "quill-script-v1") ||
       (renders && body.workflow !== "pixel-render-v1") ||
@@ -258,14 +277,24 @@ export async function POST(
         )
     }
     const verification = parseVerification(body.verification, body.mode)
-    const available = availability()
+    const available = await availability()
     const { runId, created } = await planRun(pool(), {
       ticketId,
       ticketVersion: body.ticketVersion,
       requestId: body.requestId,
       mode: body.mode,
       workflow: body.workflow as string | undefined,
-      productionAvailable: available.production,
+      productionAvailable:
+        available.production || available.campaignTesting === true,
+      ...(campaign
+        ? {
+            campaign: {
+              selections: campaign,
+              dataRoot: dataRoot(),
+              testing: available.campaignTesting !== undefined,
+            },
+          }
+        : {}),
       availableWorkflows: availableWorkflows(),
       verificationAllowed: available.verification,
       verification,

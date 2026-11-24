@@ -319,6 +319,7 @@ export const campaignRuns = pgTable(
     mode: text("mode").notNull(),
     /** Which task graph the run uses, e.g. "verification-v1". */
     workflow: text("workflow").notNull(),
+    campaignRequestHash: text("campaign_request_hash"),
     status: text("status").notNull().default("queued"),
     pauseRequestedAt: timestamp("pause_requested_at", { withTimezone: true }),
     cancelRequestedAt: timestamp("cancel_requested_at", { withTimezone: true }),
@@ -357,6 +358,10 @@ export const campaignRuns = pgTable(
       "campaign_runs_workflow_check",
       sql`${t.workflow} ~ '^[a-z0-9.-]{1,40}$'`,
     ),
+    check(
+      "campaign_runs_request_hash_check",
+      sql`(${t.campaignRequestHash} IS NOT NULL) = (${t.workflow} = 'campaign-v1') AND (${t.campaignRequestHash} IS NULL OR ${t.campaignRequestHash} ~ '^[0-9a-f]{64}$')`,
+    ),
     // At most one unfinished run per ticket.
     uniqueIndex("campaign_runs_one_active_idx")
       .on(t.ticketId)
@@ -383,6 +388,8 @@ export const runProductSnapshots = pgTable(
     data: jsonb("data").$type<Record<string, unknown>>().notNull(),
     /** SHA-256 of the canonical JSON of `data`. */
     checksum: text("checksum").notNull(),
+    campaignSelection: jsonb("campaign_selection"),
+    campaignSelectionChecksum: text("campaign_selection_checksum"),
     createdAt: timestamps.createdAt,
   },
   (t) => [
@@ -400,6 +407,12 @@ export const runProductSnapshots = pgTable(
     check(
       "run_product_snapshots_size_check",
       sql`pg_column_size(${t.data}) <= 262144`,
+    ),
+    check(
+      "run_product_snapshots_campaign_selection_check",
+      sql`(${t.campaignSelection} IS NULL) = (${t.campaignSelectionChecksum} IS NULL) AND
+          (${t.campaignSelection} IS NULL OR (jsonb_typeof(${t.campaignSelection}) = 'object' AND
+            pg_column_size(${t.campaignSelection}) <= 4096 AND ${t.campaignSelectionChecksum} ~ '^[0-9a-f]{64}$'))`,
     ),
     check("run_product_snapshots_version_check", sql`${t.schemaVersion} >= 1`),
     index("run_product_snapshots_product_idx").on(t.productId),

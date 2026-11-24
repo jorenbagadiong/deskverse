@@ -347,3 +347,8 @@ DV-004B, DV-004C and DV-005A backups restore and migrate forward to 0004.
 Vera reuses Quill’s `selectFacts` and `validateScript`, verifies the exact persisted script/report checksums, checks scene claim statements and evidence mappings, and compares the trusted Pixel project with the validated Quill captions and durations. It does not claim semantic understanding of arbitrary prose or text inside photographs. A corrected fact or script needs a new upstream version; QA never edits a script.
 
 See [Vera quality assurance](vera-quality-assurance.md) for the rules, limitations, recovery and campaign readiness audit.
+
+## Automatic campaigns
+
+In an automatic campaign, Quill reads the report from its actual Scout predecessor. The trusted script is used to build the dependent Pixel manifest.
+See [Automatic campaign handoffs](automatic-campaign-handoffs.md).

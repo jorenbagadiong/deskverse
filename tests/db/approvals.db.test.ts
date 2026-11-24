@@ -30,6 +30,7 @@ describe("Approval Inbox migration", () => {
       expect(upgraded.at(-1)).toBe("0006_vera_reviews")
       expect(await runMigrations(pool, journal, folder)).toEqual([
         "0007_approval_inbox",
+        "0008_automatic_campaign_handoffs",
       ])
       expect(await runMigrations(pool, journal, folder)).toEqual([])
       expect(
@@ -73,7 +74,7 @@ describe("Approval Inbox migration", () => {
         dataRoot: path.join(root, "restored"),
         journal,
       })
-      expect(restore.migration).toBe("0007_approval_inbox")
+      expect(restore.migration).toBe("0008_automatic_campaign_handoffs")
       expect(restore.tables.approval_decisions).toBe(0)
     } finally {
       if (!pool.ended) await pool.end()

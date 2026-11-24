@@ -7,7 +7,6 @@ import { promisify } from "node:util"
 
 import type pg from "pg"
 
-import { FIXTURE_PRODUCTS } from "../scout/fixture-sites"
 import { validateNewTicket } from "@/lib/tickets/validation"
 import { createDatabase } from "@/server/db/pool"
 import { planRun } from "@/server/orchestrator/store"
@@ -84,7 +83,12 @@ function streamOf(bytes: Uint8Array) {
 
 export interface SeedProduct {
   name: string
-  base: typeof FIXTURE_PRODUCTS.kettle | typeof FIXTURE_PRODUCTS.buds
+  base: {
+    affiliateUrl: string
+    specifications: string
+    description: string
+    references: readonly { kind: string; url: string; label: string }[]
+  }
   images: number
   mediaRights?: "owned" | "unspecified"
 }
@@ -140,6 +144,7 @@ export async function seedTicket(opts: {
   fixturePort: number
   products: SeedProduct[]
   title?: string
+  runStandalone?: boolean
 }): Promise<SeededTicket> {
   const { pool, dataRoot } = opts
   const db = createDatabase(pool)
@@ -201,6 +206,7 @@ export async function seedTicket(opts: {
       ])
     ).rows[0].version
   await changeStatus(db, ticket.id, await version(), "ready")
+  if (opts.runStandalone === false) return { ticketId: ticket.id, products }
   const research = await planRun(pool, {
     ticketId: ticket.id,
     ticketVersion: await version(),

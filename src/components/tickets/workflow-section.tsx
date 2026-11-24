@@ -11,6 +11,7 @@ import {
   Square,
 } from "lucide-react"
 
+import { CampaignPicker } from "@/components/tickets/campaign-selection"
 import { FormMessage, formatDate } from "@/components/tickets/fields"
 import {
   AlertDialog,
@@ -38,10 +39,15 @@ import {
   runsEndpoint,
   RUNS_CHANGED_EVENT,
   runTitle,
+  type CampaignSelection,
   type RunDetail,
   type RunSummary,
   type WorkflowAvailability,
 } from "@/lib/orchestrator/types"
+import { deliverableVideoUrl } from "@/lib/pixel/types"
+import { reportEndpoint } from "@/lib/scout/types"
+import { scriptEndpoint } from "@/lib/quill/types"
+import { veraEndpoint } from "@/lib/vera/types"
 import { api, newRequestId } from "@/lib/tickets/client"
 import type { ApiError, TicketDetail } from "@/lib/tickets/types"
 import { cn } from "@/lib/utils"
@@ -89,6 +95,7 @@ export function WorkflowSection({ ticket }: { ticket: TicketDetail }) {
   const [busy, setBusy] = useState<string | null>(null)
   const [tick, setTick] = useState(0)
   const startRequest = useRef<string | null>(null)
+  const campaignRequest = useRef<{ body: string; id: string } | null>(null)
 
   // Load, and poll every 2 s while the latest run is unfinished.
   useEffect(() => {
@@ -152,6 +159,23 @@ export function WorkflowSection({ ticket }: { ticket: TicketDetail }) {
     if (ok) startRequest.current = null
   }
 
+  async function startCampaign(campaign: CampaignSelection[]) {
+    const input = {
+      ticketVersion: ticket.version,
+      mode: "production",
+      workflow: "campaign-v1",
+      campaign,
+    }
+    const body = JSON.stringify(input)
+    if (campaignRequest.current?.body !== body)
+      campaignRequest.current = { body, id: newRequestId() }
+    const ok = await act("campaign", runsEndpoint(ticket.id), {
+      ...input,
+      requestId: campaignRequest.current.id,
+    })
+    if (ok) campaignRequest.current = null
+  }
+
   const latest = state?.latest ?? null
   const run = latest?.run ?? null
   const allowed = run ? runControls(run.status) : null
@@ -207,7 +231,21 @@ export function WorkflowSection({ ticket }: { ticket: TicketDetail }) {
 
       {state ? (
         <>
-          {!state.availability.production ? (
+          {state.availability.production ||
+          state.availability.campaignTesting ? (
+            ticket.status === "ready" ? (
+              <CampaignPicker
+                key={`${ticket.id}:${ticket.version}`}
+                ticket={ticket}
+                disabled={busy !== null || active}
+                onStart={(choices) => void startCampaign(choices)}
+              />
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Mark this ticket Ready to start an automatic campaign.
+              </p>
+            )
+          ) : (
             <div
               data-testid="automation-unavailable"
               className="rounded-xl bg-surface-sunken p-4 text-sm ring-1 ring-border"
@@ -216,14 +254,27 @@ export function WorkflowSection({ ticket }: { ticket: TicketDetail }) {
                 Full campaign automation isn&apos;t available yet.
               </p>
               <p className="mt-1 text-muted-foreground">
-                Automatic result handoffs and frozen media/rights selections
-                have not been verified. Full campaign automation stays disabled.{" "}
+                {state.availability.missing
+                  .map((item) => item.milestone)
+                  .join(" ")}{" "}
                 {state.availability.research
                   ? "Scout research, Quill scriptwriting, Pixel videos and Vera quality review run separately in the sections below."
                   : "Quill scriptwriting, Pixel videos and Vera quality review run separately below; Scout research is switched off."}
               </p>
+              {state.availability.missing.some(
+                (item) => item.stage === "campaign.worker",
+              ) ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={refresh}
+                >
+                  Check worker
+                </Button>
+              ) : null}
             </div>
-          ) : null}
+          )}
 
           {state.availability.verification ? (
             <div
@@ -466,6 +517,7 @@ export function WorkflowSection({ ticket }: { ticket: TicketDetail }) {
                           </span>
                           {(task.status === "failed" ||
                             task.status === "needs_input") &&
+                          task.retryAllowed !== false &&
                           !["cancelling", "cancelled"].includes(run.status) ? (
                             <Button
                               type="button"
@@ -488,6 +540,69 @@ export function WorkflowSection({ ticket }: { ticket: TicketDetail }) {
                         </li>
                       ))}
                     </ul>
+                    {run.workflow === "campaign-v1" ? (
+                      <ul
+                        aria-label={`${product.name}: campaign results`}
+                        className="flex flex-wrap gap-2 text-xs"
+                      >
+                        {product.tasks.map((task) => {
+                          if (!task.result) return null
+                          const { artifactId, verdict } = task.result
+                          const result =
+                            task.stage === "scout.research"
+                              ? {
+                                  label: "Scout report",
+                                  href: reportEndpoint(
+                                    ticket.id,
+                                    run.id,
+                                    product.snapshotId,
+                                  ),
+                                }
+                              : task.stage === "quill.script"
+                                ? {
+                                    label: "Quill script",
+                                    href: scriptEndpoint(
+                                      ticket.id,
+                                      run.id,
+                                      artifactId,
+                                    ),
+                                  }
+                                : task.stage === "pixel.render"
+                                  ? {
+                                      label: "Pixel video",
+                                      href: deliverableVideoUrl(
+                                        ticket.id,
+                                        artifactId,
+                                      ),
+                                    }
+                                  : {
+                                      label:
+                                        verdict === "pass"
+                                          ? "Vera QA passed"
+                                          : `Vera QA · ${verdict?.replaceAll("_", " ") ?? "reviewed"}`,
+                                      href: `${veraEndpoint(ticket.id)}/${encodeURIComponent(artifactId)}`,
+                                    }
+                          return (
+                            <li key={task.id}>
+                              <a className="underline" href={result.href}>
+                                {result.label}
+                              </a>
+                            </li>
+                          )
+                        })}
+                        {product.tasks.some(
+                          (task) =>
+                            task.stage === "vera.review" &&
+                            task.result?.verdict === "pass",
+                        ) ? (
+                          <li>
+                            <a className="underline" href="/approvals">
+                              Review in Approval Inbox
+                            </a>
+                          </li>
+                        ) : null}
+                      </ul>
+                    ) : null}
                     {product.tasks
                       .filter(
                         (t) =>

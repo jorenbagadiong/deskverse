@@ -1,5 +1,13 @@
 import type pg from "pg"
 
+import { handoffCampaignResult } from "@/server/campaign/handoff"
+import {
+  checksumSelection,
+  parseCampaignSelections,
+  validateFrozenSelection,
+  verifyCampaignMedia,
+} from "@/server/campaign/launch"
+
 import {
   canonicalJson,
   sha256,
@@ -20,12 +28,15 @@ import {
   type TaskStatus,
 } from "@/lib/orchestrator/model"
 import type {
+  CampaignSelection,
   ResourceClass,
   RunDetail,
   RunMode,
   RunSummary,
 } from "@/lib/orchestrator/types"
 import {
+  CAMPAIGN_READY,
+  CAMPAIGN_WORKER_CAPABILITY,
   PRODUCTION_WORKFLOW,
   QUILL_WORKFLOW,
   RESEARCH_WORKFLOW,
@@ -121,8 +132,9 @@ async function lockRun(c: Client, runId: string) {
     ticket_id: string
     status: RunStatus
     started_at: Date | null
+    workflow: string
   }>(
-    "SELECT id, ticket_id, status, started_at FROM campaign_runs WHERE id = $1 FOR UPDATE",
+    "SELECT id, ticket_id, status, started_at, workflow FROM campaign_runs WHERE id = $1 FOR UPDATE",
     [runId],
   )
   return rows[0] ?? null
@@ -150,8 +162,7 @@ export interface PlanInput {
   requestId: string
   mode: RunMode
   /**
-   * The task graph to use (DV-005A). Defaults: verification →
-   * "verification-v1"; production → "campaign-v1" (the full campaign).
+   * Production requires an explicit workflow. Verification defaults to "verification-v1".
    */
   workflow?: string
   /** The full campaign needs every stage's production handler. */
@@ -162,6 +173,11 @@ export interface PlanInput {
   availableWorkflows?: readonly string[]
   /** Quill (DV-005B): the Scout report to write each product's script from. */
   scripts?: readonly { productId: string; reportId: string }[]
+  campaign?: {
+    selections: readonly CampaignSelection[]
+    dataRoot: string
+    testing?: boolean
+  }
   /**
    * Workflow-specific planning (DV-005C, Pixel): runs inside the planning
    * transaction with the products' current frozen inputs; returns the task
@@ -201,6 +217,8 @@ export const RESEARCH_UNAVAILABLE =
 
 /** Picks and validates the run's workflow (explicit, never implied by the handlers present). */
 function selectWorkflow(input: PlanInput): WorkflowDefinition {
+  if (input.mode === "production" && input.workflow === undefined)
+    throw new OrchestratorError("unavailable", CAMPAIGN_UNAVAILABLE)
   const id =
     input.workflow ??
     (input.mode === "verification"
@@ -217,8 +235,17 @@ function selectWorkflow(input: PlanInput): WorkflowDefinition {
       "unavailable",
       "Verification runs only run in the isolated test environment (yarn orchestrator:verify, yarn test:e2e:db).",
     )
-  if (workflow.id === PRODUCTION_WORKFLOW.id)
-    throw new OrchestratorError("unavailable", CAMPAIGN_UNAVAILABLE)
+  if (workflow.id === PRODUCTION_WORKFLOW.id) {
+    const enabled =
+      CAMPAIGN_READY || (input.campaign?.testing && input.verificationAllowed)
+    if (!enabled || !input.campaign)
+      throw new OrchestratorError("unavailable", CAMPAIGN_UNAVAILABLE)
+    if (!input.productionAvailable)
+      throw new OrchestratorError(
+        "unavailable",
+        "Start a compatible campaign worker with Scout, Quill, Pixel and Vera available. Nothing was started.",
+      )
+  }
   if (
     workflow.mode === "production" &&
     workflow.id !== PRODUCTION_WORKFLOW.id &&
@@ -388,11 +415,80 @@ async function pinScoutReports(
   return pins
 }
 
+async function existingRun(
+  db: Queryable,
+  input: PlanInput,
+  requestHash: string | null,
+) {
+  const existing = (
+    await db.query(
+      `SELECT id, ticket_id, workflow${requestHash ? ", campaign_request_hash" : ""} FROM campaign_runs WHERE request_id = $1`,
+      [input.requestId],
+    )
+  ).rows[0]
+  if (!existing) return null
+  if (
+    existing.ticket_id !== input.ticketId ||
+    (requestHash
+      ? existing.campaign_request_hash !== requestHash
+      : existing.workflow === PRODUCTION_WORKFLOW.id)
+  )
+    throw new OrchestratorError(
+      "invalid-transition",
+      "That request ID was already used for a different ticket or campaign selection.",
+    )
+  return { runId: existing.id as string, created: false }
+}
+
+export async function campaignWorkerAvailable(db: Queryable) {
+  const result = await db.query(
+    "SELECT 1 FROM orchestrator_workers WHERE $1 = ANY(stages) AND last_seen_at > now() - interval '15 seconds' LIMIT 1",
+    [CAMPAIGN_WORKER_CAPABILITY],
+  )
+  return Boolean(result.rowCount)
+}
+
 export async function planRun(
   pool: pg.Pool,
   input: PlanInput,
 ): Promise<{ runId: string; created: boolean }> {
+  const selections = input.campaign
+    ? parseCampaignSelections(input.campaign.selections)
+    : null
+  if (
+    selections &&
+    (input.workflow !== PRODUCTION_WORKFLOW.id || input.mode !== "production")
+  )
+    throw new OrchestratorError(
+      "invalid",
+      "Campaign selections require an explicit production campaign workflow.",
+    )
+  const requestHash = selections
+    ? sha256(
+        canonicalJson({
+          ticketId: input.ticketId,
+          ticketVersion: input.ticketVersion,
+          mode: input.mode,
+          workflow: input.workflow,
+          selections,
+        }),
+      )
+    : null
+  if (requestHash) {
+    const replay = await existingRun(pool, input, requestHash)
+    if (replay) return replay
+  }
+
   const workflow = selectWorkflow(input)
+  const verifiedImages =
+    input.campaign && selections
+      ? await verifyCampaignMedia(
+          pool,
+          input.ticketId,
+          selections,
+          input.campaign.dataRoot,
+        )
+      : null
   if (
     ["pixel-render-v1", "vera-review-v1"].includes(workflow.id) &&
     !input.prepare
@@ -407,6 +503,9 @@ export async function planRun(
   )
 
   return transaction(pool, async (c) => {
+    await c.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+      `run-request:${input.requestId}`,
+    ])
     const ticket = (
       await c.query<{
         id: string
@@ -423,20 +522,8 @@ export async function planRun(
         [input.ticketId],
       )
     ).rows[0]
-    const existing = (
-      await c.query<{ id: string; ticket_id: string }>(
-        "SELECT id, ticket_id FROM campaign_runs WHERE request_id = $1",
-        [input.requestId],
-      )
-    ).rows[0]
-    if (existing) {
-      if (existing.ticket_id !== input.ticketId)
-        throw new OrchestratorError(
-          "invalid-transition",
-          "That request was already used for another ticket.",
-        )
-      return { runId: existing.id, created: false }
-    }
+    const existing = await existingRun(c, input, requestHash)
+    if (existing) return existing
     if (!ticket)
       throw new OrchestratorError(
         "not-found",
@@ -485,15 +572,37 @@ export async function planRun(
         )
     }
 
+    const selectedProducts = selections
+      ? new Map(selections.map((s) => [s.productId, s]))
+      : null
+    if (selectedProducts && verifiedImages) {
+      if (!(await campaignWorkerAvailable(c)))
+        throw new OrchestratorError(
+          "unavailable",
+          "The campaign worker is offline. Start it, then try again.",
+        )
+      for (const [id, selection] of selectedProducts) {
+        const target = snapshots.find(({ product }) => product.id === id)
+        if (!target)
+          throw new OrchestratorError(
+            "not-found",
+            "A selected product is not part of this ticket.",
+          )
+        validateFrozenSelection(selection, target.data.product, verifiedImages)
+      }
+    }
+
     const run = (
       await c.query<{ id: string }>(
-        "INSERT INTO campaign_runs (ticket_id, ticket_version, request_id, mode, workflow, status) VALUES ($1, $2, $3, $4, $5, 'queued') RETURNING id",
+        `INSERT INTO campaign_runs (ticket_id, ticket_version, request_id, mode, workflow, status${requestHash ? ", campaign_request_hash" : ""})
+         VALUES ($1, $2, $3, $4, $5, 'queued'${requestHash ? ", $6" : ""}) RETURNING id`,
         [
           input.ticketId,
           ticket.version,
           input.requestId,
           input.mode,
           workflow.id,
+          ...(requestHash ? [requestHash] : []),
         ],
       )
     ).rows[0]
@@ -511,10 +620,12 @@ export async function planRun(
     let taskCount = 0
     for (const { product, data, checksum } of snapshots) {
       const pin = pins?.get(product.id)
-      if (pins && !pin) continue
+      const selection = selectedProducts?.get(product.id)
+      if ((pins && !pin) || (selectedProducts && !selection)) continue
       const snapshot = (
         await c.query<{ id: string }>(
-          "INSERT INTO run_product_snapshots (run_id, ticket_id, product_id, position, schema_version, data, checksum) VALUES ($1, $2, $3, $4, 1, $5, $6) RETURNING id",
+          `INSERT INTO run_product_snapshots (run_id, ticket_id, product_id, position, schema_version, data, checksum${selection ? ", campaign_selection, campaign_selection_checksum" : ""})
+           VALUES ($1, $2, $3, $4, 1, $5, $6${selection ? ", $7, $8" : ""}) RETURNING id`,
           [
             run.id,
             input.ticketId,
@@ -522,6 +633,9 @@ export async function planRun(
             product.position,
             data,
             checksum,
+            ...(selection
+              ? [selection, checksumSelection(checksum, selection)]
+              : []),
           ],
         )
       ).rows[0]
@@ -581,7 +695,7 @@ export async function planRun(
       {
         mode: input.mode,
         workflow: workflow.id,
-        products: pins ? pins.size : products.length,
+        products: selectedProducts?.size ?? pins?.size ?? products.length,
         tasks: taskCount,
         ticketVersion: ticket.version,
       },
@@ -751,6 +865,7 @@ export async function claimTask(
     stages: readonly string[]
     leaseMs: number
     limits?: ResourceLimits
+    campaignCapable?: boolean
   },
 ): Promise<Claim | null> {
   const limits = opts.limits ?? DEFAULT_LIMITS
@@ -776,12 +891,13 @@ export async function claimTask(
           WHERE t.status IN ('queued', 'retry_wait') AND t.eligible_at <= now()
             AND t.resource_class = ANY($1) AND t.stage = ANY($2)
             AND r.status IN ('queued', 'running')
+            AND (r.workflow <> 'campaign-v1' OR $4::boolean)
             AND NOT EXISTS (SELECT 1 FROM task_dependencies d JOIN worker_tasks p ON p.id = d.depends_on_task_id
                              WHERE d.task_id = t.id AND p.status <> 'completed')
             AND (t.snapshot_id IS NULL OR (SELECT count(*) FROM worker_tasks x WHERE x.snapshot_id = t.snapshot_id AND x.status = 'running') < $3)
           ORDER BY t.priority DESC, t.eligible_at, t.created_at
           LIMIT 1`,
-        [open, opts.stages, limits.perProduct],
+        [open, opts.stages, limits.perProduct, opts.campaignCapable === true],
       )
     ).rows[0]
     if (!candidate) return null
@@ -890,7 +1006,7 @@ async function finishAttempt(
 async function withOwnLease(
   c: Client,
   claim: Claim,
-  work: (run: { status: RunStatus }) => Promise<void>,
+  work: (run: { status: RunStatus; workflow: string }) => Promise<void>,
 ): Promise<CommitOutcome> {
   const run = await lockRun(c, claim.runId)
   const owned = await c.query(
@@ -944,7 +1060,7 @@ export async function completeTask(
   },
 ): Promise<CommitOutcome> {
   return transaction(pool, (c) =>
-    withOwnLease(c, claim, async () => {
+    withOwnLease(c, claim, async (run) => {
       const payload = deliverable
         ? await deliverable.persist(c, {
             taskId: claim.taskId,
@@ -976,7 +1092,19 @@ export async function completeTask(
         { attempt: claim.attempt },
         claim.taskId,
       )
-      await promoteDependents(c, claim.taskId)
+      const refusal =
+        run.workflow === PRODUCTION_WORKFLOW.id
+          ? await handoffCampaignResult(c, claim)
+          : null
+      if (refusal) {
+        await c.query(
+          `UPDATE worker_tasks SET status = 'needs_input', failure_kind = 'needs_input',
+                  failure_message = $2, finished_at = now(), updated_at = now() WHERE id = $1`,
+          [refusal.taskId, refusal.message],
+        )
+        await event(c, claim.runId, "task_needs_input", {}, refusal.taskId)
+        await blockDescendants(c, claim.runId, refusal.taskId)
+      } else await promoteDependents(c, claim.taskId)
     }),
   )
 }
@@ -1379,8 +1507,12 @@ export async function retryTask(
     )
     if (repeated) return
     const task = (
-      await c.query<{ status: TaskStatus; attempts: number }>(
-        "SELECT status, attempts FROM worker_tasks WHERE id = $1 AND run_id = $2 FOR UPDATE",
+      await c.query<{
+        status: TaskStatus
+        attempts: number
+        unprepared: boolean
+      }>(
+        "SELECT status, attempts, (stage <> 'scout.research' AND params = '{}'::jsonb) AS unprepared FROM worker_tasks WHERE id = $1 AND run_id = $2 FOR UPDATE",
         [taskId, runId],
       )
     ).rows[0]
@@ -1398,6 +1530,11 @@ export async function retryTask(
       throw new OrchestratorError(
         "invalid-transition",
         "A cancelled run can't be retried. Start a new run instead.",
+      )
+    if (run.workflow === PRODUCTION_WORKFLOW.id && task.unprepared)
+      throw new OrchestratorError(
+        "invalid-transition",
+        "This product needs corrected inputs and a new campaign before this step can run.",
       )
     if (task.attempts >= MAX_ATTEMPTS_LIMIT)
       throw new OrchestratorError(
@@ -1491,8 +1628,14 @@ export async function getRun(
   ).rows
   const tasks = (
     await pool.query(
-      `SELECT t.*, EXISTS (SELECT 1 FROM task_results x WHERE x.task_id = t.id) AS has_result
-         FROM worker_tasks t WHERE t.run_id = $1 ORDER BY t.created_at`,
+      `SELECT t.*, x.task_id IS NOT NULL AS has_result,
+              CASE x.kind WHEN 'scout_research' THEN x.payload->>'reportId'
+                          WHEN 'quill_script' THEN x.payload->>'scriptId'
+                          WHEN 'pixel_video' THEN x.payload->>'deliverableId'
+                          WHEN 'vera_review' THEN x.payload->>'reviewId' END AS artifact_id,
+              CASE WHEN x.kind = 'vera_review' THEN x.payload->>'verdict' END AS verdict
+         FROM worker_tasks t LEFT JOIN task_results x ON x.task_id = t.id AND x.run_id = t.run_id
+         WHERE t.run_id = $1 ORDER BY t.created_at`,
       [runId],
     )
   ).rows
@@ -1529,6 +1672,19 @@ export async function getRun(
           startedAt: iso(t.started_at),
           finishedAt: iso(t.finished_at),
           hasResult: t.has_result,
+          ...(run.workflow === PRODUCTION_WORKFLOW.id &&
+          t.stage !== "scout.research" &&
+          Object.keys(t.params).length === 0
+            ? { retryAllowed: false }
+            : {}),
+          ...(run.workflow === PRODUCTION_WORKFLOW.id && t.artifact_id
+            ? {
+                result: {
+                  artifactId: t.artifact_id,
+                  ...(t.verdict ? { verdict: t.verdict } : {}),
+                },
+              }
+            : {}),
         })),
     })),
     events: events.map((e) => ({
